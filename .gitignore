@@ -1,0 +1,50 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+bun-debug.log*
+
+# Dependencies and build outputs
+node_modules
+dist
+dist-ssr
+target/
+**/target/
+*.local
+/release
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+*.env
+
+# Editor and OS files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+Thumbs.db
+ehthumbs.db
+[Dd]esktop.ini
+$RECYCLE.BIN/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# AI tools and agent workspaces
+.serena/
+.superpowers/
+
+# Tauri keys
+*.key
+*.key.pub
+
+# Marketing site — hosted separately (Apache, own domain), not part of this repo
+/website/

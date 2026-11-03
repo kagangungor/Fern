@@ -1,0 +1,163 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Fern",
+  "mainBinaryName": "fern",
+  "version": "1.0.0",
+  "identifier": "com.kagangungor.fern",
+  "build": {
+    "beforeDevCommand": "bun run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "bun run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "fern",
+        "width": 1920,
+        "height": 420,
+        "x": 0,
+        "y": 0,
+        "decorations": false,
+        "transparent": true,
+        "resizable": false,
+        "maximizable": false,
+        "minimizable": false,
+        "closable": false,
+        "alwaysOnTop": true,
+        "visibleOnAllWorkspaces": true,
+        "focus": false,
+        "skipTaskbar": true,
+        "shadow": false,
+        "visible": false,
+        "dragDropEnabled": true
+      },
+      {
+        "label": "settings",
+        "create": false,
+        "title": "Settings",
+        "url": "settings.html",
+        "width": 760,
+        "height": 620,
+        "minWidth": 620,
+        "minHeight": 480,
+        "decorations": false,
+        "transparent": true,
+        "resizable": true,
+        "maximizable": false,
+        "minimizable": true,
+        "closable": false,
+        "alwaysOnTop": false,
+        "visibleOnAllWorkspaces": false,
+        "focus": true,
+        "skipTaskbar": false,
+        "shadow": true,
+        "visible": false,
+        "center": true
+      },
+      {
+        "label": "calendar",
+        "title": "Calendar",
+        "url": "calendar.html",
+        "width": 880,
+        "height": 600,
+        "minWidth": 700,
+        "minHeight": 480,
+        "decorations": false,
+        "transparent": true,
+        "resizable": true,
+        "maximizable": false,
+        "minimizable": true,
+        "closable": false,
+        "alwaysOnTop": false,
+        "visibleOnAllWorkspaces": false,
+        "focus": true,
+        "skipTaskbar": false,
+        "shadow": true,
+        "visible": false,
+        "center": true
+      },
+      {
+        "label": "overlay",
+        "title": "Overlay",
+        "url": "overlay.html",
+        "width": 1920,
+        "height": 1080,
+        "x": 0,
+        "y": 0,
+        "decorations": false,
+        "transparent": true,
+        "resizable": false,
+        "maximizable": false,
+        "minimizable": false,
+        "closable": false,
+        "alwaysOnTop": true,
+        "visibleOnAllWorkspaces": true,
+        "focus": false,
+        "skipTaskbar": true,
+        "shadow": false,
+        "visible": false
+      },
+      {
+        "label": "dock",
+        "title": "Fern Dock",
+        "url": "dock.html",
+        "width": 1920,
+        "height": 600,
+        "x": 0,
+        "y": 480,
+        "decorations": false,
+        "transparent": true,
+        "resizable": false,
+        "maximizable": false,
+        "minimizable": false,
+        "closable": false,
+        "alwaysOnTop": true,
+        "visibleOnAllWorkspaces": true,
+        "focus": false,
+        "skipTaskbar": true,
+        "shadow": false,
+        "visible": false
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob:; font-src 'self' data: https://fonts.gstatic.com; connect-src 'self' ipc: http://ipc.localhost https://api.open-meteo.com https://geocoding-api.open-meteo.com https://ipapi.co https://freeipapi.com https://ipwho.is https://get.geojs.io"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "createUpdaterArtifacts": true,
+    "copyright": "© 2026 Kağan Güngör and contributors",
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "windows": {
+      "nsis": {
+        "installMode": "both",
+        "headerImage": "../installer/assets/header.bmp",
+        "sidebarImage": "../installer/assets/sidebar.bmp",
+        "installerIcon": "icons/icon.ico",
+        "uninstallerIcon": "icons/icon.ico",
+        "installerHooks": "../installer/build/installer.nsh"
+      }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "active": true,
+      "windows": {
+        "installMode": "quiet"
+      },
+      "endpoints": [
+        "https://github.com/kagangungor/Fern/releases/latest/download/latest.json"
+      ],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDYxOEFGNkUzOEExQUJDODYKUldTR3ZCcUs0L2FLWWZOdnBRMHFBakJqcjk2a29tOVI0QWFIditFSXJtMENZc0NZai9WUEtmZksK"
+    }
+  }
+}

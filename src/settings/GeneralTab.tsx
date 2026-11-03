@@ -1,0 +1,109 @@
+import { Power, Download, Clock, History, BatteryWarning, RefreshCw, LogOut, Languages } from "lucide-react";
+import { SettingRow } from "./SettingRow";
+import { SettingSection } from "./SettingSection";
+import { Dropdown } from "./Dropdown";
+import { LANGUAGES, getLanguagePreference, setLanguagePreference, useT } from "../i18n";
+
+interface GeneralTabProps {
+  autostart: boolean;
+  toggleAutostart: () => void;
+  timeFormat24h: boolean;
+  toggleTimeFormat24h: () => void;
+  legacyMode: boolean;
+  toggleLegacyMode: () => void;
+  showUpdateIndicator: boolean;
+  toggleUpdateIndicator: () => void;
+  lowBatteryThreshold: number;
+  hasBattery: boolean;
+  handleThresholdChange: (val: number) => void;
+  restartFern: () => void;
+  quitFern: () => void;
+}
+
+export function GeneralTab({
+  autostart,
+  toggleAutostart,
+  timeFormat24h,
+  toggleTimeFormat24h,
+  legacyMode,
+  toggleLegacyMode,
+  showUpdateIndicator,
+  toggleUpdateIndicator,
+  lowBatteryThreshold,
+  hasBattery,
+  handleThresholdChange,
+  restartFern,
+  quitFern,
+}: GeneralTabProps) {
+  const t = useT();
+  const languageOptions = [
+    { value: "system", label: t("general.language.system") },
+    ...Object.entries(LANGUAGES).map(([value, { name }]) => ({ value, label: name })),
+  ];
+  return (
+    <>
+      <SettingSection id="general-system" title={t("general.system")} defaultOpen>
+        <SettingRow icon={Power} label={t("general.launchAtLogin")} desc={t("general.launchAtLogin.desc")}>
+          <label className="toggle-switch">
+            <input type="checkbox" checked={autostart} onChange={toggleAutostart} />
+            <span className="slider"></span>
+          </label>
+        </SettingRow>
+
+        <SettingRow icon={Download} label={t("general.updateIndicator")} desc={t("general.updateIndicator.desc")}>
+          <label className="toggle-switch">
+            <input type="checkbox" checked={showUpdateIndicator} onChange={toggleUpdateIndicator} />
+            <span className="slider"></span>
+          </label>
+        </SettingRow>
+
+        <SettingRow icon={Languages} label={t("general.language")} desc={t("general.language.desc")}>
+          <Dropdown value={getLanguagePreference()} options={languageOptions} onChange={setLanguagePreference} />
+        </SettingRow>
+
+        <SettingRow icon={Clock} label={t("general.time24h")} desc={t("general.time24h.desc")}>
+          <label className="toggle-switch">
+            <input type="checkbox" checked={timeFormat24h} onChange={toggleTimeFormat24h} />
+            <span className="slider"></span>
+          </label>
+        </SettingRow>
+
+        <SettingRow
+          icon={History}
+          label={t("general.legacyMode")}
+          desc={t("general.legacyMode.desc")}
+          divider={hasBattery}
+        >
+          <label className="toggle-switch">
+            <input type="checkbox" checked={legacyMode} onChange={toggleLegacyMode} />
+            <span className="slider"></span>
+          </label>
+        </SettingRow>
+
+        {hasBattery && (
+          <SettingRow
+            icon={BatteryWarning}
+            label={t("general.lowBattery")}
+            desc={t("general.lowBattery.desc", { percent: lowBatteryThreshold })}
+            divider={false}
+          >
+            <input
+              type="range"
+              min="5"
+              max="50"
+              step="5"
+              value={lowBatteryThreshold}
+              onChange={(e) => handleThresholdChange(parseInt(e.target.value))}
+              className="settings-slider"
+            />
+          </SettingRow>
+        )}
+      </SettingSection>
+
+      <SettingSection id="general-app" title={t("general.app")}>
+        <SettingRow icon={RefreshCw} label={t("general.restart")} desc={t("general.restart.desc")} action onClick={restartFern} />
+        <SettingRow icon={LogOut} label={t("general.quit")} desc={t("general.quit.desc")} action danger onClick={quitFern} divider={false} />
+      </SettingSection>
+    </>
+  );
+}

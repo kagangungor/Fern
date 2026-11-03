@@ -1,0 +1,247 @@
+# Fern Settings Reference
+
+All settings are stored in `settings.json` in the app config directory (`%APPDATA%/com.kagangungor.fern/`, derived from the Tauri app identifier). The file is a flat JSON object with `fern-` prefixed keys. Fern watches this file for external changes and applies them in real-time.
+
+## Quick Start
+
+Edit `settings.json` with any text editor while Fern is running. Changes are applied immediately — no restart required.
+
+```json
+{
+  "fern-dock-enabled": "true",
+  "fern-dock-mode": "smart",
+  "fern-theme-mode": "dark",
+  "fern-scale": "1.0"
+}
+```
+
+## Settings Keys
+
+### Dock
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `fern-dock-enabled` | `"true"` / `"false"` | `"true"` | Show or hide the Fern Dock (taskbar replacement). |
+| `fern-dock-mode` | `"fixed"` / `"smart"` / `"peek"` | `"smart"` | Dock visibility behavior. **fixed** = always visible as AppBar. **smart** = auto-hide when overlapped by another window or a fullscreen app. **peek** = hidden until cursor approaches bottom edge. Smart/peek still reveal on hover and are clickable even over a fullscreen app — only a thin pre-emptive strip right at the screen edge stays click-through, so other apps' own edge-hugging UI (e.g. a Snipping Tool selection) is never intercepted. |
+| `fern-dock-preview-enabled` | `"true"` / `"false"` | `"true"` | Show window thumbnail previews when hovering dock icons. |
+| `fern-dock-search-enabled` | `"true"` / `"false"` | `"true"` | Show a search icon next to Start that opens Windows Search (Win+S). |
+| `fern-dock-calendar-enabled` | `"true"` / `"false"` | `"true"` | Show a calendar icon next to the search icon that opens the Calendar window. The Calendar window is also in the dock's Fern Options menu, the tray menu, and the notch calendar's open button. |
+| `fern-dock-tray-enabled` | `"true"` / `"false"` | `"true"` | Show a ^ button in the dock that opens the hidden tray icons popup. Hidden in Legacy Mode. |
+| `fern-dock-taskview-enabled` | `"true"` / `"false"` | `"false"` | Show a Task View button next to the calendar icon (Win+Tab). Hidden in Legacy Mode. |
+| `fern-dock-show-desktop-corner` | `"true"` / `"false"` | `"false"` | Show a thin bar at the right end of the dock that shows the desktop (Win+D) when clicked, and do the same for a click in the very bottom-right corner of the screen (a 6 px square on the dock's monitor, not while a fullscreen app is in front). |
+| `fern-dock-recycle-enabled` | `"true"` / `"false"` | `"false"` | Show the Recycle Bin in the dock. Hidden in Legacy Mode. |
+| `fern-dock-drives` | JSON array, e.g. `["C","D"]` | `[]` | Drive letters to show as dock buttons that open the drive in Explorer. Hidden in Legacy Mode. |
+| `fern-dock-icon-only` | `"true"` / `"false"` | `"false"` | Minimal icon-only style (no background/padding around icons). |
+| `fern-start-icon` | `"default"` / `"windows"` / `custom:<data URI>` | `"default"` | Start button icon in the dock: the Fern logo, the Windows logo, or an uploaded image (`custom:` followed by its data URI). |
+| `fern-dock-adaptive` | `"true"` / `"false"` | `"false"` | Fixed dock only. Stretch the dock to full width like a traditional taskbar while a window is maximized, and contract back when it's restored. |
+| `fern-dock-win-number-enabled` | `"true"` / `"false"` | `"true"` | When the taskbar is replaced, Win+1 through Win+9 activate the matching pinned dock app (focus/minimize if running, launch otherwise) instead of the native taskbar slots. |
+| `fern-dock-mixed-reorder` | `"true"` / `"false"` | `"false"` | `"false"` = pinned and running icons stay in two separate groups with a divider between them. `"true"` = a single group — any icon, pinned or not, can be dragged anywhere. |
+
+### Notch
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `fern-notch-edge-delay` | number string (ms) | `"200"` | Smart and peek notch only. How long the cursor has to rest on the top edge before the notch peeks, so sweeping across a maximized window's tabs doesn't trigger it. `0` peeks instantly. Maximum `2000`. |
+| `fern-notch-mode` | `"fixed"` / `"smart"` / `"peek"` | `"fixed"` | Notch (top bar) visibility behavior. **fixed** = always visible, never auto-hides (including over fullscreen apps — matches a real hardware notch, which doesn't disappear either). **smart** = hides when overlapped by another window/fullscreen app, reveals on hover. **peek** = hidden until cursor approaches the top edge, a media event, or a notification. Smart/peek reveal and are fully clickable on hover even over a fullscreen app (only a thin strip right at the screen edge stays click-through, so it never steals input meant for another app). Unlike the Dock, the notch never reserves desktop work-area space, so it never leaves a gap above maximized windows' content. |
+| `fern-notch-timer-progress` | `"true"` / `"false"` | `"true"` | Show an edge progress bar along the bottom of the notch while a timer or Pomodoro session is active. |
+| `fern-notch-scroll-volume` | `"true"` / `"false"` | `"false"` | Scroll with mouse wheel over the volume, brightness and mixer sliders to adjust them. |
+| `fern-shelf-persist` | `"true"` / `"false"` | `"false"` | Keep the notch shelf's items after Fern restarts. The shelf holds files (as links, not copies) and text dropped on the notch; at most 10, newest first. Off clears them when Fern closes. Files that no longer exist are dropped on start. |
+| `fern-notch-remember-mode` | `"true"` / `"false"` | `"false"` | When the cursor leaves the notch and comes back, reopen the Control Center or Calendar panel you were on instead of resetting to the default (status or music). |
+| `fern-panel-control-center-enabled` | `"true"` / `"false"` | `"true"` | Include the Control Center when scrolling through the notch panels. |
+| `fern-panel-shelf-enabled` | `"true"` / `"false"` | `"true"` | Include the Shelf panel and accept files and text dropped on the notch. |
+| `fern-panel-order` | JSON string, e.g. `"[\"status\",\"music\"]"` | unset | Order of the notch panels when scrolling: `command-center`, `status`, `music`, `calendar`, `shelf`. Missing panels are added at the end. Unset keeps the default order, where Music moves in front of Status while something plays. Set in Settings > Notch > Panel Order. |
+| `fern-cc-layout` | JSON string | unset | Which Control Center items show, and their order: `{"tiles":[...],"buttons":[...],"sliders":[...]}`. Tiles: `network`, `dock-mode`, `bluetooth`, `notch-mode`. Buttons: `dnd`, `battery-saver`, `tray`, `notifications`, `settings`, `restart`. Sliders: `volume`, `brightness`. An item that is not listed is hidden. A missing list shows all its items in the default order. Set in Settings > Notch > Control Center layout, by dragging items in, out and around like the status widgets. |
+
+### Monitors
+
+The dock and the notch each choose their monitors separately. In Settings this is the **Show On** dropdown on the Dock and Notch tabs.
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `fern-dock-monitor-mode` | `"primary"` / `"all"` / `"specific"` | `"primary"` | Where the dock appears. **primary** = your primary display only. **all** = every connected display gets its own dock. **specific** = the single display named in `fern-dock-monitor-id`. |
+| `fern-dock-monitor-id` | string | `""` | Windows display name of the monitor to use when the dock mode is `"specific"` (for example `\\.\DISPLAY2`). Set automatically when you pick a monitor in Settings. |
+| `fern-notch-monitor-mode` | `"primary"` / `"all"` / `"specific"` | `"primary"` | Where the notch appears. Same values as the dock. |
+| `fern-notch-monitor-id` | string | `""` | Windows display name of the monitor to use when the notch mode is `"specific"`. Set automatically when you pick a monitor in Settings. |
+
+If the chosen monitor is unplugged, Fern falls back to the primary display.
+
+With **All Monitors** and more than one display, the **Per-Monitor Behavior** toggle on the Dock and Notch tabs gives each monitor its own Fixed / Smart / Peek. Turning it off goes back to one behavior for all of them.
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `fern-dock-mode-by-monitor` | JSON string | `"{}"` | Per-monitor dock behavior: a JSON object mapping each Windows display name (as in `fern-dock-monitor-id`) to `"fixed"`, `"smart"` or `"peek"`. A monitor without an entry uses `fern-dock-mode`. |
+| `fern-notch-mode-by-monitor` | JSON string | `"{}"` | Same as above for the notch, falling back to `fern-notch-mode`. |
+
+### Weather
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `fern-weather-enabled` | `"true"` / `"false"` | `"true"` | Show weather widget in the notch status bar. |
+| `fern-weather-city` | string | `""` | Manually set city name for weather. Empty string = auto-detect via IP geolocation (HTTPS only). If detection fails and no city is set, no weather is shown. |
+| `fern-weather-lat` | number string | (auto) | Latitude coordinate for weather. Set automatically when a city is selected. |
+| `fern-weather-lon` | number string | (auto) | Longitude coordinate for weather. Set automatically when a city is selected. |
+| `fern-weather-cached-temp` | number string | (none) | Cached temperature value shown before next API fetch. |
+| `fern-weather-cached-condition` | string | (none) | Cached weather condition text (e.g. "Partly Cloudy"). |
+| `fern-temp-unit` | `"celsius"` / `"fahrenheit"` | `"celsius"` | Temperature display unit. |
+
+### Modules
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `fern-calendar-enabled` | `"true"` / `"false"` | `"true"` | Show the calendar in the notch's calendar panel. |
+| `fern-timer-enabled` | `"true"` / `"false"` | follows `fern-calendar-enabled` | Show the countdown timer (presets and a custom time) in the notch's calendar panel. |
+| `fern-timer-sound-enabled` | `"true"` / `"false"` | `"true"` | Play a short chime when the countdown timer finishes. |
+| `fern-stopwatch-enabled` | `"true"` / `"false"` | follows `fern-calendar-enabled` | Show the stopwatch (with laps) next to the timer. |
+| `fern-dual-clock-enabled` | `"true"` / `"false"` | `"false"` | Show a second clock for another time zone next to the time in the notch. Follows `fern-time-format-24h`, and shows `+1` / `−1` when that zone is on a different day. |
+| `fern-dual-clock-zone` | IANA time zone string | `"UTC"` | Time zone of the second clock, for example `"Asia/Tokyo"`. Set by searching a city or time zone in Settings › Notch › Dual Clock. |
+| `fern-dual-clock-label` | string | `"UTC"` | Name shown beside the second clock, for example `"Tokyo"`. |
+| `fern-calendar-view` | `"day"` / `"week"` / `"month"` / `"agenda"` | `"month"` | Which view the notch calendar shows once a calendar source is connected. Set by the Day / Week / Month / Agenda switcher in the notch. |
+| `fern-music-mode-enabled` | `"true"` / `"false"` | `"true"` | Enable interactive music media widget. |
+| `fern-music-compact-notch` | `"true"` / `"false"` | `"true"` | Show compact music display (visualizer + artwork) in collapsed notch. |
+
+### Calendar Sync (links and CalDAV)
+
+Read-only sync of your calendars into the notch calendar. Open Settings › Notch › Calendar Sync (shown while Calendar is on). There are two ways to connect, and you can use both at once. Fern never writes to a server.
+
+- **Calendar links** need no password: paste a Google, iCloud, Outlook, Proton, Nextcloud or any other `.ics` / `webcal://` link. Repeating events, exceptions and time zones are expanded locally.
+- **CalDAV account** (Nextcloud, iCloud, or any CalDAV server) also reads private calendars, using an app password.
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `fern-caldav-enabled` | `"true"` / `"false"` | `"false"` | Whether calendar sync is active. Set to `"true"` when you connect and `"false"` when you disconnect. |
+| `fern-caldav-url` | string | `""` | Server address, for example `cloud.example.com`. A bare host is expanded to `/remote.php/dav/`; you can also give a full CalDAV URL. iCloud uses `https://caldav.icloud.com` (filled in for you) with an app-specific password. |
+| `fern-caldav-username` | string | `""` | Account username. |
+| `fern-caldav-interval` | number string | `"15"` | Minutes between background syncs. Minimum `5`. |
+
+`fern-caldav-interval` applies to every source, links included. After Fern restarts or crashes it syncs right away instead of waiting out the interval, and retries a few times if the network isn't back yet.
+
+Secrets are **not** in `settings.json`. The CalDAV app password lives in Windows Credential Manager as `Fern CalDAV`, and each calendar link (which acts like a password, since anyone holding it can read the calendar) lives there as `Fern Calendar Link`. Everything else is local to the app config directory:
+
+| File | Contents |
+|------|----------|
+| `calendar_links.json` | The names and provider of your calendar links (not the links themselves). |
+| `calendar_cache.json` | Synced events, so the calendar works offline. Nothing is sent to any third-party service. |
+
+Removing a link or disconnecting the account deletes its stored secret and cached events. If a CalDAV server rejects the login, automatic syncing of that account pauses until you reconnect, so a wrong password can't trigger a lockout. Events from 35 days back to 95 days ahead are synced.
+
+### Music Appearance
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `fern-media-layout` | `"classic"` / `"compact"` | `"classic"` | Expanded player style. **classic** = large album art. **compact** = small thumbnail + controls. |
+| `fern-media-ambience-enabled` | `"true"` / `"false"` | `"true"` | Colored ambient glow behind expanded album art. |
+| `fern-media-compact-glow-enabled` | `"true"` / `"false"` | `"true"` | Glow effect around the collapsed compact thumbnail. |
+| `fern-media-visualizer-enabled` | `"true"` / `"false"` | `"true"` | Audio visualizer bars in music mode. Also accepts `fern-visualizer-enabled` (legacy alias). |
+| `fern-media-album-art-enabled` | `"true"` / `"false"` | `"true"` | Show album artwork in the notch music display. |
+
+### Overlays
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `fern-volume-overlay-enabled` | `"true"` / `"false"` | `"true"` | Show Fern volume HUD when volume changes (replaces native Windows OSD). |
+| `fern-volume-edge-enabled` | `"true"` / `"false"` | `"true"` | Trigger volume HUD by hovering the left screen edge. |
+| `fern-brightness-overlay-enabled` | `"true"` / `"false"` | `"true"` | Show Fern brightness HUD when brightness changes. |
+| `fern-brightness-edge-enabled` | `"true"` / `"false"` | `"true"` | Trigger brightness HUD by hovering the right screen edge. |
+
+### Appearance
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `fern-theme-mode` | `"dark"` / `"light"` / `"custom"` / `"adaptive"` | `"dark"` | Theme mode. **dark** = dark translucent. **light** = light translucent. **custom** = user-picked color. **adaptive** = follows Windows system accent color. |
+| `fern-theme-color` | hex string | `"#007aff"` | Custom theme color (used in `custom` and `adaptive` modes). |
+| `fern-theme-opacity` | float string | `"0.80"` | Background opacity (0.1 to 1.0). |
+| `fern-theme-saturation` | float string | `"0.50"` | Color saturation for custom/adaptive themes (0.0 to 1.0). |
+| `fern-theme-brightness` | float string | `"0.15"` | Background brightness for custom/adaptive themes (0.0 to 1.0). |
+| `fern-corners-enabled` | `"true"` / `"false"` | `"false"` | Render rounded screen corner overlays on top edges. |
+
+### Status Widgets
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `fern-status-widgets` | JSON string | `{"left":["weather"],"right":["battery"]}` | Widget layout in collapsed notch. Available: `"weather"`, `"battery"`, `"cpu"`, `"ram"`, `"disk"`, `"net"`. The `"battery"` widget (and its low-battery/charging pulses) is automatically suppressed on desktops with no physical battery — detected via Windows' `PowerManager.BatteryStatus`, not the browser's Battery API (which fakes a permanent "100%, charging" reading on desktops). It's also silently dropped from a placed config on such machines, even if set manually or imported from a laptop's settings file. |
+
+Example:
+```json
+{
+  "fern-status-widgets": "{\"left\":[\"cpu\",\"ram\"],\"right\":[\"battery\",\"net\"]}"
+}
+```
+
+### System
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `fern-scale` | float string | `"1.0"` | UI scale factor (0.8 to 1.3). Changing this re-registers AppBars to resize the reserved screen area. |
+| `fern-low-battery-threshold` | integer string | `"20"` | Battery percentage that triggers the low-battery alert pulse (5 to 50, step 5). |
+| `fern-auto-update` | `"true"` / `"false"` | `"false"` | Check for and download updates automatically on startup. |
+| `fern-update-channel` | `"stable"` / `"prerelease"` | `"stable"` | Which releases the updater offers. `"prerelease"` also offers releases published with the pre-release flag, the newest release wins. Never offers a version lower than the running one. Settings > About > Get pre-releases. |
+| `fern-show-update-indicator` | `"true"` / `"false"` | `"true"` | Show a green dot on the notch when an update is available. |
+| `fern-time-format-24h` | `"true"` / `"false"` | `"false"` | Use 24-hour clock format in the notch. When `"false"`, displays 12-hour format with AM/PM. |
+| `fern-language` | `"system"` / language code, e.g. `"en"` | `"system"` | UI language. `"system"` follows the Windows display language and falls back to English when that language has no translation. Missing keys in a translation fall back to English. Translations live in `src/locales/<code>.json` and are registered in `src/i18n.ts` and `src-tauri/src/i18n.rs` (tray menu). Calendar dates and times follow this language too. |
+| `fern-tour-seen` | `"1"` | unset | Set once the first-run tour has been finished or skipped. Delete it to see the tour again, or use Settings > About > Replay Tour. |
+| `fern-legacy-mode` | `"true"` / `"false"` | `"false"` | Keep the classic notch and dock. Turns off features added after 1.4 (dock Task View, Recycle Bin and drive buttons, and later additions). Settings > General > Legacy Mode. |
+
+### Internal (Do Not Edit Manually)
+
+| Key | Type | Description |
+|-----|------|-------------|
+| `fern-first-run` | sentinel | Set to `"done"` after first launch. Triggers splash screen if absent. |
+| `fern-app-version` | string | Last known app version. If it differs from current, splash screen is shown on update. |
+
+## Event System
+
+Fern uses two Tauri events for settings synchronization:
+
+### `settings-changed`
+- **Emitted by:** `save_setting` command (frontend or backend)
+- **Payload:** `{ "key": "fern-...", "value": ... }`
+- **Purpose:** Broadcasts changes made through the Fern UI to all windows
+- **Key format:** Fern-prefixed keys as-is (e.g. `"fern-dock-mode"`)
+
+### `settings-external-changed`
+- **Emitted by:** File watcher (detects external edits to `settings.json`)
+- **Payload:** `{ "key": "fern-...", "value": ... }` or `{ "key": "fern-...", "value": null }` for removed keys
+- **Purpose:** Broadcasts changes made by external editors (VS Code, notepad, scripts)
+- **Key format:** Fern-prefixed keys as-is
+- **Behavior:** Also syncs values to `localStorage` for instant frontend reads
+
+### Flow
+```
+External editor saves settings.json
+    ↓
+File watcher detects change (ReadDirectoryChangesW)
+    ↓
+Diffs against SETTINGS_CACHE
+    ↓
+Emits settings-external-changed for each changed/removed key
+    ↓
+useSettingsSync hook updates React state + localStorage
+    ↓
+UI re-renders with new values
+```
+
+## Example: Changing Dock Mode via Script
+
+```powershell
+# PowerShell: switch dock to smart mode
+$json = Get-Content "$env:APPDATA\com.kagangungor.fern\settings.json" | ConvertFrom-Json
+$json.'fern-dock-mode' = 'smart'
+$json | ConvertTo-Json | Set-Content "$env:APPDATA\com.kagangungor.fern\settings.json"
+```
+
+```python
+# Python: disable dock
+import json, os
+path = os.path.join(os.environ['APPDATA'], 'com.kagangungor.fern', 'settings.json')
+with open(path) as f: settings = json.load(f)
+settings['fern-dock-enabled'] = 'false'
+with open(path, 'w') as f: json.dump(settings, f)
+```
+
+## Notes
+
+- All boolean values are strings (`"true"` / `"false"`) for consistency with `localStorage`.
+- The `useSettingsSync` hook auto-converts `"true"` / `"false"` strings to booleans.
+- `auto-hide` mode values in `fern-dock-mode` and `fern-notch-mode` are legacy aliases for `smart` — they are mapped automatically.
+- Changing `fern-scale` triggers AppBar re-registration to adjust reserved screen space.
+- Theme changes (`fern-theme-*`) are applied by reading all theme values from `localStorage` and calling `applyTheme()` — the theme system depends on all five theme keys being in sync.
