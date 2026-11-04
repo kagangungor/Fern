@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { startDrag } from "@crabnebula/tauri-plugin-drag";
 import { useT } from "../i18n";
+import { Eye } from "lucide-react";
 
 export type ShelfItem = {
   id: string;
@@ -116,11 +117,39 @@ type Props = {
 
 const DRAG_THRESHOLD = 6;
 
+const isTextItem = (item: ShelfItem) => {
+  if (item.kind === "text") return true;
+  if (!item.name) return false;
+  return /\.(txt|md|markdown|json|log|js|ts|tsx|jsx|rs|css|html|xml|toml|yaml|yml|ini|cfg|csv|py|sh|bat|ps1)$/i.test(item.name);
+};
+
 export function NotchShelf({ items, onRemove, onClear, onDragOutEnd }: Props) {
   const t = useT();
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [previewItem, setPreviewItem] = useState<{ id: string; name: string; content: string } | null>(null);
+  const [previewCopied, setPreviewCopied] = useState(false);
   const press = useRef<{ x: number; y: number; id: string; dragging: boolean } | null>(null);
   const dragIcon = useRef<string | null>(null);
+
+  const handlePreview = async (e: React.MouseEvent, item: ShelfItem) => {
+    e.stopPropagation();
+    if (previewItem?.id === item.id) {
+      setPreviewItem(null);
+      return;
+    }
+    if (item.kind === "text") {
+      setPreviewItem({ id: item.id, name: item.name, content: item.text ?? "" });
+      return;
+    }
+    if (item.kind === "file" && item.path) {
+      try {
+        const content = await invoke<string>("shelf_read_text_preview", { path: item.path });
+        setPreviewItem({ id: item.id, name: item.name, content });
+      } catch (err) {
+        console.error("Failed to read text preview:", err);
+      }
+    }
+  };
 
   useEffect(() => {
     invoke<string | null>("shelf_drag_icon").then((icon) => { dragIcon.current = icon; }).catch(() => { });
@@ -150,6 +179,34 @@ export function NotchShelf({ items, onRemove, onClear, onDragOutEnd }: Props) {
 
   return (
     <div className="shelf-panel" onClick={(e) => e.stopPropagation()}>
+      {previewItem && (
+        <div className="shelf-preview-card" onClick={(e) => e.stopPropagation()}>
+          <div className="shelf-preview-header">
+            <span className="shelf-preview-title">{previewItem.name}</span>
+            <div className="shelf-preview-actions">
+              <button
+                className="shelf-preview-btn"
+                onClick={() => {
+                  navigator.clipboard.writeText(previewItem.content);
+                  setPreviewCopied(true);
+                  setTimeout(() => setPreviewCopied(false), 1200);
+                }}
+                title={t("shelf.copyContent")}
+              >
+                {previewCopied ? t("shelf.copied") : t("shelf.copyContent")}
+              </button>
+              <button
+                className="shelf-preview-close"
+                onClick={() => setPreviewItem(null)}
+                title={t("shelf.closePreview")}
+              >
+                ×
+              </button>
+            </div>
+          </div>
+          <pre className="shelf-preview-body">{previewItem.content}</pre>
+        </div>
+      )}
       {items.length === 0 ? (
         <div className="shelf-empty">{t("shelf.empty")}</div>
       ) : (
@@ -179,19 +236,32 @@ export function NotchShelf({ items, onRemove, onClear, onDragOutEnd }: Props) {
                 }}
                 onMouseLeave={() => { if (press.current?.id === item.id) press.current = null; }}
               >
-                <div className="shelf-thumb">
-                  {item.thumb ? <img src={item.thumb} alt="" draggable={false} /> : <span className="shelf-glyph">{item.kind === "text" ? "T" : "▤"}</span>}
+                <div className="shelf-thumb-wrap">
+                  <div className="shelf-thumb">
+                    {item.thumb ? <img src={item.thumb} alt="" draggable={false} /> : <span className="shelf-glyph">{item.kind === "text" ? "T" : "▤"}</span>}
+                  </div>
+                  {isTextItem(item) && (
+                    <button
+                      className="shelf-preview-trigger"
+                      title={t("shelf.preview")}
+                      onMouseDown={(e) => e.stopPropagation()}
+                      onMouseUp={(e) => e.stopPropagation()}
+                      onClick={(e) => handlePreview(e, item)}
+                    >
+                      <Eye size={10} strokeWidth={2.4} />
+                    </button>
+                  )}
+                  <button
+                    className="shelf-remove"
+                    title={t("shelf.remove")}
+                    onMouseDown={(e) => e.stopPropagation()}
+                    onMouseUp={(e) => e.stopPropagation()}
+                    onClick={(e) => { e.stopPropagation(); onRemove(item.id); }}
+                  >
+                    ×
+                  </button>
                 </div>
                 <span className="shelf-name">{copiedId === item.id ? t("shelf.copied") : item.name}</span>
-                <button
-                  className="shelf-remove"
-                  title={t("shelf.remove")}
-                  onMouseDown={(e) => e.stopPropagation()}
-                  onMouseUp={(e) => e.stopPropagation()}
-                  onClick={(e) => { e.stopPropagation(); onRemove(item.id); }}
-                >
-                  ×
-                </button>
               </div>
             ))}
           </div>

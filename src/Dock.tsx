@@ -1,13 +1,23 @@
-import { useState, useEffect, useLayoutEffect, useMemo, useRef, memo } from 'react';
+import { useState, useEffect, useLayoutEffect, useMemo, useRef, memo, useCallback } from 'react';
 import { motion, AnimatePresence, Reorder } from 'framer-motion';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
 import './Dock.css';
+import './surfaces.css';
+import { SurfaceShape } from './components/SurfaceShape';
 import { initTheme } from './theme';
 import { useSettingsSync } from './hooks/useSettingsSync';
 import { useT } from './i18n';
 import { PlayIcon, PauseIcon, SkipBackIcon, SkipForwardIcon } from './icons';
+import { createRegionSender, dockBand, fullWindow } from './windowRegion';
+import { restingInterval } from './restingInterval';
+import { useRestState } from './hooks/useRestState';
+import { appAttention, appUnreadCount } from './attention';
+
+// Room around the widest bar for its width animation, and above the tallest for the icons' lift.
+const DOCK_REGION_WIDTH_PAD = 120;
+const DOCK_REGION_LIFT = 96;
 
 interface AppInfo {
   name: string;
@@ -181,14 +191,23 @@ function TaskViewIcon() {
   );
 }
 
-function RecycleIcon() {
+function RecycleIcon({ isEmpty = true }: { isEmpty?: boolean }) {
   return (
     <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
       <path d="M4 7h16" />
       <path d="M9 7V4.5h6V7" />
       <path d="M6 7l1 13h10l1-13" />
-      <line x1="10" y1="11" x2="10" y2="16" />
-      <line x1="14" y1="11" x2="14" y2="16" />
+      {isEmpty ? (
+        <>
+          <line x1="10" y1="11" x2="10" y2="16" />
+          <line x1="14" y1="11" x2="14" y2="16" />
+        </>
+      ) : (
+        <>
+          <path d="M9 11l2 4 2-3 2 4" strokeWidth="1.8" />
+          <line x1="8.5" y1="9" x2="15.5" y2="9" strokeWidth="1.8" />
+        </>
+      )}
     </svg>
   );
 }
@@ -210,6 +229,18 @@ interface AppMediaSession {
   is_playing: boolean;
 }
 
+interface RecycleBinStatus {
+  is_empty: boolean;
+  item_count: number;
+  size_bytes: number;
+}
+
+interface DockDrive {
+  letter: string;
+  label: string;
+  removable: boolean;
+}
+
 function sessionForApp(app: AppInfo, sessions: AppMediaSession[]): AppMediaSession | undefined {
   const exe = (app.executable || app.path.split(/[\\/]/).pop() || "").toLowerCase().replace(/\.exe$/, "");
   if (!exe) return undefined;
@@ -226,10 +257,23 @@ function WindowDots({ count }: { count: number }) {
   );
 }
 
+function AttentionBadge({ count, isFlashing }: { count: number | null; isFlashing: boolean }) {
+  if (count === null && !isFlashing) return null;
+  const countStr = count !== null ? (count > 99 ? "99+" : String(count)) : null;
+  return (
+    <div className={`attention-badge ${countStr ? "has-count" : ""} ${isFlashing ? "flashing" : ""}`}>
+      {countStr}
+    </div>
+  );
+}
+
 const Dock = memo(function Dock() {
+  const rest = useRestState();
+  const rectPollMs = restingInterval(500, rest);
+  const windowsPollMs = restingInterval(10000, rest);
   const t = useT();
   useEffect(() => {
-    return initTheme();
+    return initTheme({ backdrop: true });
   }, []);
 
   const [pinnedApps, setPinnedApps] = useState<AppInfo[]>([]);
@@ -244,7 +288,6 @@ const Dock = memo(function Dock() {
   const [dockPreviewEnabled, setDockPreviewEnabled] = useState(() => localStorage.getItem("fern-dock-preview-enabled") !== "false");
   const [dockSearchEnabled, setDockSearchEnabled] = useState(() => localStorage.getItem("fern-dock-search-enabled") !== "false");
   const [dockCalendarEnabled, setDockCalendarEnabled] = useState(() => localStorage.getItem("fern-dock-calendar-enabled") !== "false");
-  const [legacyMode, setLegacyMode] = useState(() => localStorage.getItem("fern-legacy-mode") === "true");
   const [dockTray, setDockTray] = useState(() => localStorage.getItem("fern-dock-tray-enabled") !== "false");
   const [dockTaskView, setDockTaskView] = useState(() => localStorage.getItem("fern-dock-taskview-enabled") === "true");
   const [dockShowDesktop, setDockShowDesktop] = useState(() => localStorage.getItem("fern-dock-show-desktop-corner") === "true");
@@ -252,6 +295,9 @@ const Dock = memo(function Dock() {
   const [dockDrives, setDockDrives] = useState<string[]>(() => parseDrives(localStorage.getItem("fern-dock-drives")));
   const [dockIconOnly, setDockIconOnly] = useState(() => localStorage.getItem("fern-dock-icon-only") === "true");
   const [dockAdaptive, setDockAdaptive] = useState(() => localStorage.getItem("fern-dock-adaptive") === "true");
+  const [dockAttentionEnabled, setDockAttentionEnabled] = useState(() => localStorage.getItem("fern-dock-attention-enabled") !== "false");
+  const [dockHideDelay, setDockHideDelay] = useState(() => parseInt(localStorage.getItem("fern-dock-hide-delay") || "800", 10));
+  const [attentionHwnds, setAttentionHwnds] = useState<number[]>([]);
   const [startIcon, setStartIcon] = useState(() => localStorage.getItem("fern-start-icon") || "default");
   const [isMaximized, setIsMaximized] = useState(false);
   const [dockMixedReorder, setDockMixedReorder] = useState(() => localStorage.getItem("fern-dock-mixed-reorder") === "true");
@@ -262,7 +308,45 @@ const Dock = memo(function Dock() {
   const [isOverlapped, setIsOverlapped] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [showAddPopup, setShowAddPopup] = useState(false);
-  const [contextMenu, setContextMenu] = useState<{ x: number, y: number, app: AppInfo | null } | null>(null);
+  const [contextMenu, setContextMenu] = useState<{
+    x: number;
+    y: number;
+    app: AppInfo | null;
+    extraKind?: 'recycle' | 'drive';
+    driveLetter?: string;
+    isRemovable?: boolean;
+  } | null>(null);
+  const [recycleStatus, setRecycleStatus] = useState<RecycleBinStatus | null>(null);
+  const [driveDetails, setDriveDetails] = useState<Record<string, DockDrive>>({});
+
+  const refreshRecycleStatus = useCallback(() => {
+    if (!dockRecycle) return;
+    invoke<RecycleBinStatus>('get_recycle_bin_status')
+      .then(setRecycleStatus)
+      .catch(() => {});
+  }, [dockRecycle]);
+
+  const refreshDriveDetails = useCallback(() => {
+    invoke<DockDrive[]>('get_drives')
+      .then((drives) => {
+        const map: Record<string, DockDrive> = {};
+        drives.forEach((d) => { map[d.letter] = d; });
+        setDriveDetails(map);
+      })
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    if (dockRecycle) {
+      refreshRecycleStatus();
+      const interval = setInterval(refreshRecycleStatus, 8000);
+      return () => clearInterval(interval);
+    }
+  }, [dockRecycle, refreshRecycleStatus]);
+
+  useEffect(() => {
+    refreshDriveDetails();
+  }, [refreshDriveDetails]);
   const [contextMenuHeight, setContextMenuHeight] = useState(0);
   const [contextMenuWidth, setContextMenuWidth] = useState(0);
   const [activeSubmenu, setActiveSubmenu] = useState<string | null>(null);
@@ -318,10 +402,10 @@ const Dock = memo(function Dock() {
       setInteractionState('active');
     } else if (interactionState !== 'none') {
       setInteractionState('grace');
-      const timer = setTimeout(() => setInteractionState('none'), 800);
+      const timer = setTimeout(() => setInteractionState('none'), dockHideDelay);
       return () => clearTimeout(timer);
     }
-  }, [isAnyInteraction]);
+  }, [isAnyInteraction, dockHideDelay]);
 
   const isHidden = isFullscreen ||
     (!startupAnimating && (
@@ -369,6 +453,10 @@ const Dock = memo(function Dock() {
     return () => { clearInterval(interval); cleared = true; };
   }, []);
 
+  // The widest and tallest the expanded bar has been, set by the region code further down.
+  const dockBarExtentRef = useRef({ width: 0, height: 0 });
+  const updateDockRegionRef = useRef<() => void>(() => {});
+
   useEffect(() => {
     let lastSent = "";
     const updateRect = () => {
@@ -386,6 +474,8 @@ const Dock = memo(function Dock() {
         lastSent = key;
         invoke('update_dock_rect', { rect: next }).catch(() => { lastSent = ""; });
       }
+      // The bar's size animates without re-rendering, this is what sees it grow.
+      updateDockRegionRef.current();
     };
 
     updateRect();
@@ -403,7 +493,7 @@ const Dock = memo(function Dock() {
     };
     rafId = requestAnimationFrame(chase);
 
-    const poll = setInterval(updateRect, 500);
+    const poll = rectPollMs === null ? undefined : setInterval(updateRect, rectPollMs);
 
     return () => {
       window.removeEventListener('resize', updateRect);
@@ -411,7 +501,7 @@ const Dock = memo(function Dock() {
       clearInterval(poll);
       cancelAnimationFrame(rafId);
     };
-  }, [pinnedApps, activeApps, isHidden, previewData, scale]);
+  }, [pinnedApps, activeApps, isHidden, previewData, scale, rectPollMs]);
 
   const refreshDockMode = () => {
     invoke<string>('get_dock_mode_for_window').then(setDockMode).catch(() => {});
@@ -439,7 +529,6 @@ const Dock = memo(function Dock() {
       const calendarEnabled = getVal("fern-dock-calendar-enabled", "true");
       setDockCalendarEnabled(calendarEnabled === "true");
 
-      setLegacyMode(getVal("fern-legacy-mode", "false") === "true");
       setDockTray(getVal("fern-dock-tray-enabled", "true") !== "false");
       setDockTaskView(getVal("fern-dock-taskview-enabled", "false") === "true");
       setDockShowDesktop(getVal("fern-dock-show-desktop-corner", "false") === "true");
@@ -487,6 +576,14 @@ const Dock = memo(function Dock() {
       setIsEdgeHovered(event.payload);
     });
 
+    // A click-through window gets no mouse events, so its mouseleave never comes. The backend says so instead.
+    const unlistenCursorLeft = thisWindow.listen("dock-cursor-left", () => {
+      isPreviewHoveredRef.current = false;
+      setIsDockHovered(false);
+      setHoveredApp(null);
+      setPressedApp(null);
+    });
+
     const unlistenFullscreen = thisWindow.listen<boolean>("dock-fullscreen", (event) => {
       setIsFullscreen(event.payload);
       if (event.payload) {
@@ -511,6 +608,7 @@ const Dock = memo(function Dock() {
       unlistenMaximized.then(f => f());
       unlistenOverlap.then(f => f());
       unlistenEdgeHover.then(f => f());
+      unlistenCursorLeft.then(f => f());
       unlistenFullscreen.then(f => f());
       unlistenMonitors.then(f => f());
       unlistenTray.then(f => f());
@@ -526,7 +624,6 @@ const Dock = memo(function Dock() {
       "fern-dock-preview-enabled": setDockPreviewEnabled,
       "fern-dock-search-enabled": setDockSearchEnabled,
       "fern-dock-calendar-enabled": setDockCalendarEnabled,
-      "fern-legacy-mode": setLegacyMode,
       "fern-dock-tray-enabled": (v) => setDockTray(v !== false && v !== "false"),
       "fern-dock-taskview-enabled": setDockTaskView,
       "fern-dock-show-desktop-corner": setDockShowDesktop,
@@ -534,6 +631,8 @@ const Dock = memo(function Dock() {
       "fern-dock-drives": (v) => setDockDrives(parseDrives(v)),
       "fern-dock-icon-only": setDockIconOnly,
       "fern-dock-adaptive": setDockAdaptive,
+      "fern-dock-attention-enabled": (v) => setDockAttentionEnabled(v !== false && v !== "false"),
+      "fern-dock-hide-delay": (v: string) => setDockHideDelay(parseInt(v || "800", 10)),
       "fern-start-icon": setStartIcon,
       "fern-dock-mixed-reorder": setDockMixedReorder,
       "fern-scale": setScale,
@@ -562,6 +661,11 @@ const Dock = memo(function Dock() {
     };
 
     poll();
+    invoke<number[]>("get_attention_windows").then(setAttentionHwnds).catch(() => {});
+
+    const unlistenAttention = listen<number[]>("app-attention", (event) => {
+      setAttentionHwnds(event.payload);
+    });
 
     const unlistenWindowChange = listen("windows-changed", () => {
       poll();
@@ -577,15 +681,16 @@ const Dock = memo(function Dock() {
     });
 
     // Safety net: even if a window event is missed, converge on the real state
-    const interval = setInterval(poll, 10000);
+    const interval = windowsPollMs === null ? undefined : setInterval(poll, windowsPollMs);
 
     return () => {
       clearInterval(interval);
+      unlistenAttention.then(f => f());
       unlistenWindowChange.then(f => f());
       unlistenSettingsReset.then(f => f());
       unlistenIconCache.then(f => f());
     };
-  }, [isDragging]);
+  }, [isDragging, windowsPollMs]);
 
   const fetchIcon = async (path: string, name?: string, hwnd?: number, retryCount = 0) => {
     const isHost = isBrowserHost(path);
@@ -670,7 +775,14 @@ const Dock = memo(function Dock() {
   const handleClosePreview = async (e: React.MouseEvent, hwnd: number) => {
     e.stopPropagation();
     try {
-      await invoke('close_window', { hwnd });
+      const closed = await invoke<boolean>('close_window', { hwnd });
+      if (!closed) {
+        // Still open, so it stays in the preview. The backend has brought it to the front.
+        if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+        setToast(t('dockmenu.closeElevated'));
+        toastTimerRef.current = setTimeout(() => setToast(null), 4000);
+        return;
+      }
       setPreviewData(prev => {
         if (!prev) return null;
         const remaining = prev.previews.filter(p => p.hwnd !== hwnd);
@@ -997,12 +1109,11 @@ const Dock = memo(function Dock() {
                     return { hwnd, title, image, lastFocused };
                   }
                 } catch {}
-                return null;
+                return { hwnd, title, image: "", lastFocused: 0 };
               })
             );
 
             const captured = results
-              .filter((r): r is { hwnd: number, title: string, image: string, lastFocused: number } => r !== null)
               .sort((a, b) => b.lastFocused - a.lastFocused)
               .map(({ hwnd, title, image }) => ({ hwnd, title, image }));
 
@@ -1053,6 +1164,19 @@ const Dock = memo(function Dock() {
       .catch(() => {});
   };
 
+  const renderAppIcon = (app: AppInfo) => {
+    const isHost = isBrowserHost(app.path);
+    const cacheKey = isHost ? `${app.path}:${app.name.toLowerCase()}` : (app.hwnd ? `${app.path}-${app.hwnd}` : app.path);
+    const allowPathFallback = !isHost || !app.is_running;
+    const icon = customIcons[cacheKey] || (allowPathFallback && customIcons[app.path]) || iconsRef.current[cacheKey] || (allowPathFallback && iconsRef.current[app.path]) || app.icon;
+    const isFernOrSettings = isFernWindow(app);
+    return (icon || isFernOrSettings) ? (
+      <DockAppIcon src={isFernOrSettings ? "/fern.png" : (icon ?? undefined)} alt={app.name} fern={isFernOrSettings} />
+    ) : (
+      <div className="fallback-icon">{app.name[0]}</div>
+    );
+  };
+
   const renderPreviewMedia = (app: AppInfo) => {
     const session = sessionForApp(app, mediaSessions);
     if (!session || !session.title) return null;
@@ -1076,7 +1200,14 @@ const Dock = memo(function Dock() {
     );
   };
 
-  const renderShortcut = (id: string, label: string, delay: number, onClick: (rect: DOMRect, e: React.MouseEvent) => void, icon: React.ReactNode) => {
+  const renderShortcut = (
+    id: string,
+    label: string,
+    delay: number,
+    onClick: (rect: DOMRect, e: React.MouseEvent) => void,
+    icon: React.ReactNode,
+    onContextMenu?: (e: React.MouseEvent) => void
+  ) => {
     const isTray = id === 'tray';
     const hideTooltip = clickedShortcut === id || (isTray && trayOpen);
     return (
@@ -1086,6 +1217,7 @@ const Dock = memo(function Dock() {
         animate={{ opacity: 1, scale: 1 }}
         transition={{ opacity: { duration: 0.15, delay }, scale: { type: "spring", stiffness: 400, damping: 25, delay } }}
         className={`dock-icon-wrapper ${hideTooltip ? 'shortcut-active' : ''}`}
+        onContextMenu={onContextMenu}
         onMouseEnter={() => setHoveredApp(id)}
         onMouseLeave={() => { setHoveredApp(null); setPressedApp(null); setClickedShortcut(null); }}
       >
@@ -1111,6 +1243,50 @@ const Dock = memo(function Dock() {
     );
   };
 
+  // Clip the dock window to what it draws (see window_region.rs), so its empty parts never take clicks.
+  // A menu closes on a click anywhere and a dragged icon can go anywhere, so those get the whole window,
+  // as does the fly-in on startup and the toast, which has its own position.
+  const sendDockRegion = useMemo(
+    () => createRegionSender((rects) => { invoke("set_window_regions", { rects }).catch(() => {}); }),
+    []
+  );
+  updateDockRegionRef.current = () => {
+    const w = window.innerWidth;
+    const h = window.innerHeight;
+    if (!isReady || isDragging || contextMenu || showAddPopup || toast) {
+      sendDockRegion([fullWindow(w, h)]);
+      return;
+    }
+    const bar = dockRef.current?.getBoundingClientRect();
+    if (bar && isExpanded && !isHidden) {
+      dockBarExtentRef.current.width = Math.max(dockBarExtentRef.current.width, bar.width);
+      dockBarExtentRef.current.height = Math.max(dockBarExtentRef.current.height, bar.height);
+    }
+    const extent = dockBarExtentRef.current;
+    const wanted = [
+      dockBand(
+        w,
+        h,
+        isAdaptive ? w : Math.max(extent.width, 72 * scale),
+        Math.max(extent.height, 72 * scale),
+        DOCK_REGION_WIDTH_PAD * scale,
+        DOCK_REGION_LIFT * scale,
+      ),
+    ];
+    // The same area the backend's hit test gives an open preview.
+    if (previewData && bar) {
+      wanted.push({ x: bar.x - 500, y: bar.y - 320, width: bar.width + 1000, height: bar.height + 320 });
+    }
+    sendDockRegion(wanted);
+  };
+  // Sent after every render, but only when the region changes.
+  useEffect(() => updateDockRegionRef.current());
+  useEffect(() => {
+    const onResize = () => updateDockRegionRef.current();
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+
   return (
     <div className={`dock-container ${isDragging ? 'dragging' : ''}`} onClick={closeMenu}>
       <div style={{ width: '100%', height: '100%', display: 'flex', justifyContent: 'center', alignItems: 'flex-end' }}>
@@ -1119,6 +1295,8 @@ const Dock = memo(function Dock() {
           layout
           className={`dock ${isExpanded && !isHidden ? 'dock-expanded' : ''} ${isImpacted && !isExpanded && !isHidden ? 'dock-impacted' : ''} ${dockIconOnly ? 'dock-icon-only' : ''} ${isAdaptive ? 'dock-adaptive' : ''}`}
           onMouseEnter={() => setIsDockHovered(true)}
+          // The backend may have ended the hover without the DOM knowing, then no new mouseenter comes.
+          onMouseMove={() => { if (!isDockHovered) setIsDockHovered(true); }}
           onMouseLeave={() => { setIsDockHovered(false); setHoveredApp(null); setPressedApp(null); }}
         initial={{ y: -800, opacity: 1, width: 34, height: 34, borderTopLeftRadius: 17, borderTopRightRadius: 17, borderBottomLeftRadius: 17, borderBottomRightRadius: 17 }}
         animate={{
@@ -1147,6 +1325,12 @@ const Dock = memo(function Dock() {
         style={{ originX: 0.5, originY: 1, minWidth: 34 }}
         onContextMenu={(e) => handleContextMenu(e, null)}
       >
+        <SurfaceShape
+          edge="bottom"
+          flare={isExpanded && !isHidden ? 13 : 0}
+          radius={(isImpacted || isExpanded) && !isHidden ? 18 : 17}
+          edgeRadius={(isImpacted || isExpanded) && !isHidden ? 0 : 17}
+        />
         <AnimatePresence>
           {isExpanded && (
             <motion.div
@@ -1245,7 +1429,7 @@ const Dock = memo(function Dock() {
                 </motion.div>
               )}
 
-              {!legacyMode && dockTray && renderShortcut(
+              {dockTray && renderShortcut(
                 'tray', t('dockmenu.hiddenIcons'), 0.21,
                 (rect, e) => invoke('open_tray_from_button', {
                   dx: (rect.left + rect.width / 2 - e.clientX) * window.devicePixelRatio,
@@ -1254,22 +1438,51 @@ const Dock = memo(function Dock() {
                 <ChevronUpIcon />
               )}
 
-              {!legacyMode && dockTaskView && renderShortcut(
+              {dockTaskView && renderShortcut(
                 'taskview', t('dockmenu.taskView'), 0.22,
                 () => invoke('open_app', { appName: 'taskview' }).catch((err) => console.error('Failed to open Task View:', err)),
                 <TaskViewIcon />
               )}
 
-              {!legacyMode && dockDrives.map((letter, i) => renderShortcut(
+              {dockDrives.map((letter, i) => renderShortcut(
                 `drive-${letter}`, t('dock.drive', { letter }), 0.24 + i * 0.02,
                 () => invoke('open_dock_extra', { target: letter }).catch((err) => console.error('Failed to open drive:', err)),
-                <DriveIcon letter={letter} />
+                <DriveIcon letter={letter} />,
+                (e) => {
+                  e.stopPropagation();
+                  e.preventDefault();
+                  refreshDriveDetails();
+                  const target = e.currentTarget.getBoundingClientRect();
+                  setContextMenu({
+                    x: target.left + target.width / 2,
+                    y: dockRef.current?.getBoundingClientRect().top ?? e.clientY,
+                    app: null,
+                    extraKind: 'drive',
+                    driveLetter: letter,
+                    isRemovable: driveDetails[letter]?.removable ?? false,
+                  });
+                }
               ))}
 
-              {!legacyMode && dockRecycle && renderShortcut(
+              {dockRecycle && renderShortcut(
                 'recycle', t('dockmenu.recycleBin'), 0.26 + dockDrives.length * 0.02,
-                () => invoke('open_dock_extra', { target: 'recycle' }).catch((err) => console.error('Failed to open Recycle Bin:', err)),
-                <RecycleIcon />
+                () => {
+                  invoke('open_dock_extra', { target: 'recycle' }).catch((err) => console.error('Failed to open Recycle Bin:', err));
+                  refreshRecycleStatus();
+                },
+                <RecycleIcon isEmpty={recycleStatus ? recycleStatus.is_empty : true} />,
+                (e) => {
+                  e.stopPropagation();
+                  e.preventDefault();
+                  refreshRecycleStatus();
+                  const target = e.currentTarget.getBoundingClientRect();
+                  setContextMenu({
+                    x: target.left + target.width / 2,
+                    y: dockRef.current?.getBoundingClientRect().top ?? e.clientY,
+                    app: null,
+                    extraKind: 'recycle',
+                  });
+                }
               )}
 
               {!dockMixedReorder ? (
@@ -1320,7 +1533,13 @@ const Dock = memo(function Dock() {
                       <div className="preview-items">
                         {previewData.previews.map((prev, idx) => (
                           <div key={prev.hwnd} className="preview-item" onClick={() => invoke('focus_window', { hwnd: prev.hwnd })}>
-                            <img src={prev.image} alt={`Preview ${idx}`} />
+                            {prev.image ? (
+                              <img src={prev.image} alt={`Preview ${idx}`} />
+                            ) : (
+                              <div className="preview-item-icon-fallback">
+                                {renderAppIcon(app)}
+                              </div>
+                            )}
                             <div className="preview-label">{prev.title || app.name}</div>
                             <button
                               className="preview-close-btn"
@@ -1353,21 +1572,13 @@ const Dock = memo(function Dock() {
                   onPointerUp={() => setPressedApp(null)}
                   onPointerCancel={() => setPressedApp(null)}
                 >
-                  {(() => {
-                    const isHost = isBrowserHost(app.path);
-                    const cacheKey = isHost ? `${app.path}:${app.name.toLowerCase()}` : (app.hwnd ? `${app.path}-${app.hwnd}` : app.path);
-                    // Running host items skip the shared path fallback, or the browser's icon leaks onto its PWAs.
-                    const allowPathFallback = !isHost || !app.is_running;
-                    const icon = customIcons[cacheKey] || (allowPathFallback && customIcons[app.path]) || iconsRef.current[cacheKey] || (allowPathFallback && iconsRef.current[app.path]) || app.icon;
-                    
-                    const isFernOrSettings = isFernWindow(app);
-                    
-                    return (icon || isFernOrSettings) ? (
-                      <DockAppIcon src={isFernOrSettings ? "/fern.png" : (icon ?? undefined)} alt={app.name} fern={isFernOrSettings} />
-                    ) : (
-                      <div className="fallback-icon">{app.name[0]}</div>
-                    );
-                  })()}
+                  {renderAppIcon(app)}
+                  {dockAttentionEnabled && (
+                    <AttentionBadge
+                      count={appUnreadCount(app)}
+                      isFlashing={appAttention(app, attentionHwnds)}
+                    />
+                  )}
                 </motion.div>
                   {app.is_running && <WindowDots count={app.all_hwnds?.length ?? 1} />}
                     </motion.div>
@@ -1425,7 +1636,13 @@ const Dock = memo(function Dock() {
                             <div className="preview-items">
                               {previewData.previews.map((prev, idx) => (
                                 <div key={prev.hwnd} className="preview-item" onClick={() => invoke('focus_window', { hwnd: prev.hwnd })}>
-                                  <img src={prev.image} alt={`Preview ${idx}`} />
+                                  {prev.image ? (
+                                    <img src={prev.image} alt={`Preview ${idx}`} />
+                                  ) : (
+                                    <div className="preview-item-icon-fallback">
+                                      {renderAppIcon(app)}
+                                    </div>
+                                  )}
                                   <div className="preview-label">{prev.title || app.name}</div>
                                   <button
                                     className="preview-close-btn"
@@ -1456,19 +1673,13 @@ const Dock = memo(function Dock() {
                         onPointerUp={() => setPressedApp(null)}
                         onPointerCancel={() => setPressedApp(null)}
                       >
-                        {(() => {
-                          const isHost = isBrowserHost(app.path);
-                          const cacheKey = isHost ? `${app.path}:${app.name.toLowerCase()}` : (app.hwnd ? `${app.path}-${app.hwnd}` : app.path);
-                        // Running host items skip the shared path fallback, or the browser's icon leaks onto its PWAs.
-                    const allowPathFallback = !isHost || !app.is_running;
-                    const icon = customIcons[cacheKey] || (allowPathFallback && customIcons[app.path]) || iconsRef.current[cacheKey] || (allowPathFallback && iconsRef.current[app.path]) || app.icon;
-                          const isFernOrSettings = isFernWindow(app);
-                          return (icon || isFernOrSettings) ? (
-                            <DockAppIcon src={isFernOrSettings ? "/fern.png" : (icon ?? undefined)} alt={app.name} fern={isFernOrSettings} />
-                          ) : (
-                            <div className="fallback-icon">{app.name[0]}</div>
-                          );
-                        })()}
+                        {renderAppIcon(app)}
+                        {dockAttentionEnabled && (
+                          <AttentionBadge
+                            count={appUnreadCount(app)}
+                            isFlashing={appAttention(app, attentionHwnds)}
+                          />
+                        )}
                       </motion.div>
                       {app.is_running && <WindowDots count={app.all_hwnds?.length ?? 1} />}
                     </motion.div>
@@ -1523,7 +1734,13 @@ const Dock = memo(function Dock() {
                             <div className="preview-items">
                               {previewData.previews.map((prev, idx) => (
                                 <div key={prev.hwnd} className="preview-item" onClick={() => invoke('focus_window', { hwnd: prev.hwnd })}>
-                                  <img src={prev.image} alt={`Preview ${idx}`} />
+                                  {prev.image ? (
+                                    <img src={prev.image} alt={`Preview ${idx}`} />
+                                  ) : (
+                                    <div className="preview-item-icon-fallback">
+                                      {renderAppIcon(app)}
+                                    </div>
+                                  )}
                                   <div className="preview-label">{prev.title || app.name}</div>
                                   <button
                                     className="preview-close-btn"
@@ -1555,19 +1772,13 @@ const Dock = memo(function Dock() {
                         onPointerUp={() => setPressedApp(null)}
                         onPointerCancel={() => setPressedApp(null)}
                       >
-                        {(() => {
-                          const isHost = isBrowserHost(app.path);
-                          const cacheKey = isHost ? `${app.path}:${app.name.toLowerCase()}` : (app.hwnd ? `${app.path}-${app.hwnd}` : app.path);
-                          // Running host items skip the shared path fallback, or the browser's icon leaks onto its PWAs.
-                    const allowPathFallback = !isHost || !app.is_running;
-                    const icon = customIcons[cacheKey] || (allowPathFallback && customIcons[app.path]) || iconsRef.current[cacheKey] || (allowPathFallback && iconsRef.current[app.path]) || app.icon;
-                          const isFernOrSettings = isFernWindow(app);
-                          return (icon || isFernOrSettings) ? (
-                            <DockAppIcon src={isFernOrSettings ? "/fern.png" : (icon ?? undefined)} alt={app.name} fern={isFernOrSettings} />
-                          ) : (
-                            <div className="fallback-icon">{app.name[0]}</div>
-                          );
-                        })()}
+                        {renderAppIcon(app)}
+                        {dockAttentionEnabled && (
+                          <AttentionBadge
+                            count={appUnreadCount(app)}
+                            isFlashing={appAttention(app, attentionHwnds)}
+                          />
+                        )}
                       </motion.div>
                       {app.is_running && <WindowDots count={app.all_hwnds?.length ?? 1} />}
                     </motion.div>
@@ -1610,7 +1821,55 @@ const Dock = memo(function Dock() {
           }}
           onClick={(e) => e.stopPropagation()}
         >
-          {contextMenu.app ? (
+          {contextMenu.extraKind === 'recycle' ? (
+            <>
+              <div className="menu-item" onClick={() => {
+                invoke('open_dock_extra', { target: 'recycle' }).catch(() => {});
+                closeMenu();
+              }}>
+                {t("dockmenu.open")}
+              </div>
+              <div
+                className={`menu-item ${recycleStatus?.is_empty ? 'disabled' : ''}`}
+                style={recycleStatus?.is_empty ? { opacity: 0.5, pointerEvents: 'none' } : undefined}
+                onClick={() => {
+                  if (!recycleStatus?.is_empty) {
+                    invoke('empty_recycle_bin', { confirm: true })
+                      .then(() => refreshRecycleStatus())
+                      .catch(() => {});
+                  }
+                  closeMenu();
+                }}
+              >
+                {t("dockmenu.emptyRecycle")}
+              </div>
+            </>
+          ) : contextMenu.extraKind === 'drive' ? (
+            <>
+              <div className="menu-item" onClick={() => {
+                if (contextMenu.driveLetter) {
+                  invoke('open_dock_extra', { target: contextMenu.driveLetter }).catch(() => {});
+                }
+                closeMenu();
+              }}>
+                {t("dockmenu.open")}
+              </div>
+              {contextMenu.isRemovable && (
+                <div className="menu-item" onClick={() => {
+                  if (contextMenu.driveLetter) {
+                    invoke('eject_drive', { letter: contextMenu.driveLetter })
+                      .then(() => {
+                        refreshDriveDetails();
+                      })
+                      .catch((err) => console.error('Failed to eject drive:', err));
+                  }
+                  closeMenu();
+                }}>
+                  {t("dockmenu.ejectDrive")}
+                </div>
+              )}
+            </>
+          ) : contextMenu.app ? (
             <>
               {contextMenu.app.is_running && contextMenu.app.path !== 'start' && (
                 <>

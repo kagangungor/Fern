@@ -99,43 +99,6 @@ body,
     overflow: hidden;
 }
 
-.update-progress-fill {
-    height: 100%;
-    background: var(--fern-text, rgba(255, 255, 255, 0.9));
-    border-radius: 2px;
-    transition: width 0.3s ease;
-}
-
-/* ─── Volume Notch (Left Edge) ──────────────────────────────────────────── */
-
-.volume-notch-wrapper {
-  position: fixed;
-  left: 0;
-  top: 50%;
-  transform: translateY(-50%);
-  overflow: visible;
-  transform-origin: left center;
-}
-
-.volume-notch {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: space-between;
-  padding: 16px 0 14px;
-  background: var(--fern-bg, rgba(0, 0, 0, 0.8));
-  border-radius: 0 18px 18px 0;
-  border: 1px solid var(--fern-border, rgba(255, 255, 255, 0.1));
-  border-left: none;
-  border-top: none;
-  border-bottom: none;
-  width: 42px;
-  height: 196px;
-  position: relative;
-  pointer-events: auto;
-  overflow: hidden;
-}
-
 /* Concave flares where the card meets the screen edge. Kept outside the card
    so its `overflow: hidden` can clip the mixer while the card grows. */
 .volume-notch-flares {
@@ -188,6 +151,44 @@ body,
     var(--fern-bg, rgba(0, 0, 0, 0.8));
 }
 
+
+.update-progress-fill {
+    height: 100%;
+    background: var(--fern-highlight, var(--fern-text, rgba(255, 255, 255, 0.9)));
+    border-radius: 2px;
+    transition: width 0.3s ease;
+}
+
+/* ─── Volume Notch (Left Edge) ──────────────────────────────────────────── */
+
+.volume-notch-wrapper {
+  position: fixed;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  overflow: visible;
+  transform-origin: left center;
+}
+
+.volume-notch {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 0 14px;
+  background: var(--fern-bg, rgba(0, 0, 0, 0.8));
+  border-radius: 0 18px 18px 0;
+  border: 1px solid var(--fern-border, rgba(255, 255, 255, 0.1));
+  border-left: none;
+  border-top: none;
+  border-bottom: none;
+  width: 42px;
+  height: 196px;
+  position: relative;
+  pointer-events: auto;
+  overflow: hidden;
+}
+
 .volume-notch-content-group {
   display: flex;
   flex-direction: column;
@@ -197,6 +198,35 @@ body,
   width: 42px;
   align-self: flex-start;
   flex-shrink: 0;
+}
+
+/* Output device picker, mirrors the mixer button at the other end of the bar. */
+.volume-notch-device {
+  width: 100%;
+  height: 20px;
+  margin-bottom: 2px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--fern-text, white);
+  opacity: 0.6;
+  cursor: pointer;
+  transition:
+    opacity 0.16s ease,
+    transform 0.16s ease;
+}
+
+.volume-notch-device:hover,
+.volume-notch-device.active {
+  opacity: 1;
+}
+
+.volume-notch-device:active {
+  transform: scale(0.92);
 }
 
 .volume-notch-bar {
@@ -214,7 +244,7 @@ body,
   bottom: 0;
   left: 0;
   width: 100%;
-  background: var(--fern-text, white);
+  background: var(--fern-highlight, var(--fern-text, white));
   border-radius: 20px;
 }
 
@@ -316,13 +346,126 @@ body,
   width: 100%;
   flex: 1;
   min-height: 0;
-  /* Aligns the tile sliders with the main bar (17px from the card top) and
-     the tile logos with the main action button. */
-  padding: 16px 8px 14px;
+  /* The header above takes the output button's row, so the tile sliders line
+     up with the main bar and the tile logos with the main action button. */
+  padding: 0 8px 14px;
   overflow-y: auto;
   overflow-x: hidden;
   scrollbar-width: thin;
   scrollbar-color: var(--fern-border, rgba(255, 255, 255, 0.2)) transparent;
+}
+
+/* Same height and offset as .volume-notch-device so both rows line up. */
+.volume-panel-header {
+  height: 20px;
+  margin: 16px 8px 2px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 4px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fern-text-muted, rgba(255, 255, 255, 0.6));
+  font-size: 10px;
+  font-weight: 600;
+  font-family:
+    "Inter",
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    sans-serif;
+  text-align: left;
+  min-width: 0;
+}
+
+.volume-panel-header.clickable {
+  cursor: pointer;
+  transition:
+    background 0.16s ease,
+    color 0.16s ease;
+}
+
+.volume-panel-header.clickable:hover {
+  background: var(--fern-group-bg, rgba(255, 255, 255, 0.06));
+  color: var(--fern-text, white);
+}
+
+.volume-panel-header svg {
+  flex-shrink: 0;
+}
+
+.volume-panel-header-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.volume-device-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-height: 0;
+  padding: 0 8px 14px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-width: thin;
+  scrollbar-color: var(--fern-border, rgba(255, 255, 255, 0.2)) transparent;
+}
+
+.volume-device-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-height: 26px;
+  flex-shrink: 0;
+  padding: 0 8px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--fern-text, white);
+  font-size: 11px;
+  font-weight: 500;
+  font-family:
+    "Inter",
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    sans-serif;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.16s ease;
+}
+
+.volume-device-row:hover {
+  background: var(--fern-group-bg, rgba(255, 255, 255, 0.06));
+}
+
+.volume-device-row.selected {
+  background: var(--fern-border, rgba(255, 255, 255, 0.12));
+  font-weight: 600;
+  cursor: default;
+}
+
+.volume-device-row.busy {
+  opacity: 0.6;
+}
+
+.volume-device-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.volume-device-list .volume-mixer-empty {
+  flex: 1;
 }
 
 .volume-mixer-empty {
@@ -368,7 +511,7 @@ body,
   bottom: 0;
   left: 0;
   width: 100%;
-  background: var(--fern-text, white);
+  background: var(--fern-highlight, var(--fern-text, white));
   border-radius: 20px;
   pointer-events: none;
 }
@@ -472,10 +615,7 @@ body,
     align-items: center;
     justify-content: space-between;
     padding: 16px 0;
-    background: var(--fern-bg, rgba(0, 0, 0, 0.8));
     border-radius: 18px 0 0 18px;
-    border: 1px solid var(--fern-border, rgba(255, 255, 255, 0.1));
-    border-right: none;
     width: 42px;
     height: 196px;
     position: relative;
@@ -511,6 +651,7 @@ body,
         var(--fern-bg, rgba(0, 0, 0, 0.8));
 }
 
+
 .brightness-notch-content-group {
     display: flex;
     flex-direction: column;
@@ -535,7 +676,7 @@ body,
     bottom: 0;
     left: 0;
     width: 100%;
-    background: var(--fern-text, white);
+    background: var(--fern-highlight, var(--fern-text, white));
     border-radius: 20px;
 }
 
@@ -562,4 +703,87 @@ body,
 .light-mode .volume-notch-bar,
 .light-mode .brightness-notch-bar {
     background: rgba(0, 0, 0, 0.12);
+}
+
+
+.volume-notch-wrapper.side-right {
+  left: auto;
+  right: 0;
+}
+
+.side-right .volume-notch {
+  border-radius: 18px 0 0 18px;
+  border: 1px solid var(--fern-border, rgba(255, 255, 255, 0.1));
+  border-right: none;
+  border-top: none;
+  border-bottom: none;
+}
+
+.side-right .volume-notch-flares {
+  left: auto;
+  right: 0;
+}
+
+.side-right .volume-notch-flares::before,
+.side-right .volume-notch-flares::after {
+  left: auto;
+  right: 0;
+}
+
+.side-right .volume-notch-flares::before {
+  -webkit-mask-image: radial-gradient(circle at 0px 0px, transparent 12px, black 13px);
+  mask-image: radial-gradient(circle at 0px 0px, transparent 12px, black 13px);
+  background:
+    radial-gradient(circle at 0px 0px, transparent 12px, var(--fern-border, rgba(255, 255, 255, 0.1)) 12.7px, var(--fern-border, rgba(255, 255, 255, 0.1)) 13.3px, transparent 14px),
+    var(--fern-bg, rgba(0, 0, 0, 0.8));
+}
+
+.side-right .volume-notch-flares::after {
+  -webkit-mask-image: radial-gradient(circle at 0px 13px, transparent 12px, black 13px);
+  mask-image: radial-gradient(circle at 0px 13px, transparent 12px, black 13px);
+  background:
+    radial-gradient(circle at 0px 13px, transparent 12px, var(--fern-border, rgba(255, 255, 255, 0.1)) 12.7px, var(--fern-border, rgba(255, 255, 255, 0.1)) 13.3px, transparent 14px),
+    var(--fern-bg, rgba(0, 0, 0, 0.8));
+}
+
+.side-right .volume-notch-content-group {
+  align-self: flex-end;
+}
+
+.side-right .volume-mixer-panel {
+  left: auto;
+  right: 42px;
+}
+
+.brightness-notch-wrapper.side-left {
+  right: auto;
+  left: 0;
+}
+
+.side-left .brightness-notch {
+  border-radius: 0 18px 18px 0;
+  border: 1px solid var(--fern-border, rgba(255, 255, 255, 0.1));
+  border-left: none;
+}
+
+.side-left .brightness-notch::before,
+.side-left .brightness-notch::after {
+  right: auto;
+  left: 0;
+}
+
+.side-left .brightness-notch::before {
+  -webkit-mask-image: radial-gradient(circle at 13px 0px, transparent 12px, black 13px);
+  mask-image: radial-gradient(circle at 13px 0px, transparent 12px, black 13px);
+  background:
+    radial-gradient(circle at 13px 0px, transparent 12px, var(--fern-border, rgba(255, 255, 255, 0.1)) 12.7px, var(--fern-border, rgba(255, 255, 255, 0.1)) 13.3px, transparent 14px),
+    var(--fern-bg, rgba(0, 0, 0, 0.8));
+}
+
+.side-left .brightness-notch::after {
+  -webkit-mask-image: radial-gradient(circle at 13px 13px, transparent 12px, black 13px);
+  mask-image: radial-gradient(circle at 13px 13px, transparent 12px, black 13px);
+  background:
+    radial-gradient(circle at 13px 13px, transparent 12px, var(--fern-border, rgba(255, 255, 255, 0.1)) 12.7px, var(--fern-border, rgba(255, 255, 255, 0.1)) 13.3px, transparent 14px),
+    var(--fern-bg, rgba(0, 0, 0, 0.8));
 }

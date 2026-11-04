@@ -1,4 +1,4 @@
-import { StrictMode, useState, useEffect, useRef, useCallback, useLayoutEffect } from "react";
+import { StrictMode, useState, useEffect, useMemo, useRef, useCallback, useLayoutEffect } from "react";
 import { createRoot } from "react-dom/client";
 import { motion, AnimatePresence } from "framer-motion";
 import { listen, emit } from "@tauri-apps/api/event";
@@ -7,10 +7,19 @@ import { useSettingsSync } from "./hooks/useSettingsSync";
 import { useTrailingThrottle } from "./hooks/useTrailingThrottle";
 import { getVersion } from "@tauri-apps/api/app";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
-import { MixerIcon, SpeakerIcon } from "./icons";
+import { Check, ChevronRight } from "lucide-react";
+import { AudioOutputIcon, MixerIcon, SpeakerIcon } from "./icons";
 import { useT } from "./i18n";
 import "./Overlay.css";
+import "./surfaces.css";
+import { SurfaceShape } from "./components/SurfaceShape";
 import { initTheme } from "./theme";
+import { createRegionSender, edgeCards, fullWindow } from "./windowRegion";
+
+// The size the backend's hit test uses for the cards, and room for their flares and blur.
+const OVERLAY_CARD_WIDTH = 42;
+const OVERLAY_CARD_HEIGHT = 196;
+const OVERLAY_CARD_PAD = 32;
 
 // ─── App Volume Mixer ───────────────────────────────────────────────────────
 
@@ -20,6 +29,12 @@ interface AudioSession {
   process_path: string | null;
   volume: number;
   is_muted: boolean;
+}
+
+interface OutputDevice {
+  id: string;
+  name: string;
+  is_default: boolean;
 }
 
 function MixerTile({
@@ -145,24 +160,38 @@ const MIXER_COLUMN_GAP = 4;
 const MIXER_PANEL_PADDING = 8;
 const MIXER_MAX_COLUMNS = 4;
 const MIXER_EMPTY_COLUMNS = 2;
+// The output picker always opens at the widest mixer size so device names have room.
+const DEVICES_PANEL_WIDTH =
+  MIXER_PANEL_PADDING * 2 +
+  MIXER_MAX_COLUMNS * MIXER_COLUMN_WIDTH +
+  (MIXER_MAX_COLUMNS - 1) * MIXER_COLUMN_GAP;
 
-// Last session list, so reopening renders at the right width.
+type PanelView = "mixer" | "devices";
+
+type Side = "left" | "right";
+const asSide = (value: string | null, fallback: Side): Side => (value === "left" || value === "right" ? value : fallback);
+
+// Last lists, so reopening renders right away and at the right width.
 let lastKnownSessions: AudioSession[] = [];
+let lastKnownDevices: OutputDevice[] = [];
 
 function VolumeNotch({
   volume,
   isMuted,
   onVolumeChange,
   mixerExpanded,
-  onMixerExpandedChange
+  onMixerExpandedChange,
+  side,
 }: {
   volume: number;
   isMuted: boolean;
   onVolumeChange: (vol: number) => void;
   mixerExpanded: boolean;
   onMixerExpandedChange: (expanded: boolean) => void;
+  side: Side;
 }) {
   const t = useT();
+  const dir = side === "right" ? -1 : 1;
   const percentage = Math.round(volume * 100);
   const barRef = useRef<HTMLDivElement>(null);
   const shellRef = useRef<HTMLDivElement>(null);
@@ -174,6 +203,12 @@ function VolumeNotch({
   const [showPercentage, setShowPercentage] = useState(false);
   const percentageTimeoutRef = useRef<any>(null);
 
+  const [view, setView] = useState<PanelView>("mixer");
+  const [devices, setDevices] = useState<OutputDevice[]>(lastKnownDevices);
+  const [devicesLoaded, setDevicesLoaded] = useState(false);
+  const [devicesError, setDevicesError] = useState(false);
+  const [switchingId, setSwitchingId] = useState<string | null>(null);
+
   // Panel width follows the app count (empty state keeps room for the message).
   const mixerColumns =
     sessions.length === 0 ? MIXER_EMPTY_COLUMNS : Math.min(sessions.length, MIXER_MAX_COLUMNS);
@@ -181,6 +216,18 @@ function VolumeNotch({
     MIXER_PANEL_PADDING * 2 +
     mixerColumns * MIXER_COLUMN_WIDTH +
     (mixerColumns - 1) * MIXER_COLUMN_GAP;
+  const panelWidth = view === "devices" ? DEVICES_PANEL_WIDTH : mixerPanelWidth;
+  const currentDevice = devices.find((d) => d.is_default);
+
+  // The same buttons open the panel on their view, or close it when it's already showing.
+  const togglePanel = (target: PanelView) => {
+    if (mixerExpanded && view === target) {
+      onMixerExpandedChange(false);
+      return;
+    }
+    setView(target);
+    if (!mixerExpanded) onMixerExpandedChange(true);
+  };
 
   // Show the percentage instead of the icon when the volume changes.
   useEffect(() => {
@@ -236,6 +283,42 @@ function VolumeNotch({
     const interval = setInterval(refreshSessions, 2000);
     return () => clearInterval(interval);
   }, [mixerExpanded, refreshSessions]);
+
+  const refreshDevices = useCallback(() => {
+    invoke<OutputDevice[]>("get_audio_devices")
+      .then((list) => {
+        lastKnownDevices = list;
+        setDevices(list);
+        setDevicesLoaded(true);
+        setDevicesError(false);
+      })
+      .catch(() => {
+        setDevicesLoaded(true);
+        setDevicesError(true);
+      });
+  }, []);
+
+  // The header shows the current output in both views, so load the list whenever the panel opens.
+  useEffect(() => {
+    if (!mixerExpanded) return;
+    refreshDevices();
+  }, [mixerExpanded, view, refreshDevices]);
+
+  const handleSelectDevice = useCallback(
+    (device: OutputDevice) => {
+      if (device.is_default || switchingId) return;
+      setSwitchingId(device.id);
+      setDevices((prev) => prev.map((d) => ({ ...d, is_default: d.id === device.id })));
+      // The volume worker picks up the new endpoint on its own and emits volume-change.
+      invoke("set_default_audio_device", { id: device.id })
+        .catch(() => {})
+        .finally(() => {
+          setSwitchingId(null);
+          refreshDevices();
+        });
+    },
+    [switchingId, refreshDevices]
+  );
 
   // Report the card bounds (notch + panel) so the mouse hook keeps it clickable and closes it when the cursor leaves.
   const expandedRef = useRef(mixerExpanded);
@@ -345,15 +428,15 @@ function VolumeNotch({
 
   return (
     <motion.div
-      className="volume-notch-wrapper"
-      style={{ transformOrigin: "left center" }}
+      className={`volume-notch-wrapper${side === "right" ? " side-right" : ""}`}
+      style={{ transformOrigin: `${side} center` }}
       initial={{ scaleX: 0, scaleY: 0.5, opacity: 0, filter: "blur(12px)", y: "-50%" }}
       animate={{ scaleX: 1, scaleY: 1, opacity: 1, filter: "blur(0px)", y: "-50%" }}
       exit={
         mixerExpanded
           ? {
               // Retract as one piece, scaling X would squash the app list into the edge.
-              x: -64,
+              x: -64 * dir,
               opacity: 0,
               filter: "blur(8px)",
               y: "-50%",
@@ -371,10 +454,11 @@ function VolumeNotch({
       transition={{ type: "spring", stiffness: 450, damping: 25, mass: 0.7 }}
     >
       <div className="volume-notch-flares" />
+      <SurfaceShape edge={side} flare={13} radius={18} />
       <motion.div
         ref={shellRef}
         className="volume-notch"
-        animate={{ width: mixerExpanded ? 42 + mixerPanelWidth : 42 }}
+        animate={{ width: mixerExpanded ? 42 + panelWidth : 42 }}
         transition={{ type: "spring", bounce: 0, duration: 0.35 }}
         onAnimationComplete={reportPanelBounds}
       >
@@ -384,11 +468,22 @@ function VolumeNotch({
             if (localStorage.getItem("fern-notch-scroll-volume") !== "true") return;
             onVolumeChange(Math.min(1, Math.max(0, Math.round((volume + (e.deltaY < 0 ? 0.02 : -0.02)) * 100) / 100)));
           }}
-          initial={{ opacity: 0, x: -10 }}
+          initial={{ opacity: 0, x: -10 * dir }}
           animate={{ opacity: 1, x: 0 }}
-          exit={{ opacity: 0, x: -5, transition: { duration: 0.15 } }}
+          exit={{ opacity: 0, x: -5 * dir, transition: { duration: 0.15 } }}
           transition={{ delay: 0.05, duration: 0.2, ease: "easeOut" }}
         >
+          <button
+            className={`volume-notch-device ${mixerExpanded && view === "devices" ? "active" : ""}`}
+            onClick={(e) => {
+              e.stopPropagation();
+              togglePanel("devices");
+            }}
+            title={currentDevice ? `${t("overlay.output")}: ${currentDevice.name}` : t("overlay.output")}
+            aria-label={t("overlay.output")}
+          >
+            <AudioOutputIcon size={14} />
+          </button>
           <div
             ref={barRef}
             className="volume-notch-bar"
@@ -404,12 +499,12 @@ function VolumeNotch({
             />
           </div>
           <button
-            className={`volume-notch-action ${mixerExpanded ? "active" : ""} ${
+            className={`volume-notch-action ${mixerExpanded && view === "mixer" ? "active" : ""} ${
               showPercentage ? "showing-percent" : ""
             }`}
             onClick={(e) => {
               e.stopPropagation();
-              onMixerExpandedChange(!mixerExpanded);
+              togglePanel("mixer");
             }}
             title={t("overlay.mixer")}
           >
@@ -427,7 +522,7 @@ function VolumeNotch({
           {mixerExpanded && (
             <motion.div
               className="volume-mixer-panel"
-              style={{ width: mixerPanelWidth }}
+              style={{ width: panelWidth }}
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{
@@ -439,30 +534,75 @@ function VolumeNotch({
                 }
               }}
             >
-              <div
-                className="volume-mixer-list"
-                style={{ gridTemplateColumns: `repeat(${mixerColumns}, 1fr)` }}
-              >
-                {sessions.length === 0 ? (
-                  <div className="volume-mixer-empty">
-                    {!sessionsLoaded
-                      ? t("common.loading")
-                      : sessionsError
-                        ? t("overlay.mixer.error")
-                        : t("overlay.mixer.empty")}
-                  </div>
-                ) : (
-                  sessions.map((session) => (
-                    <MixerTile
-                      key={session.pid}
-                      session={session}
-                      onVolumeChange={handleAppVolumeChange}
-                      onMuteToggle={handleAppMuteToggle}
-                      draggingRef={draggingRef}
-                    />
-                  ))
-                )}
-              </div>
+              {/* Sits level with the output button so the sliders below stay aligned with the main bar. */}
+              {view === "mixer" ? (
+                <button
+                  className="volume-panel-header clickable"
+                  onClick={() => setView("devices")}
+                  title={t("overlay.output")}
+                >
+                  <span className="volume-panel-header-text">
+                    {currentDevice?.name ?? t("overlay.output")}
+                  </span>
+                  <ChevronRight size={12} />
+                </button>
+              ) : (
+                <div className="volume-panel-header">
+                  <span className="volume-panel-header-text">{t("overlay.output")}</span>
+                </div>
+              )}
+              {view === "devices" ? (
+                <div className="volume-device-list">
+                  {devices.length === 0 ? (
+                    <div className="volume-mixer-empty">
+                      {!devicesLoaded
+                        ? t("common.loading")
+                        : devicesError
+                          ? t("overlay.output.error")
+                          : t("overlay.output.empty")}
+                    </div>
+                  ) : (
+                    devices.map((device) => (
+                      <button
+                        key={device.id}
+                        className={`volume-device-row ${device.is_default ? "selected" : ""} ${
+                          switchingId === device.id ? "busy" : ""
+                        }`}
+                        onClick={() => handleSelectDevice(device)}
+                        title={device.name}
+                      >
+                        <span className="volume-device-name">{device.name}</span>
+                        {device.is_default && <Check size={12} />}
+                      </button>
+                    ))
+                  )}
+                </div>
+              ) : (
+                <div
+                  className="volume-mixer-list"
+                  style={{ gridTemplateColumns: `repeat(${mixerColumns}, 1fr)` }}
+                >
+                  {sessions.length === 0 ? (
+                    <div className="volume-mixer-empty">
+                      {!sessionsLoaded
+                        ? t("common.loading")
+                        : sessionsError
+                          ? t("overlay.mixer.error")
+                          : t("overlay.mixer.empty")}
+                    </div>
+                  ) : (
+                    sessions.map((session) => (
+                      <MixerTile
+                        key={session.pid}
+                        session={session}
+                        onVolumeChange={handleAppVolumeChange}
+                        onMuteToggle={handleAppMuteToggle}
+                        draggingRef={draggingRef}
+                      />
+                    ))
+                  )}
+                </div>
+              )}
             </motion.div>
           )}
         </AnimatePresence>
@@ -489,9 +629,11 @@ const SunIcon = ({ brightness }: { brightness: number }) => (
 function BrightnessNotch({
   brightness,
   onBrightnessChange,
+  side,
 }: {
   brightness: number;
   onBrightnessChange: (val: number) => void;
+  side: Side;
 }) {
   const barRef = useRef<HTMLDivElement>(null);
 
@@ -523,13 +665,14 @@ function BrightnessNotch({
 
   return (
     <motion.div
-      className="brightness-notch-wrapper"
-      style={{ transformOrigin: "right center" }}
+      className={`brightness-notch-wrapper${side === "left" ? " side-left" : ""}`}
+      style={{ transformOrigin: `${side} center` }}
       initial={{ scaleX: 0, scaleY: 0.5, opacity: 0, filter: "blur(12px)", y: "-50%" }}
       animate={{ scaleX: 1, scaleY: 1, opacity: 1, filter: "blur(0px)", y: "-50%" }}
       exit={{ scaleX: 0, scaleY: 0.8, opacity: 0, filter: "blur(12px)", y: "-50%", transition: { duration: 0.2, ease: [0.32, 0.72, 0, 1] } }}
       transition={{ type: "spring", stiffness: 450, damping: 25, mass: 0.7 }}
     >
+      <SurfaceShape edge={side} flare={13} radius={18} />
       <div className="brightness-notch">
         <motion.div
           className="brightness-notch-content-group"
@@ -537,9 +680,9 @@ function BrightnessNotch({
             if (localStorage.getItem("fern-notch-scroll-volume") !== "true") return;
             onBrightnessChange(Math.min(100, Math.max(0, Math.round(brightness + (e.deltaY < 0 ? 2 : -2)))));
           }}
-          initial={{ opacity: 0, x: 10 }}
+          initial={{ opacity: 0, x: side === "right" ? 10 : -10 }}
           animate={{ opacity: 1, x: 0 }}
-          exit={{ opacity: 0, x: 5, transition: { duration: 0.15 } }}
+          exit={{ opacity: 0, x: side === "right" ? 5 : -5, transition: { duration: 0.15 } }}
           transition={{ delay: 0.05, duration: 0.2, ease: "easeOut" }}
         >
           <div ref={barRef} className="brightness-notch-bar" onMouseDown={handleMouseDown} onTouchStart={handleBarInteraction} style={{ cursor: 'pointer' }}>
@@ -578,11 +721,13 @@ function OverlayApp() {
   const [mixerExpanded, setMixerExpanded] = useState(false);
   const [volumeOverlayEnabled, setVolumeOverlayEnabled] = useState(() => localStorage.getItem("fern-volume-overlay-enabled") !== "false");
   const [volumeEdgeEnabled, setVolumeEdgeEnabled] = useState(() => localStorage.getItem("fern-volume-edge-enabled") !== "false");
+  const [volumeSide, setVolumeSide] = useState<Side>(() => asSide(localStorage.getItem("fern-volume-side"), "left"));
 
   // Brightness state
   const [brightness, setBrightness] = useState(50);
   const [brightnessOverlayEnabled, setBrightnessOverlayEnabled] = useState(() => localStorage.getItem("fern-brightness-overlay-enabled") !== "false");
   const [brightnessEdgeEnabled, setBrightnessEdgeEnabled] = useState(() => localStorage.getItem("fern-brightness-edge-enabled") !== "false");
+  const [brightnessSide, setBrightnessSide] = useState<Side>(() => asSide(localStorage.getItem("fern-brightness-side"), "right"));
 
   // Shared state
   const [scale, setScale] = useState(() => parseFloat(localStorage.getItem("fern-scale") || "1.0"));
@@ -621,16 +766,25 @@ function OverlayApp() {
       if (settings && settings["fern-volume-overlay-enabled"] !== undefined) {
         setVolumeOverlayEnabled(settings["fern-volume-overlay-enabled"] === "true");
       }
+      if (settings && settings["fern-volume-side"] !== undefined) {
+        setVolumeSide(asSide(settings["fern-volume-side"], "left"));
+      }
+      if (settings && settings["fern-brightness-side"] !== undefined) {
+        setBrightnessSide(asSide(settings["fern-brightness-side"], "right"));
+      }
     }).catch(console.error);
   }, []);
 
-  // Seed the HUD with the live volume, the worker's first event fires before we can listen.
+  // Seed the HUD with the live volume and brightness, the worker's first event fires before we can listen.
   useEffect(() => {
     invoke<{ volume: number; is_muted: boolean }>("get_volume_state")
       .then((state) => {
         setVolume(state.volume);
         setIsMuted(state.is_muted);
       })
+      .catch(() => {});
+    invoke<number>("get_brightness")
+      .then((b) => setBrightness(b))
       .catch(() => {});
   }, []);
 
@@ -708,6 +862,7 @@ function OverlayApp() {
     const brightEdgePromise = listen<boolean>("brightness-edge-hover", (event) => {
       if (splashActiveRef.current || !brightnessOverlayEnabled || !brightnessEdgeEnabled) return;
       if (event.payload) {
+        invoke<number>("get_brightness").then((b) => setBrightness(b)).catch(() => {});
         setMode('brightness');
         if (timeoutRef.current) clearTimeout(timeoutRef.current);
       } else {
@@ -766,6 +921,8 @@ function OverlayApp() {
       "fern-volume-edge-enabled": setVolumeEdgeEnabled,
       "fern-brightness-overlay-enabled": setBrightnessOverlayEnabled,
       "fern-brightness-edge-enabled": setBrightnessEdgeEnabled,
+      "fern-volume-side": (v: string) => setVolumeSide(asSide(v, "left")),
+      "fern-brightness-side": (v: string) => setBrightnessSide(asSide(v, "right")),
       "fern-scale": setScale,
     }
   );
@@ -866,7 +1023,26 @@ function OverlayApp() {
     sendBrightness(newBrightness);
   }, [resetHideTimeout, sendBrightness]);
 
-  const isLeft = mode === 'volume';
+  const isLeft = mode === 'volume' ? volumeSide === 'left' : brightnessSide === 'left';
+
+  // Clip the overlay to its cards (see window_region.rs), so a stale click-through state can't make
+  // this full-screen window swallow clicks. The splashes and the open mixer get the whole window.
+  const sendOverlayRegion = useMemo(
+    () => createRegionSender((rects) => { invoke("set_window_regions", { rects }).catch(() => {}); }),
+    []
+  );
+  const needsWholeWindow = mode === 'splash' || mode === 'updating' || mixerExpanded;
+  useEffect(() => {
+    const update = () => {
+      const w = window.innerWidth;
+      const h = window.innerHeight;
+      sendOverlayRegion(needsWholeWindow ? [fullWindow(w, h)] : edgeCards(w, h, scale, OVERLAY_CARD_WIDTH, OVERLAY_CARD_HEIGHT, OVERLAY_CARD_PAD));
+    };
+    update();
+    // The splash resizes this window to the whole monitor.
+    window.addEventListener("resize", update);
+    return () => window.removeEventListener("resize", update);
+  }, [needsWholeWindow, scale, sendOverlayRegion]);
 
   return (
     <div className="overlay-container">
@@ -946,6 +1122,7 @@ function OverlayApp() {
                 onVolumeChange={handleVolumeChange}
                 mixerExpanded={mixerExpanded}
                 onMixerExpandedChange={handleMixerExpandedChange}
+                side={volumeSide}
                 key="volume-island"
               />
             )}
@@ -953,6 +1130,7 @@ function OverlayApp() {
               <BrightnessNotch
                 brightness={brightness}
                 onBrightnessChange={handleBrightnessChange}
+                side={brightnessSide}
                 key="brightness-island"
               />
             )}

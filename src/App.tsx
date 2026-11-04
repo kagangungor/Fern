@@ -5,7 +5,22 @@ import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import type { UpdateCheckResult } from "./updater";
 import "./App.css";
+import "./surfaces.css";
+import "./devices/devices.css";
+import "./components/QuickPanel.css";
+import { DeviceArt } from "./devices/DeviceArt";
+import { deviceArtFor } from "./devices/deviceArtFor";
+import { deviceLookFor } from "./devices/deviceLooks";
+import { usbArtFor, usbDisplayName, isWiredAudio, type UsbIdentity } from "./devices/usbArtFor";
+import type { DeviceArtKey } from "./devices/art";
+import type { BudsBattery, BudLevel } from "./devices/connectedDevices";
+import { ConnectedDevicesPanel } from "./components/ConnectedDevicesPanel";
+import { useConnectedDevices } from "./hooks/useConnectedDevices";
+
 import { initTheme } from "./theme";
+import { SurfaceShape } from "./components/SurfaceShape";
+import { playAgentSound } from "./agentSounds";
+import { AgentLeft, AgentDot, AgentPanel, type AgentActivity } from "./components/AgentStatus";
 import { PlayIcon, PauseIcon, SkipBackIcon, SkipForwardIcon, VolumeLowIcon, VolumeHighIcon, MusicNoteIcon } from "./icons";
 import { CompactMediaPlayer } from "./CompactMediaPlayer";
 import { useWeather } from "./hooks/useWeather";
@@ -37,6 +52,8 @@ import {
   MemoryStick,
   HardDrive,
   ArrowUpDown,
+  Zap,
+  ChevronLeft,
 } from "lucide-react";
 
 // Timer chime, synthesized with Web Audio so there's no asset. The context is made on the
@@ -341,10 +358,102 @@ const TitleMarquee = ({ title }: { title: string }) => {
 
 
 
+
+// A device that just connected or disconnected, shown briefly in the Dynamic Island
+interface DeviceAlert {
+  id: string;
+  art: DeviceArtKey;
+  name: string;
+  connected: boolean;
+  battery: number | null;
+  buds?: BudsBattery | null;
+  usb?: boolean;
+  runId: number;
+}
+
+interface BluetoothConnection {
+  id: string;
+  name: string;
+  kind: string;
+  form: string | null;
+  connected: boolean;
+  battery: number | null;
+}
+
+interface UsbConnection extends UsbIdentity {
+  id: string;
+  connected: boolean;
+}
+
+const PLUGGED_ART = new Set<DeviceArtKey>([
+  "headphones-wired",
+  "earbuds-usbc",
+  "earbuds-jack",
+  "flash-drive",
+  "ssd",
+  "hub",
+  "webcam",
+  "microphone"
+]);
+
+function deviceAlertStatus(art: DeviceArtKey, connected: boolean, wired = false): string {
+  if (art === "sd-card") return connected ? translate("device.inserted") : translate("device.removed");
+  if (wired || PLUGGED_ART.has(art)) return connected ? translate("device.plugged_in") : translate("device.unplugged");
+  return connected ? translate("device.connected") : translate("device.disconnected");
+}
+
+const DEVICE_ALERT_MS = { connected: 4200, disconnected: 2600 };
+const DEVICE_ALERT_QUEUE = 3;
+
+function DeviceBatteryRing({ level, charging = false }: { level: number; charging?: boolean }) {
+  const r = 10.5;
+  const circumference = 2 * Math.PI * r;
+  const low = level <= 20 && !charging;
+  return (
+    <div
+      className={`device-alert-battery${low ? " low" : ""}${charging ? " charging" : ""}`}
+      title={`${level}%${charging ? ", charging" : ""}`}
+    >
+      <svg viewBox="0 0 28 28" width="28" height="28">
+        <circle cx="14" cy="14" r={r} className="track" />
+        <circle
+          cx="14"
+          cy="14"
+          r={r}
+          className="level"
+          strokeDasharray={`${(circumference * level) / 100} ${circumference}`}
+          transform="rotate(-90 14 14)"
+        />
+      </svg>
+      <span>{level}</span>
+    </div>
+  );
+}
+
+function DeviceBudsBattery({ buds }: { buds: BudsBattery }) {
+  const parts: [string, BudLevel][] = [];
+  if (buds.left) parts.push(["L", buds.left]);
+  if (buds.right) parts.push(["R", buds.right]);
+  if (buds.case) parts.push(["Case", buds.case]);
+  return (
+    <div className="device-alert-buds">
+      {parts.map(([label, part]) => (
+        <div key={label} className="device-alert-bud">
+          <DeviceBatteryRing level={part.level} charging={part.charging} />
+          <span className="device-alert-bud-label">
+            {label}
+            {part.charging && <Zap className="device-alert-bud-charging" />}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function App() {
   const t = useT();
   useEffect(() => {
-    return initTheme();
+    return initTheme({ backdrop: true });
   }, []);
 
   const [time, setTime] = useState("");
@@ -433,7 +542,7 @@ function App() {
   const wifiConnected = wifiStatus?.connected ?? false;
   const [bluetoothEnabled, setBluetoothEnabled] = useState(true);
   const [settingsLegacyMode, setSettingsLegacyMode] = useState(() => localStorage.getItem("fern-legacy-mode") === "true");
-  const [ccView, setCcView] = useState<'main' | 'wifi' | 'bluetooth' | 'audio'>('main');
+  const [ccView, setCcView] = useState<'main' | 'wifi' | 'bluetooth' | 'audio' | 'devices'>('main');
   const showConnections = !settingsLegacyMode && ccView !== 'main';
   const [lanStatus, setLanStatus] = useState<{ present: boolean; connected: boolean; name: string } | null>(null);
   const showLan = !settingsLegacyMode && !!lanStatus?.connected && !(wifiStatus?.enabled && wifiStatus.connected);
@@ -507,6 +616,10 @@ function App() {
   const [dndActive, setDndActive] = useState(false);
   const [dockEnabled, setDockEnabled] = useState(() => localStorage.getItem("fern-dock-enabled") !== "false");
   const [isNotchHovered, setIsNotchHovered] = useState(false);
+  const [agentActivity, setAgentActivity] = useState<AgentActivity | null>(null);
+  const lastAgentKey = useRef("");
+  const windowLabelRef = useRef("");
+  windowLabelRef.current = windowLabel;
 
   const [isEdgeHovered, setIsEdgeHovered] = useState(false);
   const [isOverlapped, setIsOverlapped] = useState(false);
@@ -517,11 +630,20 @@ function App() {
   const dockModeInitial = useRef(true);
   const notchModeInitial = useRef(true);
 
-  const [fernMode, setFernMode] = useState<'music' | 'calendar' | 'command-center' | 'status' | 'shelf' | 'tour'>('status');
+  const [fernMode, setFernMode] = useState<'music' | 'calendar' | 'command-center' | 'status' | 'shelf' | 'tour' | 'device' | 'devices' | 'agent'>('status');
+  const [deviceAlert, setDeviceAlert] = useState<DeviceAlert | null>(null);
+  const [budsById, setBudsById] = useState<Record<string, BudsBattery>>({});
+  const [deviceAlertOnScreen, setDeviceAlertOnScreen] = useState(false);
+  const deviceAlertRef = useRef<DeviceAlert | null>(null);
+  deviceAlertRef.current = deviceAlert;
+  const deviceAlertTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const deviceAlertQueueRef = useRef<Omit<DeviceAlert, "runId">[]>([]);
+  const presentDeviceAlertRef = useRef<(alert: Omit<DeviceAlert, "runId">) => void>(() => {});
+  const connectedDevices = useConnectedDevices(windowLabel === "main");
 
   const isAnyInteraction = isHovered || isNotchHovered || isEdgeHovered;
   const isHidden = isFullscreen ||
-    (!startupAnimating && fernMode !== 'tour' && (
+    (!startupAnimating && fernMode !== 'tour' && !deviceAlertOnScreen && !(agentActivity && isNotchWindow) && (
       (notchMode === 'smart' && isOverlapped && interactionState === 'none') ||
       (notchMode === 'peek' && interactionState === 'none' && !eventPeek)
     ));
@@ -681,8 +803,122 @@ function App() {
   const productivityEnabled = settingsCalendarEnabled || showClockColumn;
   const [settingsMusicModeEnabled, setSettingsMusicModeEnabled] = useState(() => localStorage.getItem("fern-music-mode-enabled") !== "false");
   const [settingsMusicCompactNotch, setSettingsMusicCompactNotch] = useState(() => localStorage.getItem("fern-music-compact-notch") !== "false");
+
+  presentDeviceAlertRef.current = (alert) => {
+    const duration = alert.connected ? DEVICE_ALERT_MS.connected : DEVICE_ALERT_MS.disconnected;
+    setDeviceAlert({ ...alert, runId: Date.now() });
+    setDeviceAlertOnScreen(true);
+    setFernMode("device");
+    if (notchMode === "peek") triggerEventPeek(duration);
+    if (deviceAlertTimerRef.current) clearTimeout(deviceAlertTimerRef.current);
+    deviceAlertTimerRef.current = setTimeout(() => {
+      const next = deviceAlertQueueRef.current.shift();
+      if (next && !isHovered) presentDeviceAlertRef.current(next);
+      else {
+        deviceAlertQueueRef.current = [];
+        setDeviceAlert(null);
+      }
+    }, duration);
+  };
+
+  const showDeviceAlert = useCallback((alert: Omit<DeviceAlert, "runId">) => {
+    if (fernMode === "tour" || fernMode === "shelf") return;
+    const current = deviceAlertRef.current;
+    if (current && current.id !== alert.id) {
+      const queue = deviceAlertQueueRef.current.filter((queued) => queued.id !== alert.id);
+      deviceAlertQueueRef.current = [...queue, alert].slice(-DEVICE_ALERT_QUEUE);
+      return;
+    }
+    presentDeviceAlertRef.current(alert);
+  }, [fernMode]);
+
+  useEffect(() => () => {
+    if (deviceAlertTimerRef.current) clearTimeout(deviceAlertTimerRef.current);
+  }, []);
+
+  useEffect(() => {
+    if (fernMode === "device" && !deviceAlert) {
+      setFernMode(isHovered ? (mediaInfo.has_media && isPlaying ? "music" : "status") : (mediaInfo.has_media && isPlaying && settingsMusicCompactNotch ? "music" : "status"));
+    }
+  }, [fernMode, deviceAlert, isHovered, mediaInfo.has_media, isPlaying, settingsMusicCompactNotch]);
+
+  useEffect(() => {
+    if (windowLabel !== "main") return;
+    const unlistenConnection = listen<BluetoothConnection>("bluetooth-connection", ({ payload }) => {
+      showDeviceAlert({
+        id: payload.id,
+        art: deviceLookFor(payload.name) ?? deviceArtFor(payload),
+        name: payload.name,
+        connected: payload.connected,
+        battery: payload.battery,
+      });
+      if (!payload.connected) {
+        setBudsById((all) => {
+          if (!(payload.id in all)) return all;
+          const { [payload.id]: _gone, ...rest } = all;
+          return rest;
+        });
+      }
+    });
+
+    const unlistenBattery = listen<{ id: string; battery: number }>("bluetooth-battery", ({ payload }) => {
+      setDeviceAlert((alert) =>
+        alert && alert.id === payload.id && alert.connected ? { ...alert, battery: payload.battery } : alert
+      );
+    });
+
+    const unlistenBuds = listen<BudsBattery & { id: string }>("bluetooth-buds", ({ payload }) => {
+      const { id, ...buds } = payload;
+      setDeviceAlert((alert) => (alert && alert.id === id && alert.connected ? { ...alert, buds } : alert));
+      setBudsById((all) => ({ ...all, [id]: buds }));
+    });
+
+    const showWired = ({ payload }: { payload: UsbConnection }) => {
+      const name = usbDisplayName(payload);
+      showDeviceAlert({
+        id: payload.id,
+        art: (isWiredAudio(payload.class) ? deviceLookFor(name) : null) ?? usbArtFor(payload),
+        name,
+        connected: payload.connected,
+        battery: null,
+        usb: true,
+      });
+    };
+
+    const unlistenUsb = listen<UsbConnection>("usb-connection", showWired);
+    const unlistenJack = listen<UsbConnection>("wired-audio-connection", showWired);
+
+    const w = window as any;
+    w.__fernDeviceAlert = (art: DeviceArtKey, name: string, connected = true, battery: number | null = 80) => {
+      showDeviceAlert({ id: "test-device", art, name, connected, battery });
+    };
+    w.__fernUsb = (cls: string, name: string, connected = true) => {
+      showWired({ payload: { id: "test-usb", class: cls, name, connected } });
+    };
+    w.__fernBuds = (id: string, left: [number, boolean] | null, right: [number, boolean] | null, c: [number, boolean] | null) => {
+      const part = (p: [number, boolean] | null) => (p ? { level: p[0], charging: p[1] } : null);
+      const buds: BudsBattery & { id: string } = {
+        id,
+        left: part(left),
+        right: part(right),
+        case: part(c),
+      };
+      setDeviceAlert((alert) => (alert && alert.id === id ? { ...alert, buds } : alert));
+      setBudsById((all) => ({ ...all, [id]: buds }));
+    };
+
+    return () => {
+      unlistenConnection.then((f) => f());
+      unlistenBattery.then((f) => f());
+      unlistenUsb.then((f) => f());
+      unlistenJack.then((f) => f());
+      unlistenBuds.then((f) => f());
+    };
+  }, [windowLabel, showDeviceAlert]);
+
   const [settingsScrollVolume, setSettingsScrollVolume] = useState(() => localStorage.getItem("fern-notch-scroll-volume") === "true");
   const [settingsShelfPersist, setSettingsShelfPersist] = useState(() => localStorage.getItem("fern-shelf-persist") === "true");
+  const [settingsShelfKeepOpen, setSettingsShelfKeepOpen] = useState(() => localStorage.getItem("fern-shelf-keep-open") === "true");
   const [settingsRememberMode, setSettingsRememberMode] = useState(() => localStorage.getItem("fern-notch-remember-mode") === "true");
   const [panelControlCenter, setPanelControlCenter] = useState(() => localStorage.getItem("fern-panel-control-center-enabled") !== "false");
   const [panelShelf, setPanelShelf] = useState(() => localStorage.getItem("fern-panel-shelf-enabled") !== "false");
@@ -888,6 +1124,7 @@ function App() {
       "fern-music-compact-notch": setSettingsMusicCompactNotch,
       "fern-notch-scroll-volume": setSettingsScrollVolume,
       "fern-shelf-persist": setSettingsShelfPersist,
+      "fern-shelf-keep-open": setSettingsShelfKeepOpen,
       "fern-notch-remember-mode": setSettingsRememberMode,
       "fern-panel-control-center-enabled": (v) => setPanelControlCenter(v !== false && v !== "false"),
       "fern-panel-shelf-enabled": (v) => setPanelShelf(v !== false && v !== "false"),
@@ -1034,8 +1271,9 @@ function App() {
 
     const availableModes = availableNotchModes();
 
-    if (fernMode === 'tour') return;
-    const currentIndex = availableModes.indexOf(fernMode);
+    if (fernMode === 'agent') { if (availableModes[0]) setFernMode(availableModes[0]); return; }
+    if (fernMode === 'tour' || fernMode === 'device' || fernMode === 'devices') return;
+    const currentIndex = (availableModes as readonly string[]).indexOf(fernMode);
     if (currentIndex === -1) return;
 
     const nextIndex = (currentIndex + direction + availableModes.length) % availableModes.length;
@@ -1362,6 +1600,25 @@ function App() {
     return () => { unlisten.then(fn => fn()); };
   }, []);
 
+  useEffect(() => {
+    let clear: ReturnType<typeof setTimeout> | undefined;
+    const unlisten = listen<AgentActivity | null>("agent-activity", (event) => {
+      clearTimeout(clear);
+      const next = event.payload;
+      const key = next ? `${next.state}:${next.ask?.id ?? ""}` : "";
+      if (windowLabelRef.current === 'main' && next && key !== lastAgentKey.current && (next.state === 'needs_input' || next.state === 'done' || next.state === 'error')) {
+        playAgentSound(next.state);
+      }
+      lastAgentKey.current = key;
+      setAgentActivity((prev) => (next && prev?.ask && !next.ask && next.cancelled !== prev.ask.id && (next.state === 'working' || next.state === 'tool') ? prev : next));
+      if (next && next.state === "done") clear = setTimeout(() => setAgentActivity(null), 8000);
+    });
+    return () => {
+      clearTimeout(clear);
+      unlisten.then((fn) => fn());
+    };
+  }, []);
+
   // Native Windows Media Controls - Listen for updates from background worker
   useEffect(() => {
     const unlisten = listen<MediaInfo>("media-update", (event) => {
@@ -1676,6 +1933,7 @@ function App() {
   };
 
   const collapseAfterShelfDrag = () => {
+    if (settingsShelfKeepOpen) return;
     setIsHovered(false);
     setIsNotchHovered(false);
     setFernMode(mediaInfo.has_media && isPlaying && settingsMusicCompactNotch ? 'music' : 'status');
@@ -1713,22 +1971,38 @@ function App() {
   );
 
   // Calculate width dynamically based on enabled features
+  const agentNeedsYou = !!agentActivity && isNotchWindow;
+  const agentWings = !!agentActivity && isNotchWindow && !isHovered && (fernMode === 'status' || isMusicMode);
+
+  useEffect(() => {
+    if (fernMode === 'agent' && !agentActivity) setFernMode('status');
+  }, [fernMode, agentActivity]);
+
   const getDynamicWidth = () => {
+    if (fernMode === 'agent') return 340;
+    if (fernMode === 'device' && deviceAlert) return 330;
+    if (fernMode === 'devices') return 350;
     if (fernMode === 'tour') return 380;
-    if (fernMode === 'shelf') return Math.max(300, Math.min(120 + shelf.items.length * 62, 460));
+    const hasNet = statusWidgets.left.includes("net") || statusWidgets.right.includes("net");
+    const netExtra = hasNet ? 45 : 0;
+    const totalWidgets = statusWidgets.left.length + statusWidgets.right.length;
+    const minStatusWidth = (totalWidgets > 0 ? Math.max(360, 200 + totalWidgets * 65 + netExtra) : 320) + dualClockExtra;
+
+    if (fernMode === 'shelf') {
+      const itemsWidth = 160 + Math.max(shelf.items.length, 1) * 68;
+      return Math.min(500, Math.max(minStatusWidth, itemsWidth));
+    }
     if (isCalendarMode) return Math.max(settingsCalendarEnabled && showClockColumn ? 480 : settingsCalendarEnabled ? 310 : 270, 140 + dualClockExtra);
     if (fernMode === 'command-center' && isHovered) {
-      const totalWidgets = statusWidgets.left.length + statusWidgets.right.length;
-      return Math.max(390, Math.min(200 + totalWidgets * 65, 480)) + dualClockExtra;
+      return Math.max(390, Math.min(200 + totalWidgets * 65 + netExtra, 500)) + dualClockExtra;
     }
     if (fernMode === 'status' && isHovered) {
-      const totalWidgets = statusWidgets.left.length + statusWidgets.right.length;
-      return Math.min(200 + totalWidgets * 65, 460) + dualClockExtra;
+      return Math.min(200 + totalWidgets * 65 + netExtra, 480) + dualClockExtra;
     }
     if (isMusicMode && isHovered) return mediaLayout === 'compact' ? 300 : 340;
     if ((showPowerPulse || showLowBatteryPulse || showUpdatePulse) && !isHovered) return 200;
 
-    let w = 140 + dualClockExtra;
+    let w = 140 + dualClockExtra + (agentWings ? (isMusicMode ? 24 : 56) : 0);
     if (isMusicMode) {
       if (settingsVisualizerEnabled && isPlaying) w += 30;
       if (settingsAlbumArtEnabled) w += 30;
@@ -1745,8 +2019,11 @@ function App() {
     if (!isExpanded || isHidden) {
       return isImpacted ? 28.9 : 44.2;
     }
+    if (fernMode === 'agent') return agentActivity?.ask ? 184 : agentActivity?.detail ? 160 : 130;
+    if (fernMode === 'device' && deviceAlert) return 76;
+    if (fernMode === 'devices') return 320;
     if (fernMode === 'tour') return 210;
-    if (fernMode === 'shelf') return shelf.items.length === 0 ? 96 : 130;
+    if (fernMode === 'shelf') return shelf.items.length === 0 ? 96 : 156;
     if (fernMode === 'calendar') return settingsCalendarEnabled ? (caldav.connected ? 350 : 310) : 262;
     if (fernMode === 'command-center') {
       if (!isHovered) return 36;
@@ -1777,7 +2054,7 @@ function App() {
     }
   }, [isHovered, mediaLayout, fernMode]);
 
-  const pillWidth = !isReady ? 34 : (isExpanded && !isHidden ? getDynamicWidth() : (isImpacted ? 39.1 : 30.6));
+  const pillWidth = !isReady ? 34 : ((isExpanded || fernMode === "device") && !isHidden ? getDynamicWidth() : (isImpacted ? 39.1 : 30.6));
   const pillHeight = !isReady ? 34 : getDynamicHeight();
 
 
@@ -1834,7 +2111,8 @@ function App() {
           setIsHovered(true);
           if (fernMode !== 'tour' && fernMode !== 'shelf') {
             const remembered = settingsRememberMode ? rememberedModeRef.current : null;
-            if (remembered && availableNotchModes().includes(remembered)) setFernMode(remembered);
+            if (agentNeedsYou) setFernMode('agent');
+            else if (remembered && availableNotchModes().includes(remembered)) setFernMode(remembered);
             else setFernMode(mediaInfo.has_media && isPlaying ? 'music' : 'status');
           }
         }}
@@ -1844,7 +2122,7 @@ function App() {
           const targetMode = mediaInfo.has_media && isPlaying && settingsMusicCompactNotch ? 'music' : 'status';
           if (fernMode === 'music') {
             setFernMode(targetMode);
-          } else if (fernMode === 'command-center' || fernMode === 'calendar' || fernMode === 'status' || fernMode === 'shelf') {
+          } else if (fernMode === 'command-center' || fernMode === 'calendar' || fernMode === 'status' || fernMode === 'shelf' || fernMode === 'agent') {
             setFernMode(targetMode);
           }
         }}
@@ -1927,6 +2205,7 @@ function App() {
                   >
                     {mediaLayout === 'compact' ? (
                       <CompactMediaPlayer
+                        sessions={mediaSessions}
                         mediaInfo={mediaInfo}
                         albumArtUrl={albumArtUrl}
                         albumArtKey={albumArtKey}
@@ -2099,7 +2378,7 @@ function App() {
                     transition={{ duration: 0.2 }}
                     style={{ width: '100%' }}
                   >
-                    <div className="main-row">
+                    <div className="main-row" style={fernMode === "device" || deviceAlertOnScreen ? { visibility: "hidden" } : undefined}>
                       <AnimatePresence mode="wait">
                         {(showPowerPulse || showLowBatteryPulse || showUpdatePulse) && !isHovered ? (
                           showUpdatePulse ? (
@@ -2140,7 +2419,9 @@ function App() {
                           >
                             {/* Left: update activity (takes priority), visualizer (music), or weather (command-center, calendar) */}
                             <div className="side-content left">
-                              {updateAvailable && showUpdateIndicator ? (
+                              {agentWings && agentActivity ? (
+                                <AgentLeft activity={agentActivity} dot={isMusicMode} />
+                              ) : updateAvailable && showUpdateIndicator ? (
                                 <AnimatePresence>
                                   <motion.div
                                     key="update-activity"
@@ -2224,7 +2505,9 @@ function App() {
 
                             {/* Right: album art (music) or battery (command-center, calendar) */}
                             <div className="side-content right">
-                              {isMusicMode && settingsAlbumArtEnabled ? (
+                              {agentWings && !isMusicMode && agentActivity ? (
+                                <AgentDot activity={agentActivity} />
+                              ) : isMusicMode && settingsAlbumArtEnabled ? (
                                 <AnimatePresence mode="wait">
                                   <motion.div
                                     key="album-art"
@@ -2326,9 +2609,27 @@ function App() {
                     exit={{ opacity: 0, filter: "blur(4px)", transition: { duration: 0.1 } }}
                     transition={{ type: "spring", stiffness: 400, damping: 30 }}
                   >
+                    
+                    {ccView === 'devices' && (
+                      <div className="cv-root" onClick={(e) => e.stopPropagation()}>
+                        <div className="cv-header">
+                          <button className="cv-back" onClick={() => setCcView('main')} aria-label={t("common.back")}>
+                            <ChevronLeft size={16} />
+                          </button>
+                          <span className="cv-title">{t("devices.title")}</span>
+                        </div>
+                        <ConnectedDevicesPanel
+                          data={connectedDevices}
+                          height={280}
+                          buds={budsById}
+                          lowThreshold={20}
+                        />
+                      </div>
+                    )}
+
                     {showConnections && (
                       <ConnectionsView
-                        kind={ccView}
+                        kind={ccView as "wifi" | "bluetooth" | "audio"}
                         onBack={() => setCcView('main')}
                         onOpenWindowsSettings={() => { invoke(ccView === 'wifi' ? 'open_wifi_settings' : ccView === 'audio' ? 'open_sound_settings' : 'open_bluetooth_settings'); }}
                       />
@@ -2517,6 +2818,51 @@ function App() {
               </AnimatePresence>
 
               <AnimatePresence>
+                
+                {/* Device alert: a device connected or disconnected */}
+                <AnimatePresence
+                  onExitComplete={() => setDeviceAlertOnScreen(deviceAlertRef.current !== null)}
+                >
+                  {fernMode === "device" && deviceAlert && (
+                    <motion.div
+                      className="device-alert"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        const usb = deviceAlert.usb;
+                        deviceAlertQueueRef.current = [];
+                        setDeviceAlert(null);
+                        if (usb) return;
+                        setIsHovered(true);
+                        setFernMode("command-center");
+                        setCcView("devices");
+                      }}
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      exit={{ opacity: 0, filter: "blur(4px)", transition: { duration: 0.12 } }}
+                      transition={{ duration: 0.2 }}
+                    >
+                      <DeviceArt
+                        art={deviceAlert.art}
+                        phase={deviceAlert.connected ? "play" : "leave"}
+                        runId={deviceAlert.runId}
+                        size={60}
+                      />
+                      <div className="device-alert-text">
+                        <span className="device-alert-name">{deviceAlert.name}</span>
+                        <span className="device-alert-status">
+                          {deviceAlertStatus(deviceAlert.art, deviceAlert.connected, deviceAlert.usb)}
+                        </span>
+                      </div>
+                      {deviceAlert.connected && deviceAlert.buds ? (
+                        <DeviceBudsBattery buds={deviceAlert.buds} />
+                      ) : (
+                        deviceAlert.connected &&
+                        deviceAlert.battery !== null && <DeviceBatteryRing level={deviceAlert.battery} />
+                      )}
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+
                 {fernMode === 'shelf' && (
                   <motion.div
                     key="shelf"
@@ -2531,7 +2877,7 @@ function App() {
                       onClear={shelf.clear}
                       onDragOutEnd={async () => {
                         const stillOver = await invoke<boolean>('pointer_over_notch').catch(() => false);
-                        if (!stillOver) collapseAfterShelfDrag();
+                        if (!stillOver && !settingsShelfKeepOpen) collapseAfterShelfDrag();
                       }}
                     />
                   </motion.div>
@@ -2555,6 +2901,31 @@ function App() {
                         closeTour();
                         if (id === 'control-center') setFernMode('command-center');
                         else openSettingsWindow();
+                      }}
+                    />
+                  </motion.div>
+                )}
+              </AnimatePresence>
+
+              <AnimatePresence>
+                {fernMode === 'agent' && agentActivity && (
+                  <motion.div
+                    key="agent-panel"
+                    className="agent-panel"
+                    onClick={e => e.stopPropagation()}
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    exit={{ opacity: 0, transition: { duration: 0.1 } }}
+                    transition={{ duration: 0.18, delay: 0.22 }}
+                  >
+                    <AgentPanel
+                      activity={agentActivity}
+                      onOpen={() => { if (agentActivity.window) invoke('focus_agent_window', { window: agentActivity.window }).catch(() => { }); }}
+                      onDismiss={() => { setAgentActivity(null); setFernMode('status'); }}
+                      onAnswer={(allow) => {
+                        if (agentActivity.ask) invoke('agent_answer', { id: agentActivity.ask.id, allow }).catch(() => { });
+                        setAgentActivity({ ...agentActivity, state: 'working', ask: undefined });
+                        setFernMode('status');
                       }}
                     />
                   </motion.div>
@@ -2599,6 +2970,8 @@ function App() {
             </motion.div>
           )}
         </AnimatePresence>
+
+        <SurfaceShape edge="top" flare={isImpacted ? 13 : 0} radius={isCalendarMode ? 28 : 18} edgeRadius={18} />
 
         {showTimerProgressBar && (
           <NotchProgressBorder

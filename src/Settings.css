@@ -252,8 +252,9 @@ body {
   border: 1px solid var(--fern-border, rgba(255, 255, 255, 0.05));
 }
 
-.setting-group--menu {
-  overflow: visible;
+.setting-group--menu,
+.setting-section > .setting-group {
+  overflow: visible !important;
 }
 
 .setting-item {
@@ -359,8 +360,8 @@ body {
 }
 
 input:checked + .slider {
-  background-color: #34c759;
-  border-color: #34c759;
+  background-color: var(--fern-highlight, #34c759);
+  border-color: var(--fern-highlight, #34c759);
 }
 
 input:checked + .slider:before {
@@ -574,7 +575,7 @@ input:checked + .slider:before {
   border: 1px solid var(--fern-border, rgba(255, 255, 255, 0.08));
   border-radius: 10px;
   padding: 4px;
-  z-index: 200;
+  z-index: 1000;
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
   backdrop-filter: blur(24px);
   max-height: 240px;
@@ -1454,4 +1455,130 @@ input:checked + .slider:before {
 .setting-item.stacked .panel-order-row {
     justify-content: flex-start;
     max-width: none;
+}
+
+/* ─── Surface style tiles ───────────────────────────────────────────────── */
+
+.style-tiles {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  padding: 0 14px 14px;
+}
+
+.style-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+  padding: 6px 6px 8px;
+  border-radius: 12px;
+  background: none;
+  border: 1.5px solid transparent;
+  color: var(--fern-text-muted, rgba(255, 255, 255, 0.6));
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.style-tile:hover {
+  background: var(--fern-group-bg, rgba(255, 255, 255, 0.04));
+}
+
+.style-tile.active {
+  border-color: var(--fern-highlight, var(--fern-accent, #007aff));
+  color: var(--fern-text, #fff);
+}
+
+/* Miniature of the notch on a flat two-colour backdrop, so blur, clarity and tint read at a glance */
+.style-tile-preview {
+  position: relative;
+  display: block;
+  aspect-ratio: 16 / 10;
+  border-radius: 8px;
+  overflow: hidden;
+  background: linear-gradient(90deg, #3f86d6 0 50%, #e08f5a 50% 100%);
+}
+
+.style-tile-pill {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 64%;
+  height: 36%;
+  transform: translateX(-50%);
+  border-radius: 0 0 10px 10px;
+  background: rgba(0, 0, 0, 0.9);
+}
+
+.style-tile-pill i {
+  display: block;
+  height: 3px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.9);
+}
+
+.style-tile-pill i:first-child {
+  width: 15px;
+}
+
+.style-tile-pill i:last-child {
+  width: 7px;
+  opacity: 0.5;
+}
+
+.style-preview-frosted .style-tile-pill {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.24), rgba(255, 255, 255, 0.14)), rgba(24, 24, 32, 0.3);
+  backdrop-filter: blur(7px);
+  box-shadow: inset 0.5px 0 0 rgba(255, 255, 255, 0.45), inset -0.5px 0 0 rgba(255, 255, 255, 0.45), inset 0 -0.5px 0 rgba(255, 255, 255, 0.45);
+}
+
+.style-preview-liquid .style-tile-pill {
+  background: linear-gradient(0deg, rgba(255, 255, 255, 0.34), rgba(255, 255, 255, 0) 12px), rgba(255, 255, 255, 0.05);
+  box-shadow: inset 0 -1.5px 1px rgba(255, 255, 255, 0.85), inset 1px 0 1px rgba(255, 255, 255, 0.45), inset -1px 0 1px rgba(255, 255, 255, 0.45);
+}
+
+.style-preview-material .style-tile-pill {
+  background: color-mix(in srgb, var(--fern-accent, #007aff) 24%, #14161b);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--fern-accent, #007aff) 38%, transparent);
+}
+
+.style-preview-material .style-tile-pill i:first-child {
+  background: color-mix(in srgb, var(--fern-accent, #007aff) 65%, white);
+}
+
+.style-tile-label {
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 1.2;
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+
+/* ── Generic Settings Button ── */
+.settings-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  background: var(--fern-group-bg, rgba(255, 255, 255, 0.08));
+  border: 1px solid var(--fern-border, rgba(255, 255, 255, 0.12));
+  color: var(--fern-text, white);
+  font-size: 12px;
+  font-weight: 500;
+  border-radius: 6px;
+  padding: 5px 10px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.settings-btn:hover:not(:disabled) {
+  background: var(--fern-border, rgba(255, 255, 255, 0.18));
+}
+
+.settings-btn.icon-only {
+  padding: 5px 6px;
 }

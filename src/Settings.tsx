@@ -38,7 +38,7 @@ function SettingsApp() {
   const settings = useSettings();
 
   useEffect(() => {
-    return initTheme();
+    return initTheme({ isSettings: true });
   }, []);
 
   useEffect(() => {
@@ -59,7 +59,13 @@ function SettingsApp() {
 
     appWindow.setEffects({ effects: [Effect.Acrylic], state: EffectState.Active, color: [10, 10, 15, 20] }).catch(() => {});
 
+    // Show window only after initial paint, eliminating blank acrylic window delay
+    const showTimer = setTimeout(() => {
+      appWindow.show().then(() => appWindow.setFocus()).catch(() => {});
+    }, 40);
+
     return () => {
+      clearTimeout(showTimer);
       document.removeEventListener("contextmenu", preventContext as any);
     };
   }, []);
@@ -103,8 +109,8 @@ function SettingsApp() {
               toggleAutostart={settings.toggleAutostart}
               timeFormat24h={settings.timeFormat24h}
               toggleTimeFormat24h={settings.toggleTimeFormat24h}
-              legacyMode={settings.legacyMode}
-              toggleLegacyMode={settings.toggleLegacyMode}
+              memorySaver={settings.memorySaver}
+              toggleMemorySaver={settings.toggleMemorySaver}
               showUpdateIndicator={settings.showUpdateIndicator}
               toggleUpdateIndicator={settings.toggleUpdateIndicator}
               lowBatteryThreshold={settings.lowBatteryThreshold}
@@ -116,6 +122,8 @@ function SettingsApp() {
           )}
           {activeTab === "appearance" && (
             <AppearanceTab
+              themeStyle={settings.themeStyle}
+              handleThemeStyleChange={settings.handleThemeStyleChange}
               themeMode={settings.themeMode}
               handleThemeModeChange={settings.handleThemeModeChange}
               themeColor={settings.themeColor}
@@ -130,6 +138,8 @@ function SettingsApp() {
               toggleCorners={settings.toggleCorners}
               scale={settings.scale}
               handleScaleChange={settings.handleScaleChange}
+              glassWallpaperEnabled={settings.glassWallpaperEnabled}
+              toggleGlassWallpaper={settings.toggleGlassWallpaper}
             />
           )}
           {activeTab === "calendar-sync" && <CalendarSyncPage onBack={() => setActiveTab("notch")} />}
@@ -156,7 +166,6 @@ function SettingsApp() {
               toggleNotchTimerProgress={settings.toggleNotchTimerProgress}
               stopwatchEnabled={settings.stopwatchEnabled}
               toggleStopwatchEnabled={settings.toggleStopwatchEnabled}
-              legacyMode={settings.legacyMode}
               dualClockEnabled={settings.dualClockEnabled}
               toggleDualClock={settings.toggleDualClock}
               dualClockZone={settings.dualClockZone}
@@ -169,6 +178,8 @@ function SettingsApp() {
               mediaLayout={settings.mediaLayout}
               toggleMediaLayout={settings.toggleMediaLayout}
               mediaAmbienceEnabled={settings.mediaAmbienceEnabled}
+              artworkThemeEnabled={settings.artworkThemeEnabled}
+              toggleArtworkTheme={settings.toggleArtworkTheme}
               toggleAmbience={settings.toggleAmbience}
               mediaCompactGlowEnabled={settings.mediaCompactGlowEnabled}
               toggleCompactGlow={settings.toggleCompactGlow}
@@ -176,6 +187,8 @@ function SettingsApp() {
               toggleNotchScrollVolume={settings.toggleNotchScrollVolume}
               shelfPersist={settings.shelfPersist}
               toggleShelfPersist={settings.toggleShelfPersist}
+              shelfKeepOpen={settings.shelfKeepOpen}
+              toggleShelfKeepOpen={settings.toggleShelfKeepOpen}
               rememberMode={settings.rememberMode}
               toggleRememberMode={settings.toggleRememberMode}
               panelControlCenter={settings.panelControlCenter}
@@ -203,6 +216,12 @@ function SettingsApp() {
               statusWidgets={settings.statusWidgets}
               handleWidgetsChange={settings.handleWidgetsChange}
               hasBattery={settings.hasBattery}
+              agentApiEnabled={settings.agentApiEnabled}
+              toggleAgentApi={settings.toggleAgentApi}
+              agentSoundsEnabled={settings.agentSoundsEnabled}
+              toggleAgentSounds={settings.toggleAgentSounds}
+              notchEdgeDelay={settings.notchEdgeDelay}
+              handleNotchEdgeDelayChange={settings.handleNotchEdgeDelayChange}
             />
           )}
           {activeTab === "dock" && (
@@ -215,9 +234,10 @@ function SettingsApp() {
               toggleDockPreview={settings.toggleDockPreview}
               dockSearchEnabled={settings.dockSearchEnabled}
               toggleDockSearch={settings.toggleDockSearch}
+              dockSearchLauncher={settings.dockSearchLauncher}
+              setDockSearchLauncherValue={settings.setDockSearchLauncherValue}
               dockCalendarEnabled={settings.dockCalendarEnabled}
               toggleDockCalendar={settings.toggleDockCalendar}
-              legacyMode={settings.legacyMode}
               dockTray={settings.dockTray}
               toggleDockTray={settings.toggleDockTray}
               dockTaskView={settings.dockTaskView}
@@ -238,6 +258,10 @@ function SettingsApp() {
               toggleDockWinNumber={settings.toggleDockWinNumber}
               dockMixedReorder={settings.dockMixedReorder}
               toggleDockMixedReorder={settings.toggleDockMixedReorder}
+              dockAttentionEnabled={settings.dockAttentionEnabled}
+              toggleDockAttention={settings.toggleDockAttention}
+              dockHideDelay={settings.dockHideDelay}
+              handleDockHideDelayChange={settings.handleDockHideDelayChange}
               monitors={settings.monitors}
               dockMonitorMode={settings.dockMonitorMode}
               setDockMonitorModeValue={settings.setDockMonitorModeValue}
@@ -254,10 +278,16 @@ function SettingsApp() {
               toggleVolumeOverlay={settings.toggleVolumeOverlay}
               volumeEdgeEnabled={settings.volumeEdgeEnabled}
               toggleVolumeEdge={settings.toggleVolumeEdge}
+              volumeSide={settings.volumeSide}
+              handleVolumeSideChange={settings.handleVolumeSideChange}
               brightnessOverlayEnabled={settings.brightnessOverlayEnabled}
               toggleBrightnessOverlay={settings.toggleBrightnessOverlay}
               brightnessEdgeEnabled={settings.brightnessEdgeEnabled}
               toggleBrightnessEdge={settings.toggleBrightnessEdge}
+              brightnessSide={settings.brightnessSide}
+              handleBrightnessSideChange={settings.handleBrightnessSideChange}
+              edgeDelay={settings.edgeDelay}
+              handleEdgeDelayChange={settings.handleEdgeDelayChange}
             />
           )}
           {activeTab === "about" && (

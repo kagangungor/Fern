@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { applyBackdrop, enableBackdrop, usesBackdrop } from "./backdrop";
 
 // Convert a hex color string to rgba with a specified alpha
 function hexToRgba(hex: string, alpha: number): string {
@@ -18,6 +19,8 @@ export interface HSL {
   s: number;
   l: number;
 }
+
+let isSettingsWindow = false;
 
 // Convert Hex to HSL
 export function hexToHsl(hex: string): HSL {
@@ -86,6 +89,65 @@ function hslToHex(h: number, s: number, l: number): string {
   return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
 }
 
+export const DEFAULT_ACCENT_COLOR = "#0a84ff";
+
+export const THEME_STYLES = ["solid", "frosted", "liquid", "material"] as const;
+
+// Background opacity each style is designed around; picking a style sets it, the slider can still change it.
+export const STYLE_OPACITY: Record<string, number> = {
+  solid: 0.8,
+  frosted: 0.6,
+  liquid: 0.45,
+  material: 0.96,
+};
+
+function isHex(color: string | null): color is string {
+  return !!color && /^#[0-9a-f]{3}([0-9a-f]{3})?$/i.test(color);
+}
+
+const hsla = (h: number, s: number, l: number, a = 1) => `hsla(${h}, ${s}%, ${l}%, ${a})`;
+
+// Material You style tonal palette: tinted surfaces and a pastel (dark) or deep (light) primary.
+export function materialPalette(seed: string, light: boolean, op: number, opExpanded: number): Record<string, string> {
+  const { h, s } = hexToHsl(seed);
+  const tint = Math.min(s, 60);
+  const shared = { "--fern-accent": seed };
+  if (light) {
+    return {
+      ...shared,
+      "--fern-bg": hsla(h, tint * 0.6, 95, op),
+      "--fern-bg-expanded": hsla(h, tint * 0.55, 92, opExpanded),
+      "--fern-text": hsla(h, 18, 12),
+      "--fern-text-muted": hsla(h, 12, 28, 0.75),
+      "--fern-border": hsla(h, 15, 30, 0.16),
+      "--fern-group-bg": hsla(h, 35, 45, 0.08),
+      "--fern-highlight": hsla(h, Math.max(s, 45), 38),
+      "--fern-on-highlight": "#ffffff",
+    };
+  }
+  return {
+    ...shared,
+    "--fern-bg": hsla(h, tint * 0.35, 9, op),
+    "--fern-bg-expanded": hsla(h, tint * 0.35, 12, opExpanded),
+    "--fern-text": hsla(h, 25, 92),
+    "--fern-text-muted": hsla(h, 14, 78, 0.8),
+    "--fern-border": hsla(h, 18, 70, 0.16),
+    "--fern-group-bg": hsla(h, 35, 70, 0.08),
+    "--fern-highlight": hsla(h, Math.max(s, 55), 78),
+    "--fern-on-highlight": hsla(h, 55, 16),
+  };
+}
+
+// The palette grows from the color the user picked, otherwise from the Windows accent.
+async function materialSeed(mode: string, customColor: string): Promise<string> {
+  if (mode === "custom" && isHex(customColor)) return customColor;
+  const accent = await invoke<string>("get_system_accent_color").catch(() => null);
+  if (isHex(accent)) return accent;
+  return isHex(customColor) ? customColor : DEFAULT_ACCENT_COLOR;
+}
+
+let themeGeneration = 0;
+
 export async function applyTheme(
   mode: string,
   customColor: string,
@@ -94,6 +156,17 @@ export async function applyTheme(
   brightness?: number
 ) {
   const root = document.documentElement;
+  const generation = ++themeGeneration;
+
+  const stored = localStorage.getItem("fern-theme-style") || "solid";
+  const style = (THEME_STYLES as readonly string[]).includes(stored) ? stored : "solid";
+  if (!isSettingsWindow) {
+    root.classList.remove(...THEME_STYLES.map((s) => `style-${s}`));
+    root.classList.add(`style-${style}`);
+  } else {
+    root.classList.remove(...THEME_STYLES.map((s) => `style-${s}`));
+    root.classList.add('style-solid');
+  }
 
   if (opacity === undefined || opacity === null) {
     const cachedOpacity = localStorage.getItem('fern-theme-opacity');
@@ -112,6 +185,10 @@ export async function applyTheme(
 
   const op = opacity;
   const opExpanded = Math.min(1.0, opacity + 0.12);
+  root.style.setProperty('--fern-opacity', String(op));
+  root.style.setProperty('--fern-opacity-expanded', String(opExpanded));
+  root.style.removeProperty('--fern-highlight');
+  root.style.removeProperty('--fern-on-highlight');
 
   if (mode === 'light') {
     root.style.setProperty('--fern-bg', `rgba(255, 255, 255, ${op})`);
@@ -153,6 +230,7 @@ export async function applyTheme(
   } else if (mode === 'adaptive') {
     try {
       const accentHex = await invoke<string>('get_system_accent_color');
+      if (generation !== themeGeneration) return;
       const hsl = hexToHsl(accentHex);
       hsl.s = saturation * 100;
       hsl.l = brightness * 100;
@@ -178,7 +256,7 @@ export async function applyTheme(
       }
     } catch (e) {
       console.error("Failed to apply adaptive theme:", e);
-      applyTheme('dark', customColor, op, saturation, brightness);
+      return applyTheme('dark', customColor, op, saturation, brightness);
     }
   } else {
     // default/dark
@@ -195,9 +273,23 @@ export async function applyTheme(
     root.classList.add('theme-dark');
     root.classList.remove('theme-light', 'theme-custom', 'theme-adaptive');
   }
+
+  if (!isSettingsWindow && style === "material") {
+    const seed = await materialSeed(mode, customColor);
+    if (generation !== themeGeneration) return;
+    const palette = materialPalette(seed, root.classList.contains('light-mode'), op, opExpanded);
+    for (const [name, value] of Object.entries(palette)) root.style.setProperty(name, value);
+  }
+  if (!isSettingsWindow) {
+    await applyBackdrop(root, style);
+  }
 }
 
-export function initTheme() {
+// `backdrop`: this window draws the notch or dock, which show the wallpaper in the glass styles.
+// `isSettings`: Settings window keeps its own clean fixed appearance and ignores theme style changes
+export function initTheme(options: { backdrop?: boolean; isSettings?: boolean } = {}) {
+  if (options.backdrop) enableBackdrop();
+  if (options.isSettings) isSettingsWindow = true;
   const syncMode = localStorage.getItem('fern-theme-mode') || 'dark';
   const syncColor = localStorage.getItem('fern-theme-color') || '#007aff';
   const syncOpacityVal = localStorage.getItem('fern-theme-opacity');
@@ -218,12 +310,22 @@ export function initTheme() {
     const saturationVal = settings['fern-theme-saturation'] ? parseFloat(String(settings['fern-theme-saturation'])) : syncSaturation;
     const brightnessVal = settings['fern-theme-brightness'] ? parseFloat(String(settings['fern-theme-brightness'])) : syncBrightness;
 
+    let surfaceChanged = false;
+    for (const key of ['fern-theme-style', 'fern-glass-wallpaper']) {
+      const val = settings[key];
+      if (val !== undefined && val !== null && String(val) !== localStorage.getItem(key)) {
+        localStorage.setItem(key, String(val));
+        surfaceChanged = true;
+      }
+    }
+
     if (
       mode !== syncMode ||
       color !== syncColor ||
       opacityVal !== syncOpacity ||
       saturationVal !== syncSaturation ||
-      brightnessVal !== syncBrightness
+      brightnessVal !== syncBrightness ||
+      surfaceChanged
     ) {
       localStorage.setItem('fern-theme-mode', mode);
       localStorage.setItem('fern-theme-color', color);
@@ -244,33 +346,50 @@ export function initTheme() {
     applyTheme(mode, color, opacity, saturation, brightness);
   };
 
-  const fernThemeKeys = ['fern-theme-mode', 'fern-theme-color', 'fern-theme-opacity', 'fern-theme-saturation', 'fern-theme-brightness'];
+  const fernThemeKeys = [
+    'fern-theme-mode',
+    'fern-theme-color',
+    'fern-theme-opacity',
+    'fern-theme-saturation',
+    'fern-theme-brightness',
+    'fern-theme-style',
+    'fern-glass-wallpaper',
+    'fern-scale',
+  ];
 
   // Listen to setting changes broadcasted from settings window
   // (localStorage sync is handled by saveAndLocal in Settings.tsx; we just apply the theme)
   const settingsPromise = listen<{ key: string; value: any }>('settings-changed', (event) => {
-    const { key } = event.payload;
+    const { key, value } = event.payload;
     if (fernThemeKeys.includes(key)) {
+      if (value !== undefined && value !== null) {
+        localStorage.setItem(key, String(value));
+      }
       applyThemeFromStorage();
     }
   });
 
-  // Listen to system accent color updates in case of adaptive theme
-  const accentPromise = listen<string>('system-accent-changed', (event) => {
-    const currentMode = localStorage.getItem('fern-theme-mode') || 'dark';
-    if (currentMode === 'adaptive') {
-      const opacity = parseFloat(localStorage.getItem('fern-theme-opacity') || '0.80');
-      const saturation = parseFloat(localStorage.getItem('fern-theme-saturation') || '0.50');
-      const brightness = parseFloat(localStorage.getItem('fern-theme-brightness') || '0.15');
-      applyTheme('adaptive', event.payload, opacity, saturation, brightness);
+  // Windows sends this for accent, wallpaper and other system setting changes
+  const accentPromise = listen<string>('system-accent-changed', () => {
+    const style = localStorage.getItem('fern-theme-style');
+    if ((localStorage.getItem('fern-theme-mode') || 'dark') === 'adaptive' || style === 'material' || usesBackdrop(style)) {
+      applyThemeFromStorage();
     }
+  });
+
+  // The wallpaper backdrop is lined up with the window's place on its monitor
+  const monitorsPromise = listen('monitors-changed', () => {
+    if (usesBackdrop(localStorage.getItem('fern-theme-style'))) applyThemeFromStorage();
   });
 
   // Listen to external edits (e.g. settings.json edited outside the app)
   // localStorage sync is handled by useSettingsSync hook; we just apply the theme
   const externalPromise = listen<{ key: string; value: any }>('settings-external-changed', (event) => {
-    const { key } = event.payload;
+    const { key, value } = event.payload;
     if (fernThemeKeys.includes(key)) {
+      if (value !== undefined && value !== null) {
+        localStorage.setItem(key, String(value));
+      }
       applyThemeFromStorage();
     }
   });
@@ -279,5 +398,6 @@ export function initTheme() {
     settingsPromise.then(f => f());
     accentPromise.then(f => f());
     externalPromise.then(f => f());
+    monitorsPromise.then(f => f());
   };
 }

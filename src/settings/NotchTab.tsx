@@ -5,6 +5,7 @@ import {
   Minimize2,
   LayoutList,
   Sparkles,
+  Palette,
   Circle,
   CloudSun,
   X,
@@ -17,6 +18,8 @@ import {
   BellRing,
   Globe,
   Volume2,
+  Clock,
+  Bot,
 } from "lucide-react";
 import { DEFAULT_PANEL_ORDER, type CcLayout, type PanelId } from "../panelOrder";
 import { ControlCenterConfig } from "../components/ControlCenterConfig";
@@ -31,6 +34,7 @@ import { zoneOffsetLabel } from "../dualClock";
 import type { WidgetConfig, MonitorInfo, MonitorMode } from "./types";
 import { usePerMonitor } from "./usePerMonitor";
 import { useT } from "../i18n";
+import { AgentSounds } from "./AgentSounds";
 
 interface NotchTabProps {
   notchMode: string;
@@ -53,7 +57,6 @@ interface NotchTabProps {
   toggleNotchTimerProgress: () => void;
   stopwatchEnabled: boolean;
   toggleStopwatchEnabled: () => void;
-  legacyMode: boolean;
   dualClockEnabled: boolean;
   toggleDualClock: () => void;
   dualClockZone: string;
@@ -66,6 +69,8 @@ interface NotchTabProps {
   mediaLayout: "classic" | "compact";
   toggleMediaLayout: (layout: "classic" | "compact") => void;
   mediaAmbienceEnabled: boolean;
+  artworkThemeEnabled: boolean;
+  toggleArtworkTheme: () => void;
   toggleAmbience: () => void;
   mediaCompactGlowEnabled: boolean;
   toggleCompactGlow: () => void;
@@ -73,6 +78,8 @@ interface NotchTabProps {
   toggleNotchScrollVolume: () => void;
   shelfPersist: boolean;
   toggleShelfPersist: () => void;
+  shelfKeepOpen: boolean;
+  toggleShelfKeepOpen: () => void;
   rememberMode: boolean;
   toggleRememberMode: () => void;
   panelControlCenter: boolean;
@@ -101,6 +108,12 @@ interface NotchTabProps {
   handleWidgetsChange: (config: WidgetConfig) => void;
   hasBattery: boolean;
   onOpenCalendarSync: () => void;
+  agentApiEnabled: boolean;
+  toggleAgentApi: () => void;
+  agentSoundsEnabled: boolean;
+  toggleAgentSounds: () => void;
+  notchEdgeDelay: string;
+  handleNotchEdgeDelayChange: (delay: string) => void;
 }
 
 export function NotchTab({
@@ -124,7 +137,6 @@ export function NotchTab({
   toggleNotchTimerProgress,
   stopwatchEnabled,
   toggleStopwatchEnabled,
-  legacyMode,
   dualClockEnabled,
   toggleDualClock,
   dualClockZone,
@@ -137,6 +149,8 @@ export function NotchTab({
   mediaLayout,
   toggleMediaLayout,
   mediaAmbienceEnabled,
+  artworkThemeEnabled,
+  toggleArtworkTheme,
   toggleAmbience,
   mediaCompactGlowEnabled,
   toggleCompactGlow,
@@ -144,6 +158,8 @@ export function NotchTab({
   toggleNotchScrollVolume,
   shelfPersist,
   toggleShelfPersist,
+  shelfKeepOpen,
+  toggleShelfKeepOpen,
   rememberMode,
   toggleRememberMode,
   panelControlCenter,
@@ -172,6 +188,12 @@ export function NotchTab({
   handleWidgetsChange,
   hasBattery,
   onOpenCalendarSync,
+  agentApiEnabled,
+  toggleAgentApi,
+  agentSoundsEnabled,
+  toggleAgentSounds,
+  notchEdgeDelay,
+  handleNotchEdgeDelayChange,
 }: NotchTabProps) {
   const t = useT();
   const caldav = useCaldav();
@@ -183,17 +205,33 @@ export function NotchTab({
     <>
       <SettingSection id="notch-display" title={t("notch.section.display")} defaultOpen>
         {!showPerMonitor && (
-          <SettingRow icon={PanelTop} label={t("notch.behavior")} desc={t("notch.behavior.desc")}>
-            <Dropdown
-              value={notchMode}
-              onChange={setNotchModeValue}
-              options={[
-                { value: "fixed", label: t("common.fixed") },
-                { value: "smart", label: t("common.smart") },
-                { value: "peek", label: t("common.peek") },
-              ]}
-            />
-          </SettingRow>
+          <>
+            <SettingRow icon={PanelTop} label={t("notch.behavior")} desc={t("notch.behavior.desc")}>
+              <Dropdown
+                value={notchMode}
+                onChange={setNotchModeValue}
+                options={[
+                  { value: "fixed", label: t("common.fixed") },
+                  { value: "smart", label: t("common.smart") },
+                  { value: "peek", label: t("common.peek") },
+                ]}
+              />
+            </SettingRow>
+            {(notchMode === "smart" || notchMode === "peek") && (
+              <SettingRow icon={Clock} label={t("notch.edgeDelay")} desc={t("notch.edgeDelay.desc")}>
+                <Dropdown
+                  value={notchEdgeDelay}
+                  onChange={handleNotchEdgeDelayChange}
+                  options={[
+                    { value: "0", label: "0 ms" },
+                    { value: "150", label: "150 ms" },
+                    { value: "300", label: "300 ms" },
+                    { value: "500", label: "500 ms" },
+                  ]}
+                />
+              </SettingRow>
+            )}
+          </>
         )}
 
         <SettingRow icon={MonitorCheck} label={t("common.showOn")} desc={t("notch.showOn.desc")}>
@@ -299,25 +337,21 @@ export function NotchTab({
           </label>
         </SettingRow>
 
-        {!legacyMode && (
-          <>
-            <SettingRow
-              icon={Globe}
-              label={t("notch.dualClock")}
-              desc={dualClockEnabled ? [dualClockLabel, zoneOffsetLabel(dualClockZone)].filter(Boolean).join(" · ") : t("notch.dualClock.desc")}
-            >
-              <label className="toggle-switch">
-                <input type="checkbox" checked={dualClockEnabled} onChange={toggleDualClock} />
-                <span className="slider"></span>
-              </label>
-            </SettingRow>
+        <SettingRow
+          icon={Globe}
+          label={t("notch.dualClock")}
+          desc={dualClockEnabled ? [dualClockLabel, zoneOffsetLabel(dualClockZone)].filter(Boolean).join(" · ") : t("notch.dualClock.desc")}
+        >
+          <label className="toggle-switch">
+            <input type="checkbox" checked={dualClockEnabled} onChange={toggleDualClock} />
+            <span className="slider"></span>
+          </label>
+        </SettingRow>
 
-            {dualClockEnabled && (
-              <>
-                <DualClockPicker onSelect={selectDualClockZone} />
-                <div className="setting-divider" />
-              </>
-            )}
+        {dualClockEnabled && (
+          <>
+            <DualClockPicker onSelect={selectDualClockZone} />
+            <div className="setting-divider" />
           </>
         )}
 
@@ -351,12 +385,22 @@ export function NotchTab({
               </div>
             </SettingRow>
 
-            <SettingRow icon={Sparkles} label={t("notch.ambientGlow")} desc={t("notch.ambientGlow.desc")}>
+            <SettingRow icon={Palette} label={t("notch.artworkTheme")} desc={t("notch.artworkTheme.desc")}>
               <label className="toggle-switch">
-                <input type="checkbox" checked={mediaAmbienceEnabled} onChange={toggleAmbience} />
+                <input type="checkbox" checked={artworkThemeEnabled} onChange={toggleArtworkTheme} />
                 <span className="slider"></span>
               </label>
             </SettingRow>
+
+            {/* The cover's colors replace the glow, the two would compete on the same card. */}
+            {!artworkThemeEnabled && (
+              <SettingRow icon={Sparkles} label={t("notch.ambientGlow")} desc={t("notch.ambientGlow.desc")}>
+                <label className="toggle-switch">
+                  <input type="checkbox" checked={mediaAmbienceEnabled} onChange={toggleAmbience} />
+                  <span className="slider"></span>
+                </label>
+              </SettingRow>
+            )}
 
             <SettingRow icon={Circle} label={t("notch.compactGlow")} desc={t("notch.compactGlow.desc")}>
               <label className="toggle-switch">
@@ -418,9 +462,16 @@ export function NotchTab({
               </label>
             </SettingRow>
 
-        <SettingRow icon={Circle} label={t("notch.shelfPersist")} desc={t("notch.shelfPersist.desc")} divider={false}>
+        <SettingRow icon={Circle} label={t("notch.shelfPersist")} desc={t("notch.shelfPersist.desc")}>
               <label className="toggle-switch">
                 <input type="checkbox" checked={shelfPersist} onChange={toggleShelfPersist} />
+                <span className="slider"></span>
+              </label>
+            </SettingRow>
+
+        <SettingRow icon={Circle} label={t("notch.shelfKeepOpen")} desc={t("notch.shelfKeepOpen.desc")} divider={false}>
+              <label className="toggle-switch">
+                <input type="checkbox" checked={shelfKeepOpen} onChange={toggleShelfKeepOpen} />
                 <span className="slider"></span>
               </label>
             </SettingRow>
@@ -494,6 +545,28 @@ export function NotchTab({
               </div>
             )}
           </div>
+        )}
+      </SettingSection>
+
+      <SettingSection id="notch-agent" title={t("notch.agent.group")}>
+        <SettingRow icon={Bot} label={t("notch.agent.enable")} desc={t("notch.agent.enable.desc")}>
+          <label className="toggle-switch">
+            <input type="checkbox" checked={agentApiEnabled} onChange={toggleAgentApi} />
+            <span className="slider"></span>
+          </label>
+        </SettingRow>
+
+        {agentApiEnabled && (
+          <>
+            <SettingRow icon={Volume2} label={t("notch.agent.sounds")} desc={t("notch.agent.sounds.desc")}>
+              <label className="toggle-switch">
+                <input type="checkbox" checked={agentSoundsEnabled} onChange={toggleAgentSounds} />
+                <span className="slider"></span>
+              </label>
+            </SettingRow>
+
+            {agentSoundsEnabled && <AgentSounds />}
+          </>
         )}
       </SettingSection>
 

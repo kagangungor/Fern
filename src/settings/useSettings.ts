@@ -6,7 +6,7 @@ import { enable, disable, isEnabled } from "@tauri-apps/plugin-autostart";
 import { getVersion } from "@tauri-apps/api/app";
 import type { UpdateCheckResult } from "../updater";
 import { useSettingsSync } from "../hooks/useSettingsSync";
-import { hexToHsl } from "../theme";
+import { hexToHsl, STYLE_OPACITY } from "../theme";
 import { DEFAULT_DUAL_CLOCK_ZONE } from "../dualClock";
 import type { WidgetConfig, MonitorInfo, MonitorMode } from "./types";
 
@@ -58,6 +58,9 @@ export function useSettings() {
   const [shelfPersist, setShelfPersist] = useState(
     () => localStorage.getItem("fern-shelf-persist") === "true"
   );
+  const [shelfKeepOpen, setShelfKeepOpen] = useState(
+    () => localStorage.getItem("fern-shelf-keep-open") === "true"
+  );
   const [volumeOverlayEnabled, setVolumeOverlayEnabled] = useState(true);
   const [volumeEdgeEnabled, setVolumeEdgeEnabled] = useState(
     () => localStorage.getItem("fern-volume-edge-enabled") !== "false"
@@ -68,7 +71,35 @@ export function useSettings() {
   const [brightnessEdgeEnabled, setBrightnessEdgeEnabled] = useState(
     () => localStorage.getItem("fern-brightness-edge-enabled") !== "false"
   );
+  const [agentApiEnabled, setAgentApiEnabled] = useState(
+    () => localStorage.getItem("fern-agent-api") !== "false"
+  );
+  const [agentSoundsEnabled, setAgentSoundsEnabled] = useState(
+    () => localStorage.getItem("fern-agent-sounds") !== "false"
+  );
+  const [notchEdgeDelay, setNotchEdgeDelay] = useState(
+    () => localStorage.getItem("fern-notch-edge-delay") || "0"
+  );
+  const [volumeSide, setVolumeSide] = useState<"left" | "right">(
+    () => (localStorage.getItem("fern-volume-side") as "left" | "right") || "left"
+  );
+  const [brightnessSide, setBrightnessSide] = useState<"left" | "right">(
+    () => (localStorage.getItem("fern-brightness-side") as "left" | "right") || "right"
+  );
+  const [edgeDelay, setEdgeDelay] = useState(
+    () => localStorage.getItem("fern-edge-delay") || "0"
+  );
+  const [dockAttentionEnabled, setDockAttentionEnabled] = useState(
+    () => localStorage.getItem("fern-dock-attention-enabled") !== "false"
+  );
+  const [dockHideDelay, setDockHideDelay] = useState(
+    () => localStorage.getItem("fern-dock-hide-delay") || "800"
+  );
+  const [glassWallpaperEnabled, setGlassWallpaperEnabled] = useState(
+    () => localStorage.getItem("fern-glass-wallpaper") !== "false"
+  );
   const [mediaAmbienceEnabled, setMediaAmbienceEnabled] = useState(true);
+  const [artworkThemeEnabled, setArtworkThemeEnabled] = useState(true);
   const [mediaCompactGlowEnabled, setMediaCompactGlowEnabled] = useState(true);
   const [mediaLayout, setMediaLayout] = useState<"classic" | "compact">(
     () => (localStorage.getItem("fern-media-layout") as "classic" | "compact") || "classic"
@@ -82,8 +113,8 @@ export function useSettings() {
   const [timeFormat24h, setTimeFormat24h] = useState(
     () => localStorage.getItem("fern-time-format-24h") === "true"
   );
-  const [legacyMode, setLegacyMode] = useState(
-    () => localStorage.getItem("fern-legacy-mode") === "true"
+  const [memorySaver, setMemorySaver] = useState(
+    () => localStorage.getItem("fern-memory-saver") === "true"
   );
   const [tempUnitFahrenheit, setTempUnitFahrenheit] = useState(false);
   const [cityName, setCityName] = useState("");
@@ -99,6 +130,9 @@ export function useSettings() {
   const [dockEnabled, setDockEnabled] = useState(true);
   const [dockPreviewEnabled, setDockPreviewEnabled] = useState(true);
   const [dockSearchEnabled, setDockSearchEnabled] = useState(true);
+  const [dockSearchLauncher, setDockSearchLauncher] = useState(
+    () => localStorage.getItem("fern-search-launcher") || "windows"
+  );
   const [dockCalendarEnabled, setDockCalendarEnabled] = useState(true);
   const [dockTray, setDockTray] = useState(
     () => localStorage.getItem("fern-dock-tray-enabled") !== "false"
@@ -176,6 +210,7 @@ export function useSettings() {
   const [scale, setScale] = useState(
     () => parseFloat(localStorage.getItem("fern-scale") || "1.0")
   );
+  const [themeStyle, setThemeStyle] = useState(() => localStorage.getItem("fern-theme-style") || "solid");
   const [themeMode, setThemeMode] = useState(
     () => localStorage.getItem("fern-theme-mode") || "dark"
   );
@@ -227,22 +262,34 @@ export function useSettings() {
       apply(getVal("fern-music-compact-notch"), setMusicCompactNotch, readBool);
       apply(getVal("fern-notch-scroll-volume"), setNotchScrollVolume, (v) => v === "true");
       apply(getVal("fern-shelf-persist"), setShelfPersist, (v) => v === "true");
+      apply(getVal("fern-shelf-keep-open"), setShelfKeepOpen, (v) => v === "true");
       apply(getVal("fern-notch-remember-mode"), setRememberMode, (v) => v === "true");
       apply(getVal("fern-volume-overlay-enabled"), setVolumeOverlayEnabled, readBool);
       apply(getVal("fern-brightness-overlay-enabled"), setBrightnessOverlayEnabled, readBool);
       apply(getVal("fern-media-ambience-enabled"), setMediaAmbienceEnabled, readBool);
+      apply(getVal("fern-media-artwork-theme"), setArtworkThemeEnabled, readBool);
       apply(getVal("fern-media-compact-glow-enabled"), setMediaCompactGlowEnabled, readBool);
       apply(getVal("fern-corners-enabled"), setCornersEnabled, readBool);
       apply(getVal("fern-time-format-24h"), setTimeFormat24h, readBool);
-      apply(getVal("fern-legacy-mode"), setLegacyMode, readBool);
+      apply(getVal("fern-memory-saver"), setMemorySaver, readBool);
       apply(getVal("fern-show-update-indicator"), setShowUpdateIndicator, readBool);
       apply(getVal("fern-auto-update"), setAutoUpdate, readBool);
       apply(getVal("fern-update-channel"), setPrereleaseChannel, (v) => v === "prerelease");
       apply(getVal("fern-volume-edge-enabled"), setVolumeEdgeEnabled, readBool);
       apply(getVal("fern-brightness-edge-enabled"), setBrightnessEdgeEnabled, readBool);
+      apply(getVal("fern-agent-api"), setAgentApiEnabled, (v) => v !== "false");
+      apply(getVal("fern-agent-sounds"), setAgentSoundsEnabled, (v) => v !== "false");
+      apply(getVal("fern-notch-edge-delay"), setNotchEdgeDelay, (v) => v);
+      apply(getVal("fern-volume-side"), setVolumeSide, (v) => (v === "right" ? "right" : "left"));
+      apply(getVal("fern-brightness-side"), setBrightnessSide, (v) => (v === "left" ? "left" : "right"));
+      apply(getVal("fern-edge-delay"), setEdgeDelay, (v) => v);
+      apply(getVal("fern-dock-attention-enabled"), setDockAttentionEnabled, (v) => v !== "false");
+      apply(getVal("fern-dock-hide-delay"), setDockHideDelay, (v) => v);
+      apply(getVal("fern-glass-wallpaper"), setGlassWallpaperEnabled, (v) => v !== "false");
       apply(getVal("fern-dock-enabled"), setDockEnabled, readBool);
       apply(getVal("fern-dock-preview-enabled"), setDockPreviewEnabled, readBool);
       apply(getVal("fern-dock-search-enabled"), setDockSearchEnabled, readBool);
+      apply(getVal("fern-search-launcher"), setDockSearchLauncher, (v) => String(v));
       apply(getVal("fern-dock-calendar-enabled"), setDockCalendarEnabled, readBool);
       apply(getVal("fern-dock-tray-enabled"), setDockTray, (v) => v !== "false");
       apply(getVal("fern-dock-taskview-enabled"), setDockTaskView, readBool);
@@ -286,6 +333,7 @@ export function useSettings() {
         setCityQuery(savedCity);
       }
 
+      apply(getVal("fern-theme-style"), setThemeStyle, (v) => v);
       apply(getVal("fern-theme-mode"), setThemeMode, (v) => v);
       apply(getVal("fern-theme-color"), setThemeColor, (v) => v);
       apply(getVal("fern-theme-opacity"), setThemeOpacity, parseFloat);
@@ -363,6 +411,7 @@ export function useSettings() {
     "fern-dock-win-number-enabled": setDockWinNumberEnabled,
     "fern-dock-preview-enabled": setDockPreviewEnabled,
     "fern-dock-search-enabled": setDockSearchEnabled,
+    "fern-search-launcher": setDockSearchLauncher,
     "fern-dock-calendar-enabled": setDockCalendarEnabled,
     "fern-dock-mixed-reorder": setDockMixedReorder,
     "fern-weather-enabled": setWeatherEnabled,
@@ -378,14 +427,16 @@ export function useSettings() {
     "fern-music-compact-notch": setMusicCompactNotch,
     "fern-notch-scroll-volume": setNotchScrollVolume,
     "fern-shelf-persist": setShelfPersist,
+    "fern-shelf-keep-open": setShelfKeepOpen,
     "fern-notch-remember-mode": setRememberMode,
     "fern-media-ambience-enabled": setMediaAmbienceEnabled,
+    "fern-media-artwork-theme": setArtworkThemeEnabled,
     "fern-media-compact-glow-enabled": setMediaCompactGlowEnabled,
     "fern-media-layout": setMediaLayout,
     "fern-corners-enabled": setCornersEnabled,
     "fern-show-update-indicator": setShowUpdateIndicator,
     "fern-time-format-24h": setTimeFormat24h,
-    "fern-legacy-mode": setLegacyMode,
+    "fern-memory-saver": setMemorySaver,
     "fern-low-battery-threshold": setLowBatteryThreshold,
     "fern-scale": setScale,
     "fern-temp-unit": (v) => setTempUnitFahrenheit(v === "fahrenheit"),
@@ -395,6 +446,16 @@ export function useSettings() {
     "fern-volume-edge-enabled": setVolumeEdgeEnabled,
     "fern-brightness-overlay-enabled": setBrightnessOverlayEnabled,
     "fern-brightness-edge-enabled": setBrightnessEdgeEnabled,
+    "fern-agent-api": (v) => setAgentApiEnabled(v !== "false" && v !== false),
+    "fern-agent-sounds": (v) => setAgentSoundsEnabled(v !== "false" && v !== false),
+    "fern-notch-edge-delay": setNotchEdgeDelay,
+    "fern-volume-side": (v) => setVolumeSide(v === "right" ? "right" : "left"),
+    "fern-brightness-side": (v) => setBrightnessSide(v === "left" ? "left" : "right"),
+    "fern-edge-delay": setEdgeDelay,
+    "fern-dock-attention-enabled": (v) => setDockAttentionEnabled(v !== "false" && v !== false),
+    "fern-dock-hide-delay": setDockHideDelay,
+    "fern-glass-wallpaper": (v) => setGlassWallpaperEnabled(v !== "false" && v !== false),
+    "fern-theme-style": (v) => setThemeStyle(String(v)),
     "fern-theme-mode": setThemeMode,
     "fern-theme-color": setThemeColor,
     "fern-theme-opacity": setThemeOpacity,
@@ -602,6 +663,12 @@ export function useSettings() {
     saveSetting("fern-shelf-persist", String(next));
   };
 
+  const toggleShelfKeepOpen = () => {
+    const next = !shelfKeepOpen;
+    setShelfKeepOpen(next);
+    saveSetting("fern-shelf-keep-open", String(next));
+  };
+
   const toggleMediaLayout = (layout: "classic" | "compact") => {
     setMediaLayout(layout);
     saveSetting("fern-media-layout", layout);
@@ -631,10 +698,67 @@ export function useSettings() {
     saveSetting("fern-brightness-edge-enabled", String(next));
   };
 
+  const toggleAgentApi = () => {
+    const next = !agentApiEnabled;
+    setAgentApiEnabled(next);
+    saveSetting("fern-agent-api", String(next));
+  };
+
+  const toggleAgentSounds = () => {
+    const next = !agentSoundsEnabled;
+    setAgentSoundsEnabled(next);
+    saveSetting("fern-agent-sounds", String(next));
+  };
+
+  const handleNotchEdgeDelayChange = (val: string) => {
+    setNotchEdgeDelay(val);
+    saveSetting("fern-notch-edge-delay", val);
+  };
+
+  const handleVolumeSideChange = (val: string) => {
+    const side = val === "right" ? "right" : "left";
+    setVolumeSide(side);
+    saveSetting("fern-volume-side", side);
+  };
+
+  const handleBrightnessSideChange = (val: string) => {
+    const side = val === "left" ? "left" : "right";
+    setBrightnessSide(side);
+    saveSetting("fern-brightness-side", side);
+  };
+
+  const handleEdgeDelayChange = (val: string) => {
+    setEdgeDelay(val);
+    saveSetting("fern-edge-delay", val);
+  };
+
+  const toggleDockAttention = () => {
+    const next = !dockAttentionEnabled;
+    setDockAttentionEnabled(next);
+    saveSetting("fern-dock-attention-enabled", String(next));
+  };
+
+  const handleDockHideDelayChange = (val: string) => {
+    setDockHideDelay(val);
+    saveSetting("fern-dock-hide-delay", val);
+  };
+
+  const toggleGlassWallpaper = () => {
+    const next = !glassWallpaperEnabled;
+    setGlassWallpaperEnabled(next);
+    saveSetting("fern-glass-wallpaper", String(next));
+  };
+
   const toggleAmbience = () => {
     const next = !mediaAmbienceEnabled;
     setMediaAmbienceEnabled(next);
     saveSetting("fern-media-ambience-enabled", String(next));
+  };
+
+  const toggleArtworkTheme = () => {
+    const next = !artworkThemeEnabled;
+    setArtworkThemeEnabled(next);
+    saveSetting("fern-media-artwork-theme", String(next));
   };
 
   const toggleCompactGlow = () => {
@@ -661,10 +785,10 @@ export function useSettings() {
     saveSetting("fern-time-format-24h", String(next));
   };
 
-  const toggleLegacyMode = () => {
-    const next = !legacyMode;
-    setLegacyMode(next);
-    saveSetting("fern-legacy-mode", String(next));
+  const toggleMemorySaver = () => {
+    const next = !memorySaver;
+    setMemorySaver(next);
+    saveSetting("fern-memory-saver", String(next));
   };
 
   const toggleTempUnit = () => {
@@ -689,6 +813,11 @@ export function useSettings() {
     const next = !dockSearchEnabled;
     setDockSearchEnabled(next);
     saveSetting("fern-dock-search-enabled", String(next));
+  };
+
+  const setDockSearchLauncherValue = (val: string) => {
+    setDockSearchLauncher(val);
+    saveSetting("fern-search-launcher", val);
   };
 
   const toggleDockTray = () => {
@@ -928,6 +1057,18 @@ export function useSettings() {
     saveSetting("fern-theme-brightness", String(value));
   };
 
+  const handleThemeStyleChange = (style: string) => {
+    setThemeStyle(style);
+    saveSetting("fern-theme-style", style);
+    // Each style is tuned for an opacity; the slider can still change it afterwards.
+    const opacity = STYLE_OPACITY[style];
+    if (opacity !== undefined) {
+      setThemeOpacity(opacity);
+      saveSetting("fern-theme-opacity", String(opacity));
+    }
+  };
+
+
   // ── City search ──
   const selectCity = async (city: {
     name: string;
@@ -1048,8 +1189,8 @@ export function useSettings() {
     handleThresholdChange,
     timeFormat24h,
     toggleTimeFormat24h,
-    legacyMode,
-    toggleLegacyMode,
+    memorySaver,
+    toggleMemorySaver,
     showUpdateIndicator,
     toggleUpdateIndicator,
     scale,
@@ -1058,6 +1199,8 @@ export function useSettings() {
     toggleCorners,
 
     // Theme
+    themeStyle,
+    handleThemeStyleChange,
     themeMode,
     handleThemeModeChange,
     themeColor,
@@ -1068,6 +1211,8 @@ export function useSettings() {
     handleSaturationChange,
     themeBrightness,
     handleBrightnessChange,
+    glassWallpaperEnabled,
+    toggleGlassWallpaper,
 
     // Notch
     notchMode,
@@ -1095,11 +1240,21 @@ export function useSettings() {
     toggleNotchScrollVolume,
     shelfPersist,
     toggleShelfPersist,
+    shelfKeepOpen,
+    toggleShelfKeepOpen,
     rememberMode,
     toggleRememberMode,
     mediaLayout,
     toggleMediaLayout,
+    agentApiEnabled,
+    toggleAgentApi,
+    agentSoundsEnabled,
+    toggleAgentSounds,
+    notchEdgeDelay,
+    handleNotchEdgeDelayChange,
     mediaAmbienceEnabled,
+    artworkThemeEnabled,
+    toggleArtworkTheme,
     toggleAmbience,
     mediaCompactGlowEnabled,
     toggleCompactGlow,
@@ -1132,6 +1287,8 @@ export function useSettings() {
     toggleDockPreview,
     dockSearchEnabled,
     toggleDockSearch,
+    dockSearchLauncher,
+    setDockSearchLauncherValue,
     dockCalendarEnabled,
     toggleDockCalendar,
     dockTray,
@@ -1164,6 +1321,10 @@ export function useSettings() {
     toggleDockWinNumber,
     dockMixedReorder,
     toggleDockMixedReorder,
+    dockAttentionEnabled,
+    toggleDockAttention,
+    dockHideDelay,
+    handleDockHideDelayChange,
 
     monitors,
     dockMonitorMode,
@@ -1186,10 +1347,16 @@ export function useSettings() {
     toggleVolumeOverlay,
     volumeEdgeEnabled,
     toggleVolumeEdge,
+    volumeSide,
+    handleVolumeSideChange,
     brightnessOverlayEnabled,
     toggleBrightnessOverlay,
     brightnessEdgeEnabled,
     toggleBrightnessEdge,
+    brightnessSide,
+    handleBrightnessSideChange,
+    edgeDelay,
+    handleEdgeDelayChange,
 
     // Updates
     updateStatus,

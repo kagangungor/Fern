@@ -3,6 +3,7 @@ import { motion, AnimatePresence, useAnimation } from 'framer-motion';
 import { invoke } from '@tauri-apps/api/core';
 import { Visualizer } from './App';
 import { useT } from './i18n';
+import { MediaSourceButton, type MediaSession } from './components/MediaSourceButton';
 import { PlayIcon, PauseIcon, SkipBackIcon, SkipForwardIcon, MusicNoteIcon, SpeakerIcon, AudioOutputIcon, VolumeLowIcon, VolumeHighIcon } from './icons';
 import { CalendarDays } from 'lucide-react';
 
@@ -22,6 +23,7 @@ interface CompactMediaPlayerProps {
   mediaInfo: MediaInfo;
   albumArtUrl: string | null;
   albumArtKey: number;
+  sessions?: MediaSession[];
   isPlaying: boolean;
   volume: number;
   volumeExpanded: boolean;
@@ -104,6 +106,7 @@ export function CompactMediaPlayer({
   mediaInfo,
   albumArtUrl,
   albumArtKey,
+  sessions = [],
   isPlaying,
   volume,
   volumeExpanded,
@@ -222,6 +225,7 @@ export function CompactMediaPlayer({
           <TitleMarquee title={mediaInfo.title} />
           <span className="cmp-artist">{mediaInfo.artist}</span>
         </div>
+        <MediaSourceButton sessions={sessions} />
         {onOpenCalendar && (
           <button className="music-calendar-btn" onClick={onOpenCalendar} title={t("music.openCalendar")} aria-label={t("music.openCalendar")}>
             <CalendarDays size={16} strokeWidth={1.75} />

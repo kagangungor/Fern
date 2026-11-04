@@ -366,27 +366,16 @@ body {
   left: -13px;
   -webkit-mask-image: radial-gradient(circle at 0% 0%, transparent 12.5px, black 13px);
   mask-image: radial-gradient(circle at 0% 0%, transparent 12.5px, black 13px);
-  background:
-    radial-gradient(circle at 0 0,
-      transparent 12px,
-      var(--fern-border, rgba(255, 255, 255, 0.1)) 12.7px,
-      var(--fern-border, rgba(255, 255, 255, 0.1)) 13.3px,
-      transparent 14px),
-    var(--fern-bg, rgba(0, 0, 0, 0.8));
+  background: var(--fern-bg, rgba(0, 0, 0, 0.8));
 }
 
 .dock::after {
   right: -13px;
   -webkit-mask-image: radial-gradient(circle at 100% 0%, transparent 12.5px, black 13px);
   mask-image: radial-gradient(circle at 100% 0%, transparent 12.5px, black 13px);
-  background:
-    radial-gradient(circle at 13px 0,
-      transparent 12px,
-      var(--fern-border, rgba(255, 255, 255, 0.1)) 12.7px,
-      var(--fern-border, rgba(255, 255, 255, 0.1)) 13.3px,
-      transparent 14px),
-    var(--fern-bg, rgba(0, 0, 0, 0.8));
+  background: var(--fern-bg, rgba(0, 0, 0, 0.8));
 }
+
 
 .dock-icon-wrapper {
   position: relative;
@@ -398,6 +387,7 @@ body {
 }
 
 .dock-icon {
+  position: relative;
   width: 36px;
   height: 36px;
   display: flex;
@@ -478,9 +468,9 @@ body {
   bottom: -4px;
   width: 4px;
   height: 4px;
-  background: white;
+  background: var(--fern-highlight, white);
   border-radius: 50%;
-  box-shadow: 0 0 4px rgba(255, 255, 255, 0.8);
+  box-shadow: 0 0 4px var(--fern-highlight, rgba(255, 255, 255, 0.6));
 }
 
 .start-icon-inner {
@@ -855,8 +845,8 @@ body {
 }
 
 .light-mode .active-indicator {
-  background: var(--fern-text);
-  box-shadow: 0 0 3px var(--fern-text);
+  background: var(--fern-highlight, var(--fern-text));
+  box-shadow: 0 0 3px var(--fern-highlight, var(--fern-text));
 }
 
 .light-mode .tooltip {
@@ -954,4 +944,67 @@ body {
 
 .dock-show-desktop:hover {
   background: rgba(255, 255, 255, 0.45);
+}
+
+/* ─── Attention Badge & Fallback ─────────────────────────────────────────── */
+
+.attention-badge {
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #ff3b30;
+  border: 1.5px solid var(--fern-bg, #1e1e1e);
+  box-shadow: 0 1px 4px rgba(255, 59, 48, 0.4);
+  pointer-events: none;
+  z-index: 10;
+}
+
+.attention-badge.has-count {
+  width: auto;
+  min-width: 17px;
+  height: 17px;
+  padding: 0 4px;
+  border-radius: 9px;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 14px;
+  color: #ffffff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  top: -4px;
+  right: -4px;
+}
+
+.attention-badge.flashing {
+  animation: attention-bounce 1.2s infinite ease-in-out;
+}
+
+@keyframes attention-bounce {
+  0%, 100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.22);
+    box-shadow: 0 2px 8px rgba(255, 59, 48, 0.7);
+  }
+}
+
+.preview-item-icon-fallback {
+  width: 100%;
+  height: 96px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 6px;
+}
+
+.preview-item-icon-fallback img {
+  width: 44px;
+  height: 44px;
+  object-fit: contain;
 }

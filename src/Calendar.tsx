@@ -82,9 +82,15 @@ function CalendarWindow() {
 
   useEffect(() => {
     appWindow.setEffects({ effects: [Effect.Acrylic], state: EffectState.Active, color: [10, 10, 15, 20] }).catch(() => {});
+    const showTimer = setTimeout(() => {
+      appWindow.show().then(() => appWindow.setFocus()).catch(() => {});
+    }, 40);
     const preventContext = (e: MouseEvent) => e.preventDefault();
     document.addEventListener("contextmenu", preventContext);
-    return () => document.removeEventListener("contextmenu", preventContext);
+    return () => {
+      clearTimeout(showTimer);
+      document.removeEventListener("contextmenu", preventContext);
+    };
   }, []);
 
   const time = (ms: number) => new Date(ms).toLocaleTimeString(dateLocale(), { hour: "numeric", minute: "2-digit", hour12 });
@@ -160,7 +166,7 @@ function CalendarWindow() {
         <span className="cw-title-text" data-tauri-drag-region>
           {t("calendar.title")}
         </span>
-        <WindowControls />
+        <WindowControls onClose={() => invoke("close_calendar_window").catch(() => {})} />
       </div>
 
       <div className="cw-body">

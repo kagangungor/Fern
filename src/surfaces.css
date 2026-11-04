@@ -1,0 +1,229 @@
+/* Surface styles from Settings > Appearance > Style, applied as a class on <html> by theme.ts.
+   The notch, dock and overlays sit in transparent windows, so CSS cannot blur what is behind them.
+   The glass styles draw a blurred copy of the wallpaper (backdrop.ts) behind the notch and dock
+   instead, and a haze, grain and sheen over the theme fill everywhere else (overlays, or a solid
+   color wallpaper).
+
+   Each surface is painted by SurfaceShape.tsx: one silhouette path, flares included, that clips a
+   single fill layer (.surface-fill) and is stroked as the outline (.edge-outline). The flares are
+   part of that shape, so they always get the same glass, texture and outline as the body. Solid
+   and Material keep a plain fill and the older flare pieces; they only use the outline. */
+
+:root {
+    --surface-grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.65' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0.035 0 0 0 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+.surface-fill {
+    display: none;
+    position: absolute;
+    z-index: -1;
+    pointer-events: none;
+    background-repeat: no-repeat;
+    image-rendering: auto;
+}
+
+.edge-outline {
+    display: none;
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    overflow: visible;
+    pointer-events: none;
+    z-index: 3;
+}
+
+.edge-outline path {
+    fill: none;
+    stroke: var(--surface-outline, rgba(255, 255, 255, 0.22));
+    stroke-width: 1;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+
+:root.light-mode {
+    --surface-outline: rgba(0, 0, 0, 0.14);
+}
+
+:root.style-material {
+    --surface-outline: var(--fern-border, rgba(255, 255, 255, 0.16));
+}
+
+:root:is(.style-frosted, .style-liquid, .style-material, .light-mode) .edge-outline {
+    display: block;
+}
+
+/* Material and light mode: plain fill, the outline replaces any rim or shadow */
+:root:is(.style-material, .light-mode) :is(.fern, .dock, .volume-notch, .brightness-notch) {
+    box-shadow: none !important;
+}
+
+/* The volume and brightness panels always take their outline from the shape (the old border and
+   the ring drawn on their flares tapered off at the corners), in every style */
+.volume-notch-wrapper > .edge-outline,
+.brightness-notch-wrapper > .edge-outline {
+    display: block;
+}
+
+.volume-notch-wrapper,
+.brightness-notch-wrapper {
+    --surface-outline: var(--fern-border, rgba(255, 255, 255, 0.12));
+}
+
+.volume-notch,
+.brightness-notch {
+    border-color: transparent !important;
+}
+
+.volume-notch-flares::before,
+.volume-notch-flares::after,
+.brightness-notch::before,
+.brightness-notch::after {
+    background: var(--fern-bg, rgba(0, 0, 0, 0.8)) !important;
+}
+
+/* ── Glass: the fill layer carries everything, the surface itself is clear ── */
+
+:root:is(.style-frosted, .style-liquid) :is(.fern, .dock, .volume-notch, .brightness-notch) {
+    isolation: isolate;
+    background: transparent !important;
+    background-image: none !important;
+    box-shadow: none !important;
+    border-color: transparent !important;
+}
+
+:root:is(.style-frosted, .style-liquid) :is(.fern, .dock)::before,
+:root:is(.style-frosted, .style-liquid) :is(.fern, .dock)::after,
+:root:is(.style-frosted, .style-liquid) .brightness-notch::before,
+:root:is(.style-frosted, .style-liquid) .brightness-notch::after,
+:root:is(.style-frosted, .style-liquid) .volume-notch-flares {
+    display: none !important;
+}
+
+:root:is(.style-frosted, .style-liquid) .surface-fill {
+    display: block;
+    background-color: var(--surface-color, var(--fern-bg, rgba(0, 0, 0, 0.8)));
+}
+
+.fern > .surface-fill {
+    --surface-color: var(--notch-bg, var(--fern-bg, rgba(0, 0, 0, 0.8)));
+    --backdrop-y: var(--backdrop-top);
+}
+
+.dock > .surface-fill {
+    --backdrop-y: var(--backdrop-bottom);
+}
+
+/* Frosted: milky haze and fine grain */
+:root.style-frosted .surface-fill {
+    background-image: var(--surface-grain), linear-gradient(180deg, rgba(255, 255, 255, 0.17), rgba(255, 255, 255, 0.1));
+    background-repeat: repeat, no-repeat;
+}
+
+:root.style-frosted.light-mode .surface-fill {
+    background-image: var(--surface-grain), linear-gradient(180deg, rgba(255, 255, 255, 0.45), rgba(255, 255, 255, 0.22));
+}
+
+/* Liquid: clear body, sheen and depth. The notch hangs from the top edge and the dock sits on the
+   bottom edge, so each catches the light on the side facing away from the screen. */
+:root.style-liquid .surface-fill {
+    background-image:
+        radial-gradient(120% 140% at 50% 115%, rgba(255, 255, 255, 0.16), rgba(255, 255, 255, 0) 55%),
+        linear-gradient(180deg, rgba(255, 255, 255, 0.1), rgba(255, 255, 255, 0) 45%);
+}
+
+:root.style-liquid .fern > .surface-fill {
+    background-image:
+        linear-gradient(0deg, rgba(255, 255, 255, 0.12), rgba(255, 255, 255, 0) 22px),
+        linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0) 40px);
+}
+
+:root.style-liquid .dock > .surface-fill {
+    background-image:
+        radial-gradient(120% 140% at 50% -15%, rgba(255, 255, 255, 0.18), rgba(255, 255, 255, 0) 55%),
+        linear-gradient(0deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0) 45%);
+}
+
+/* ── Wallpaper backdrop (Frosted and Liquid on the notch and dock) ──
+   backdrop.ts loads a pre-blurred copy of the wallpaper and sets --backdrop-*; it is drawn inside
+   the fill layer, lined up with the screen, so the glass shows what is actually behind it. The
+   x position is relative to the centre, so the flares leave it unchanged. */
+
+:root.has-backdrop:is(.style-frosted, .style-liquid) :is(.fern, .dock) {
+    --glass-tint: color-mix(in srgb, var(--notch-bg, var(--fern-bg, rgba(0, 0, 0, 0.8))) 62%, transparent);
+}
+
+:root.has-backdrop:is(.style-frosted, .style-liquid) .dock {
+    --glass-tint: color-mix(in srgb, var(--fern-bg, rgba(0, 0, 0, 0.8)) 62%, transparent);
+}
+
+:root.has-backdrop:is(.style-frosted, .style-liquid) :is(.fern, .dock) > .surface-fill {
+    background-color: transparent;
+    background-size: auto, auto, auto, var(--backdrop-size);
+    background-repeat: repeat, no-repeat, no-repeat, no-repeat;
+    background-position: 0 0, 0 0, 0 0, var(--backdrop-x) var(--backdrop-y);
+}
+
+:root.has-backdrop.style-frosted :is(.fern, .dock) > .surface-fill {
+    background-image:
+        var(--surface-grain),
+        linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.03)),
+        linear-gradient(var(--glass-tint), var(--glass-tint)),
+        var(--backdrop-image);
+}
+
+:root.has-backdrop.style-frosted.light-mode :is(.fern, .dock) > .surface-fill {
+    background-image:
+        var(--surface-grain),
+        linear-gradient(180deg, rgba(255, 255, 255, 0.25), rgba(255, 255, 255, 0.12)),
+        linear-gradient(var(--glass-tint), var(--glass-tint)),
+        var(--backdrop-image);
+}
+
+:root.has-backdrop.style-liquid .fern > .surface-fill {
+    background-image:
+        linear-gradient(0deg, rgba(255, 255, 255, 0.14), rgba(255, 255, 255, 0) 22px),
+        linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0) 40px),
+        linear-gradient(var(--glass-tint), var(--glass-tint)),
+        var(--backdrop-image);
+}
+
+:root.has-backdrop.style-liquid .dock > .surface-fill {
+    background-image:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.14), rgba(255, 255, 255, 0) 22px),
+        linear-gradient(0deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0) 30px),
+        linear-gradient(var(--glass-tint), var(--glass-tint)),
+        var(--backdrop-image);
+}
+
+/* The album glow fades into the glass instead of into a solid dark edge */
+:root:is(.style-frosted, .style-liquid) .notch-ambient-glow {
+    -webkit-mask-image: radial-gradient(ellipse at center, #000 25%, rgba(0, 0, 0, 0) 85%);
+    mask-image: radial-gradient(ellipse at center, #000 25%, rgba(0, 0, 0, 0) 85%);
+}
+
+:root:is(.style-frosted, .style-liquid) .notch-ambient-glow::after {
+    display: none;
+}
+
+:root:is(.style-frosted, .style-liquid) .notch-ambient-glow img {
+    opacity: 0.55;
+}
+
+/* ── Light mode polish ──
+   Light surfaces get their edge from the outline above, dock tiles get a real fill, and the album
+   glow is toned down so it tints the panel instead of flooding it. */
+
+.light-mode .dock-icon {
+    background: rgba(0, 0, 0, 0.055);
+    border-color: rgba(0, 0, 0, 0.08);
+}
+
+.light-mode .notch-ambient-glow img {
+    filter: blur(52px) saturate(1.7) brightness(1.08);
+    opacity: 0.5;
+}
+
+.light-mode .notch-ambient-glow::after {
+    background: radial-gradient(ellipse at center, transparent 25%, rgba(255, 255, 255, 0.3) 55%, var(--notch-bg, var(--fern-bg)) 88%);
+}

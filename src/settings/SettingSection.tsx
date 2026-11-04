@@ -33,7 +33,7 @@ export function SettingSection({ id, title, defaultOpen = false, children }: Pro
         <span>{title}</span>
         <ChevronDown size={14} strokeWidth={1.75} className="setting-section-chevron" />
       </button>
-      {open && <div className="setting-group">{children}</div>}
+      {open && <div className="setting-group setting-group--menu">{children}</div>}
     </div>
   );
 }

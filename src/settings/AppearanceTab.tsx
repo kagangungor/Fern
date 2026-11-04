@@ -1,10 +1,13 @@
-import { Palette, Droplet, Contrast, Droplets, Sun, Square, Maximize2 } from "lucide-react";
+import { Palette, Droplet, Contrast, Droplets, Sun, Square, Maximize2, Layers } from "lucide-react";
 import { SettingRow } from "./SettingRow";
 import { SettingSection } from "./SettingSection";
 import { Dropdown } from "./Dropdown";
 import { useT } from "../i18n";
+import { THEME_STYLES } from "../theme";
 
 interface AppearanceTabProps {
+  themeStyle: string;
+  handleThemeStyleChange: (style: string) => void;
   themeMode: string;
   handleThemeModeChange: (mode: string) => void;
   themeColor: string;
@@ -19,9 +22,13 @@ interface AppearanceTabProps {
   toggleCorners: () => void;
   scale: number;
   handleScaleChange: (val: number) => void;
+  glassWallpaperEnabled: boolean;
+  toggleGlassWallpaper: () => void;
 }
 
 export function AppearanceTab({
+  themeStyle,
+  handleThemeStyleChange,
   themeMode,
   handleThemeModeChange,
   themeColor,
@@ -36,14 +43,49 @@ export function AppearanceTab({
   toggleCorners,
   scale,
   handleScaleChange,
+  glassWallpaperEnabled,
+  toggleGlassWallpaper,
 }: AppearanceTabProps) {
   const t = useT();
   const showCustomColor = themeMode === "custom";
-  const showAdvancedSliders = themeMode === "custom" || themeMode === "adaptive";
+  // Material You builds the whole palette from one color, so these don't apply there.
+  const isMaterial = themeStyle === "material";
+  const showAdvancedSliders = !isMaterial && (themeMode === "custom" || themeMode === "adaptive");
 
   return (
     <>
       <SettingSection id="appearance-theme" title={t("appearance.theme.group")} defaultOpen>
+        <SettingRow icon={Layers} label={t("appearance.style")} desc={t("appearance.style.desc")} divider={false} />
+        <div className="style-tiles" role="radiogroup" aria-label={t("appearance.style")}>
+          {THEME_STYLES.map((style) => (
+            <button
+              key={style}
+              type="button"
+              role="radio"
+              aria-checked={themeStyle === style}
+              className={`style-tile${themeStyle === style ? " active" : ""}`}
+              onClick={() => handleThemeStyleChange(style)}
+            >
+              <span className={`style-tile-preview style-preview-${style}`}>
+                <span className="style-tile-pill">
+                  <i />
+                  <i />
+                </span>
+              </span>
+              <span className="style-tile-label">{t(`appearance.style.${style}`)}</span>
+            </button>
+          ))}
+        </div>
+
+        {(themeStyle === "frosted" || themeStyle === "liquid") && (
+          <SettingRow icon={Layers} label={t("appearance.glassWallpaper")} desc={t("appearance.glassWallpaper.desc")}>
+            <label className="toggle-switch">
+              <input type="checkbox" checked={glassWallpaperEnabled} onChange={toggleGlassWallpaper} />
+              <span className="slider"></span>
+            </label>
+          </SettingRow>
+        )}
+
         <SettingRow icon={Palette} label={t("appearance.mode")} desc={t("appearance.mode.desc")}>
           <Dropdown
             value={themeMode}

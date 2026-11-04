@@ -1,4 +1,4 @@
-import { Power, Download, Clock, History, BatteryWarning, RefreshCw, LogOut, Languages } from "lucide-react";
+import { Power, Download, Clock, BatteryWarning, RefreshCw, LogOut, Languages, MemoryStick } from "lucide-react";
 import { SettingRow } from "./SettingRow";
 import { SettingSection } from "./SettingSection";
 import { Dropdown } from "./Dropdown";
@@ -9,8 +9,8 @@ interface GeneralTabProps {
   toggleAutostart: () => void;
   timeFormat24h: boolean;
   toggleTimeFormat24h: () => void;
-  legacyMode: boolean;
-  toggleLegacyMode: () => void;
+  memorySaver: boolean;
+  toggleMemorySaver: () => void;
   showUpdateIndicator: boolean;
   toggleUpdateIndicator: () => void;
   lowBatteryThreshold: number;
@@ -25,8 +25,8 @@ export function GeneralTab({
   toggleAutostart,
   timeFormat24h,
   toggleTimeFormat24h,
-  legacyMode,
-  toggleLegacyMode,
+  memorySaver,
+  toggleMemorySaver,
   showUpdateIndicator,
   toggleUpdateIndicator,
   lowBatteryThreshold,
@@ -69,13 +69,13 @@ export function GeneralTab({
         </SettingRow>
 
         <SettingRow
-          icon={History}
-          label={t("general.legacyMode")}
-          desc={t("general.legacyMode.desc")}
+          icon={MemoryStick}
+          label={t("general.memorySaver")}
+          desc={t("general.memorySaver.desc")}
           divider={hasBattery}
         >
           <label className="toggle-switch">
-            <input type="checkbox" checked={legacyMode} onChange={toggleLegacyMode} />
+            <input type="checkbox" checked={memorySaver} onChange={toggleMemorySaver} />
             <span className="slider"></span>
           </label>
         </SettingRow>

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import type { ChangeEvent, CSSProperties } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Monitor, Eye, EyeOff, Circle, Search, Shuffle, MonitorCheck, CalendarDays, Maximize2, Keyboard, Sparkles, RotateCcw, LayoutGrid, Trash2, HardDrive, ChevronUp } from "lucide-react";
+import { Monitor, Eye, EyeOff, Circle, Search, Shuffle, MonitorCheck, CalendarDays, Maximize2, Keyboard, Sparkles, RotateCcw, LayoutGrid, Trash2, HardDrive, ChevronUp, Clock, BellRing } from "lucide-react";
 import { SettingRow } from "./SettingRow";
 import { SettingSection } from "./SettingSection";
 import { Dropdown } from "./Dropdown";
@@ -44,9 +44,10 @@ interface DockTabProps {
   toggleDockPreview: () => void;
   dockSearchEnabled: boolean;
   toggleDockSearch: () => void;
+  dockSearchLauncher: string;
+  setDockSearchLauncherValue: (val: string) => void;
   dockCalendarEnabled: boolean;
   toggleDockCalendar: () => void;
-  legacyMode: boolean;
   dockTray: boolean;
   toggleDockTray: () => void;
   dockTaskView: boolean;
@@ -67,6 +68,10 @@ interface DockTabProps {
   toggleDockWinNumber: () => void;
   dockMixedReorder: boolean;
   toggleDockMixedReorder: () => void;
+  dockAttentionEnabled: boolean;
+  toggleDockAttention: () => void;
+  dockHideDelay: string;
+  handleDockHideDelayChange: (delay: string) => void;
   monitors: MonitorInfo[];
   dockMonitorMode: MonitorMode;
   setDockMonitorModeValue: (mode: MonitorMode) => void;
@@ -86,9 +91,10 @@ export function DockTab({
   toggleDockPreview,
   dockSearchEnabled,
   toggleDockSearch,
+  dockSearchLauncher,
+  setDockSearchLauncherValue,
   dockCalendarEnabled,
   toggleDockCalendar,
-  legacyMode,
   dockTray,
   toggleDockTray,
   dockTaskView,
@@ -109,6 +115,10 @@ export function DockTab({
   toggleDockWinNumber,
   dockMixedReorder,
   toggleDockMixedReorder,
+  dockAttentionEnabled,
+  toggleDockAttention,
+  dockHideDelay,
+  handleDockHideDelayChange,
   monitors,
   dockMonitorMode,
   setDockMonitorModeValue,
@@ -164,6 +174,22 @@ export function DockTab({
                     { value: "fixed", label: t("common.fixed") },
                     { value: "smart", label: t("common.smart") },
                     { value: "peek", label: t("common.peek") },
+                  ]}
+                />
+              </SettingRow>
+            )}
+
+            {!showPerMonitor && (dockMode === "smart" || dockMode === "peek") && (
+              <SettingRow icon={Clock} label={t("dock.hideDelay")} desc={t("dock.hideDelay.desc")}>
+                <Dropdown
+                  value={dockHideDelay}
+                  onChange={handleDockHideDelayChange}
+                  options={[
+                    { value: "300", label: "300 ms" },
+                    { value: "500", label: "500 ms" },
+                    { value: "800", label: "800 ms" },
+                    { value: "1200", label: "1200 ms" },
+                    { value: "2000", label: "2000 ms" },
                   ]}
                 />
               </SettingRow>
@@ -225,6 +251,13 @@ export function DockTab({
       {dockEnabled && (
         <>
           <SettingSection id="dock-shortcuts" title={t("dock.section.shortcuts")}>
+            <SettingRow icon={BellRing} label={t("dock.attentionDots")} desc={t("dock.attentionDots.desc")}>
+              <label className="toggle-switch">
+                <input type="checkbox" checked={dockAttentionEnabled} onChange={toggleDockAttention} />
+                <span className="slider"></span>
+              </label>
+            </SettingRow>
+
             <SettingRow icon={Eye} label={t("dock.previews")} desc={t("dock.previews.desc")}>
               <label className="toggle-switch">
                 <input type="checkbox" checked={dockPreviewEnabled} onChange={toggleDockPreview} />
@@ -239,6 +272,23 @@ export function DockTab({
               </label>
             </SettingRow>
 
+            {dockSearchEnabled && (
+              <SettingRow icon={Search} label={t("dock.searchLauncher")} desc={t("dock.searchLauncher.desc")}>
+                <Dropdown
+                  value={dockSearchLauncher}
+                  onChange={setDockSearchLauncherValue}
+                  options={[
+                    { value: "windows", label: "Windows (Win + S)" },
+                    { value: "powertoys", label: "PowerToys Run (Alt + Boşluk)" },
+                    { value: "raycast", label: "Raycast (Alt + Boşluk)" },
+                    { value: "flow", label: "Flow Launcher (Alt + Boşluk)" },
+                    { value: "everything", label: "Everything" },
+                    { value: "listary", label: "Listary" },
+                  ]}
+                />
+              </SettingRow>
+            )}
+
             <SettingRow icon={CalendarDays} label={t("dock.calendar")} desc={t("dock.calendar.desc")}>
               <label className="toggle-switch">
                 <input type="checkbox" checked={dockCalendarEnabled} onChange={toggleDockCalendar} />
@@ -246,51 +296,47 @@ export function DockTab({
               </label>
             </SettingRow>
 
-            {!legacyMode && (
-              <>
-                <SettingRow icon={ChevronUp} label={t("dock.tray")} desc={t("dock.tray.desc")}>
-                  <label className="toggle-switch">
-                    <input type="checkbox" checked={dockTray} onChange={toggleDockTray} />
-                    <span className="slider"></span>
-                  </label>
-                </SettingRow>
+            <SettingRow icon={ChevronUp} label={t("dock.tray")} desc={t("dock.tray.desc")}>
+              <label className="toggle-switch">
+                <input type="checkbox" checked={dockTray} onChange={toggleDockTray} />
+                <span className="slider"></span>
+              </label>
+            </SettingRow>
 
-                <SettingRow icon={LayoutGrid} label={t("dock.taskView")} desc={t("dock.taskView.desc")}>
-                  <label className="toggle-switch">
-                    <input type="checkbox" checked={dockTaskView} onChange={toggleDockTaskView} />
-                    <span className="slider"></span>
-                  </label>
-                </SettingRow>
+            <SettingRow icon={LayoutGrid} label={t("dock.taskView")} desc={t("dock.taskView.desc")}>
+              <label className="toggle-switch">
+                <input type="checkbox" checked={dockTaskView} onChange={toggleDockTaskView} />
+                <span className="slider"></span>
+              </label>
+            </SettingRow>
 
-                <SettingRow icon={Monitor} label={t("dock.showDesktop")} desc={t("dock.showDesktop.desc")}>
-                  <label className="toggle-switch">
-                    <input type="checkbox" checked={dockShowDesktop} onChange={toggleDockShowDesktop} />
-                    <span className="slider"></span>
-                  </label>
-                </SettingRow>
+            <SettingRow icon={Monitor} label={t("dock.showDesktop")} desc={t("dock.showDesktop.desc")}>
+              <label className="toggle-switch">
+                <input type="checkbox" checked={dockShowDesktop} onChange={toggleDockShowDesktop} />
+                <span className="slider"></span>
+              </label>
+            </SettingRow>
 
-                <SettingRow icon={Trash2} label={t("dock.recycleBin")} desc={t("dock.recycleBin.desc")}>
-                  <label className="toggle-switch">
-                    <input type="checkbox" checked={dockRecycle} onChange={toggleDockRecycle} />
-                    <span className="slider"></span>
-                  </label>
-                </SettingRow>
+            <SettingRow icon={Trash2} label={t("dock.recycleBin")} desc={t("dock.recycleBin.desc")}>
+              <label className="toggle-switch">
+                <input type="checkbox" checked={dockRecycle} onChange={toggleDockRecycle} />
+                <span className="slider"></span>
+              </label>
+            </SettingRow>
 
-                {drives.map((d) => (
-                  <SettingRow
-                    key={d.letter}
-                    icon={HardDrive}
-                    label={t("dock.drive", { letter: d.letter })}
-                    desc={d.label ? `${d.label}${d.removable ? ` (${t("dock.drive.removableSuffix")})` : ""}` : d.removable ? t("dock.drive.removable") : t("dock.drive.local")}
-                  >
-                    <label className="toggle-switch">
-                      <input type="checkbox" checked={dockDrives.includes(d.letter)} onChange={() => toggleDockDrive(d.letter)} />
-                      <span className="slider"></span>
-                    </label>
-                  </SettingRow>
-                ))}
-              </>
-            )}
+            {drives.map((d) => (
+              <SettingRow
+                key={d.letter}
+                icon={HardDrive}
+                label={t("dock.drive", { letter: d.letter })}
+                desc={d.label ? `${d.label}${d.removable ? ` (${t("dock.drive.removableSuffix")})` : ""}` : d.removable ? t("dock.drive.removable") : t("dock.drive.local")}
+              >
+                <label className="toggle-switch">
+                  <input type="checkbox" checked={dockDrives.includes(d.letter)} onChange={() => toggleDockDrive(d.letter)} />
+                  <span className="slider"></span>
+                </label>
+              </SettingRow>
+            ))}
 
           </SettingSection>
 
