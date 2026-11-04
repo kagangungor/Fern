@@ -38,8 +38,8 @@
         "create": false,
         "title": "Settings",
         "url": "settings.html",
-        "width": 760,
-        "height": 620,
+        "width": 620,
+        "height": 480,
         "minWidth": 620,
         "minHeight": 480,
         "decorations": false,
@@ -58,6 +58,7 @@
       },
       {
         "label": "calendar",
+        "create": false,
         "title": "Calendar",
         "url": "calendar.html",
         "width": 880,

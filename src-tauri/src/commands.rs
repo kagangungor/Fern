@@ -69,6 +69,8 @@ pub async fn update_dock_rect(window: Window, rect: IntRect) {
     if let Ok(mut m) = crate::state::dock_rects().lock() {
         m.insert(window.label().to_string(), rect);
     }
+    // A preview closing under a still cursor changes what the cursor is over.
+    crate::services::request_cursor_recheck();
 }
 
 #[tauri::command]
@@ -92,12 +94,15 @@ pub fn set_window_height(window: Window, height: f64) {
 pub fn resize_settings_window(app: AppHandle, width: f64, height: f64) {
     if let Some(win) = app.get_webview_window("settings") {
         let _ = win.set_size(tauri::LogicalSize::new(width, height));
+        let _ = win.center();
     }
 }
 
 #[tauri::command]
 pub fn set_ignore_cursor_events(window: Window, ignore: bool) {
-    let _ = window.set_ignore_cursor_events(ignore);
+    if let Ok(hwnd) = window.hwnd() {
+        crate::utils::set_click_through(hwnd, ignore);
+    }
 }
 
 #[tauri::command]
@@ -460,19 +465,29 @@ fn send_key_tap(vk: windows::Win32::UI::Input::KeyboardAndMouse::VIRTUAL_KEY, ho
     }
 }
 
-/// True while the native Start menu has focus (StartMenuExperienceHost, or SearchHost on 24H2+).
+/// Start is hosted by StartMenuExperienceHost, or SearchHost on 24H2+. Search by SearchHost, or
+/// SearchApp/SearchUI on older builds. Window titles are localized, so the executable decides.
+fn is_start_menu_exe(path: &str) -> bool {
+    let file = path.rsplit(['\\', '/']).next().unwrap_or("").to_lowercase();
+    matches!(file.as_str(), "startmenuexperiencehost.exe" | "searchhost.exe" | "searchapp.exe" | "searchui.exe")
+}
+
+/// True while the native Start menu or Search has focus.
 fn is_start_menu_open() -> bool {
+    is_start_menu_window(unsafe { windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow() })
+}
+
+pub(crate) fn is_start_menu_window(window: HWND) -> bool {
     use windows::Win32::Foundation::CloseHandle;
     use windows::Win32::System::Threading::{OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION};
-    use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowThreadProcessId};
+    use windows::Win32::UI::WindowsAndMessaging::GetWindowThreadProcessId;
 
     unsafe {
-        let fg = GetForegroundWindow();
-        if fg.0.is_null() {
+        if window.0.is_null() {
             return false;
         }
         let mut pid = 0u32;
-        GetWindowThreadProcessId(fg, Some(&mut pid));
+        GetWindowThreadProcessId(window, Some(&mut pid));
         if pid == 0 {
             return false;
         }
@@ -482,12 +497,39 @@ fn is_start_menu_open() -> bool {
             let ok = QueryFullProcessImageNameW(process, PROCESS_NAME_WIN32, windows::core::PWSTR(buf.as_mut_ptr()), &mut len);
             let _ = CloseHandle(process);
             if ok.is_ok() {
-                let path = String::from_utf16_lossy(&buf[..len as usize]);
-                let file = path.rsplit('\\').next().unwrap_or("").to_lowercase();
-                return file == "startmenuexperiencehost.exe" || file == "searchhost.exe";
+                return is_start_menu_exe(&String::from_utf16_lossy(&buf[..len as usize]));
             }
         }
         false
+    }
+}
+
+#[cfg(test)]
+mod close_window_tests {
+    use super::process_outranks_us;
+
+    #[test]
+    fn our_own_process_does_not_outrank_us() {
+        assert!(!process_outranks_us(std::process::id()));
+    }
+
+    #[test]
+    fn a_process_that_cannot_be_opened_is_not_treated_as_elevated() {
+        assert!(!process_outranks_us(0));
+    }
+}
+
+#[cfg(test)]
+mod start_menu_tests {
+    use super::is_start_menu_exe;
+
+    #[test]
+    fn recognizes_start_and_search_hosts_by_executable() {
+        assert!(is_start_menu_exe(r"C:\Windows\SystemApps\Microsoft.Windows.StartMenuExperienceHost_cw5n1h2txyewy\StartMenuExperienceHost.exe"));
+        assert!(is_start_menu_exe(r"C:\Windows\SystemApps\MicrosoftWindows.Client.CBS_cw5n1h2txyewy\SearchHost.exe"));
+        assert!(is_start_menu_exe(r"C:\Windows\SystemApps\Microsoft.Windows.Search_cw5n1h2txyewy\SearchApp.exe"));
+        assert!(!is_start_menu_exe(r"C:\Windows\explorer.exe"));
+        assert!(!is_start_menu_exe(r"C:\Windows\System32\Taskmgr.exe"));
     }
 }
 
@@ -504,10 +546,23 @@ fn toggle_start_menu() {
         use windows::Win32::UI::Input::KeyboardAndMouse::{VK_ESCAPE, VK_LWIN};
         if is_start_menu_open() {
             send_key_tap(VK_ESCAPE, 0);
-        } else {
+        } else if !ask_explorer_to_open_start() {
             send_key_tap(VK_LWIN, START_WIN_KEY_HOLD_MS);
         }
     });
+}
+
+/// SendInput is silently dropped while an elevated app owns the foreground (Task Manager), so the
+/// Start button asks Explorer directly instead.
+fn ask_explorer_to_open_start() -> bool {
+    use windows::Win32::Foundation::{LPARAM, WPARAM};
+    use windows::Win32::UI::WindowsAndMessaging::{FindWindowW, PostMessageW, SC_TASKLIST, WM_SYSCOMMAND};
+    unsafe {
+        let Ok(tray) = FindWindowW(windows::core::w!("Shell_TrayWnd"), None) else {
+            return false;
+        };
+        PostMessageW(Some(tray), WM_SYSCOMMAND, WPARAM(SC_TASKLIST as usize), LPARAM(0)).is_ok()
+    }
 }
 
 pub fn send_win_chord(key: windows::Win32::UI::Input::KeyboardAndMouse::VIRTUAL_KEY) {
@@ -574,7 +629,8 @@ pub async fn open_app(app: AppHandle, app_name: String, args: Option<String>) {
     }
 
     if app_name == "search" {
-        tauri::async_runtime::spawn_blocking(|| send_win_chord(windows::Win32::UI::Input::KeyboardAndMouse::VK_S));
+        let launcher = crate::utils::get_setting_str(&app, "fern-search-launcher");
+        tauri::async_runtime::spawn_blocking(move || crate::launchers::trigger_search_launcher(launcher));
         return;
     }
 
@@ -607,7 +663,7 @@ pub async fn open_app(app: AppHandle, app_name: String, args: Option<String>) {
     }
 
     if app_name == "fern-settings" {
-        crate::settings_window::open(&app);
+        crate::on_demand_windows::open(&app, crate::on_demand_windows::SETTINGS);
         return;
     }
 
@@ -1966,6 +2022,9 @@ pub fn hide_native_osd() {
 
 pub(crate) fn bring_window_to_front(app: &AppHandle, label: &str) {
     if let Some(win) = app.get_webview_window(label) {
+        if label == "settings" || label == "calendar" {
+            let _ = win.center();
+        }
         let _ = win.show();
         let _ = win.unminimize();
         let _ = win.set_focus();
@@ -1983,25 +2042,31 @@ pub(crate) fn bring_window_to_front(app: &AppHandle, label: &str) {
 #[tauri::command]
 pub fn open_settings_window(app: AppHandle, page: Option<String>) {
     match page {
-        Some(page) => crate::settings_window::open_page(&app, page),
-        None => crate::settings_window::open(&app),
+        Some(page) => crate::on_demand_windows::open_settings_page(&app, page),
+        None => crate::on_demand_windows::open(&app, crate::on_demand_windows::SETTINGS),
     }
 }
 
 // Async so it runs off the main thread: this destroys the webview that is making the call.
 #[tauri::command]
 pub async fn close_settings_window(app: AppHandle) {
-    crate::settings_window::close(&app);
+    crate::on_demand_windows::close(&app, crate::on_demand_windows::SETTINGS);
 }
 
 #[tauri::command]
 pub fn take_settings_page() -> Option<String> {
-    crate::settings_window::take_page()
+    crate::on_demand_windows::take_settings_page()
 }
 
 #[tauri::command]
 pub fn open_calendar_window(app: AppHandle) {
-    bring_window_to_front(&app, "calendar");
+    crate::on_demand_windows::open(&app, crate::on_demand_windows::CALENDAR);
+}
+
+// Async for the same reason as close_settings_window.
+#[tauri::command]
+pub async fn close_calendar_window(app: AppHandle) {
+    crate::on_demand_windows::close(&app, crate::on_demand_windows::CALENDAR);
 }
 
 #[tauri::command]
@@ -2702,7 +2767,7 @@ pub fn relaunch_fern(handle: &AppHandle) {
     SHUTTING_DOWN.store(true, Ordering::Relaxed);
     if let Some(w) = handle.get_webview_window("main") { if let Ok(hwnd) = w.hwnd() { unregister_appbar_native(hwnd); } }
     if let Some(w) = handle.get_webview_window("dock") { if let Ok(hwnd) = w.hwnd() { unregister_appbar_native(hwnd); } }
-    if let Some(w) = handle.get_webview_window("settings") { let _ = w.destroy(); }
+    crate::on_demand_windows::close_all(handle);
     std::env::set_var("FERN_RESTARTING", "1");
     close_single_instance_handles();
     handle.restart();
@@ -2826,13 +2891,61 @@ pub async fn end_task(hwnd: isize, all_hwnds: Option<Vec<isize>>) {
     }).await.unwrap_or_default();
 }
 
+/// Whether a process runs with more rights than ours. Windows lets anyone open an elevated process
+/// for basic queries but refuses to show its token, so that refusal is the answer.
+fn process_outranks_us(pid: u32) -> bool {
+    use windows::Win32::Foundation::{CloseHandle, ERROR_ACCESS_DENIED, HANDLE};
+    use windows::Win32::Security::TOKEN_QUERY;
+    use windows::Win32::System::Threading::{OpenProcess, OpenProcessToken, PROCESS_QUERY_LIMITED_INFORMATION};
+    unsafe {
+        let Ok(process) = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) else {
+            return false;
+        };
+        let mut token = HANDLE::default();
+        let result = OpenProcessToken(process, TOKEN_QUERY, &mut token);
+        let _ = CloseHandle(process);
+        match result {
+            Ok(()) => {
+                let _ = CloseHandle(token);
+                false
+            }
+            Err(e) => e.code() == windows::core::HRESULT::from_win32(ERROR_ACCESS_DENIED.0),
+        }
+    }
+}
+
+/// Asks the window to close. Returns false if it is still open because Windows wouldn't let us ask:
+/// an elevated window (Task Manager) doesn't take WM_CLOSE from us. It's then brought to the front so
+/// the user can close it, rather than killing it and losing whatever it holds.
 #[tauri::command]
-pub async fn close_window(hwnd: isize) {
+pub async fn close_window(hwnd: isize) -> bool {
     tauri::async_runtime::spawn_blocking(move || unsafe {
-        use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_CLOSE};
+        use windows::Win32::Foundation::{LPARAM, WPARAM};
+        use windows::Win32::UI::WindowsAndMessaging::{GetWindowThreadProcessId, IsWindow, PostMessageW, WM_CLOSE};
+        #[link(name = "user32")]
+        extern "system" {
+            fn EndTask(hwnd: HWND, shutdown: windows::core::BOOL, force: windows::core::BOOL) -> windows::core::BOOL;
+        }
+
         let hwnd = HWND(hwnd as *mut _);
-        let _ = PostMessageW(Some(hwnd), WM_CLOSE, windows::Win32::Foundation::WPARAM(0), windows::Win32::Foundation::LPARAM(0));
-    }).await.unwrap_or_default();
+        let mut pid = 0u32;
+        GetWindowThreadProcessId(hwnd, Some(&mut pid));
+        let posted = PostMessageW(Some(hwnd), WM_CLOSE, WPARAM(0), LPARAM(0)).is_ok();
+        if posted && !process_outranks_us(pid) {
+            return true;
+        }
+
+        // Without force this only tries the same polite close, but through the system.
+        let _ = EndTask(hwnd, false.into(), false.into());
+        std::thread::sleep(std::time::Duration::from_millis(400));
+        if !IsWindow(Some(hwnd)).as_bool() {
+            crate::diagnostics::log(&format!("close window: pid {pid} closed through EndTask"));
+            return true;
+        }
+        crate::diagnostics::log(&format!("close window: pid {pid} refused, bringing it to the front"));
+        force_set_foreground(hwnd);
+        false
+    }).await.unwrap_or(true)
 }
 
 fn re_register_appbars(app: &AppHandle, settings: &HashMap<String, serde_json::Value>) {
@@ -2868,6 +2981,11 @@ pub fn save_setting(app: AppHandle, key: String, value: serde_json::Value) -> Re
     crate::utils::replace_settings_cache(settings.clone());
 
     let _ = app.emit("settings-changed", serde_json::json!({ "key": &key, "value": &settings[&key] }));
+
+    if key == "fern-agent-api" {
+        let on = matches!(settings[&key].as_str(), Some("true")) || settings[&key].as_bool() == Some(true);
+        std::thread::spawn(move || crate::agent_api::set_hooks(on));
+    }
 
     if key == "fern-scale" {
         re_register_appbars(&app, &settings);
@@ -2960,18 +3078,25 @@ pub async fn capture_window_thumbnail(hwnd: isize, max_width: u32, max_height: u
             }
         }
 
+        let cached_img = || {
+            crate::state::THUMBNAIL_CACHE.get()
+                .and_then(|cache| cache.lock().ok())
+                .and_then(|g| g.get(&hwnd_key).map(|(img, _)| img.clone()))
+        };
+
         if is_minimized {
             // Don't restore a minimized window to capture it, it flashes on screen. The hooks keep
             // thumbnails warm, so without one we just show no preview.
-            let cached_img = if let Some(cache) = crate::state::THUMBNAIL_CACHE.get() {
-                cache.lock().ok().and_then(|g| g.get(&hwnd_key).map(|(img, _)| img.clone()))
-            } else {
-                None
-            };
-            return cached_img.map(|img| (img, focus_time));
+            return cached_img().map(|img| (img, focus_time));
         }
 
         let result = crate::utils::capture_hwnd_to_base64(hwnd, max_width, max_height);
+
+        // An elevated window behind others can't be captured, the last time it was in front is
+        // the best there is.
+        if result.is_none() {
+            return cached_img().map(|img| (img, focus_time));
+        }
 
         if let Some(ref img) = result {
             if let Some(cache) = crate::state::THUMBNAIL_CACHE.get() {
@@ -4036,4 +4161,109 @@ pub fn pointer_over_notch(window: Window) -> bool {
     let top = win_pos.y;
     let bottom = win_pos.y + (r.height as f64 * scale) as i32;
     pt.x >= left && pt.x <= right && pt.y >= top && pt.y <= bottom
+}
+
+#[tauri::command]
+pub async fn focus_agent_window(window: u64) {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
+    use windows::Win32::UI::Input::KeyboardAndMouse::{keybd_event, KEYEVENTF_KEYUP, VK_MENU};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        BringWindowToTop, GetForegroundWindow, GetWindowThreadProcessId, IsIconic, IsWindow, SetForegroundWindow, ShowWindow, SW_RESTORE, SW_SHOW,
+    };
+    unsafe {
+        let hwnd = HWND(window as usize as *mut _);
+        if !IsWindow(Some(hwnd)).as_bool() {
+            return;
+        }
+        let _ = ShowWindow(hwnd, if IsIconic(hwnd).as_bool() { SW_RESTORE } else { SW_SHOW });
+        keybd_event(VK_MENU.0 as u8, 0, Default::default(), 0);
+        keybd_event(VK_MENU.0 as u8, 0, KEYEVENTF_KEYUP, 0);
+        let foreground = GetWindowThreadProcessId(GetForegroundWindow(), None);
+        let current = GetCurrentThreadId();
+        let attached = foreground != 0 && foreground != current && AttachThreadInput(current, foreground, true).as_bool();
+        let _ = BringWindowToTop(hwnd);
+        let _ = SetForegroundWindow(hwnd);
+        if attached {
+            let _ = AttachThreadInput(current, foreground, false);
+        }
+    }
+}
+
+#[tauri::command]
+pub fn agent_answer(id: u64, allow: bool) {
+    crate::agent_api::answer(id, allow);
+}
+
+const AGENT_SOUND_STATES: [&str; 3] = ["needs_input", "done", "error"];
+
+fn agent_sound_files(state: &str) -> Vec<std::path::PathBuf> {
+    let Some(dir) = crate::agent_api::data_dir().map(|d| d.join("sounds")) else { return Vec::new() };
+    let Ok(entries) = std::fs::read_dir(dir) else { return Vec::new() };
+    entries
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.file_stem().and_then(|s| s.to_str()) == Some(state))
+        .collect()
+}
+
+#[tauri::command]
+pub async fn pick_agent_sound(app: AppHandle, state: String) -> Result<bool, String> {
+    use tauri_plugin_dialog::DialogExt;
+    const MAX_SOUND_BYTES: u64 = 3 * 1024 * 1024;
+    if !AGENT_SOUND_STATES.contains(&state.as_str()) {
+        return Err("Unknown state".into());
+    }
+    let Some(path) = app
+        .dialog()
+        .file()
+        .set_title("Choose a sound")
+        .add_filter("Audio", &["mp3", "wav", "ogg", "m4a"])
+        .blocking_pick_file()
+    else {
+        return Ok(false);
+    };
+    let path = path.into_path().map_err(|e| e.to_string())?;
+    if std::fs::metadata(&path).map_err(|e| e.to_string())?.len() > MAX_SOUND_BYTES {
+        return Err("Sound is too large (maximum 3MB)".into());
+    }
+    let ext = path.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase).unwrap_or_default();
+    if !["mp3", "wav", "ogg", "m4a"].contains(&ext.as_str()) {
+        return Err("Unsupported file type".into());
+    }
+    let dir = crate::agent_api::data_dir().ok_or("No data folder")?.join("sounds");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    for old in agent_sound_files(&state) {
+        let _ = std::fs::remove_file(old);
+    }
+    std::fs::copy(&path, dir.join(format!("{state}.{ext}"))).map_err(|e| e.to_string())?;
+    let _ = app.emit("agent-sound-changed", ());
+    Ok(true)
+}
+
+#[tauri::command]
+pub async fn reset_agent_sound(app: AppHandle, state: String) {
+    for old in agent_sound_files(&state) {
+        let _ = std::fs::remove_file(old);
+    }
+    let _ = app.emit("agent-sound-changed", ());
+}
+
+#[tauri::command]
+pub async fn agent_sound_data(state: String) -> Option<String> {
+    use base64::Engine;
+    let path = agent_sound_files(&state).into_iter().next()?;
+    let mime = match path.extension()?.to_str()? {
+        "mp3" => "audio/mpeg",
+        "wav" => "audio/wav",
+        "ogg" => "audio/ogg",
+        "m4a" => "audio/mp4",
+        _ => return None,
+    };
+    let bytes = std::fs::read(path).ok()?;
+    Some(format!("data:{mime};base64,{}", base64::engine::general_purpose::STANDARD.encode(bytes)))
+}
+
+#[tauri::command]
+pub async fn agent_sound_custom() -> Vec<String> {
+    AGENT_SOUND_STATES.iter().filter(|s| !agent_sound_files(s).is_empty()).map(|s| s.to_string()).collect()
 }

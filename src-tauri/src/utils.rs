@@ -508,6 +508,37 @@ pub fn get_setting_str(_app: &tauri::AppHandle, key: &str) -> Option<String> {
     guard.get(key)?.as_str().map(|s| s.to_string())
 }
 
+/// Makes a window click-through or not by its WS_EX_TRANSPARENT bit alone, keeping WS_EX_LAYERED set
+/// in both states.
+///
+/// tao's `set_ignore_cursor_events` sets both bits when ignoring and clears both otherwise, and a
+/// window with a region (window_region.rs) that isn't layered paints its clear pixels opaque. So tao's
+/// call is only used once, on window creation: its flag then stays on, and if tao rewrites the extended
+/// style (it does on show and hide) the window ends up click-through and layered, which is the safe
+/// state, until the style guard restores the real one. Writes only when the style differs.
+pub fn set_click_through(hwnd: HWND, ignore: bool) {
+    use windows::Win32::UI::WindowsAndMessaging::{GetWindowLongPtrW, SetWindowLongPtrW, GWL_EXSTYLE};
+    unsafe {
+        let current = GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32;
+        let wanted = click_through_style(current, ignore);
+        if wanted != current {
+            SetWindowLongPtrW(hwnd, GWL_EXSTYLE, wanted as isize);
+        }
+    }
+}
+
+pub fn set_window_click_through(window: &tauri::WebviewWindow, ignore: bool) {
+    if let Ok(hwnd) = window.hwnd() {
+        set_click_through(hwnd, ignore);
+    }
+}
+
+fn click_through_style(style: u32, ignore: bool) -> u32 {
+    use windows::Win32::UI::WindowsAndMessaging::{WS_EX_LAYERED, WS_EX_TRANSPARENT};
+    let layered = style | WS_EX_LAYERED.0;
+    if ignore { layered | WS_EX_TRANSPARENT.0 } else { layered & !WS_EX_TRANSPARENT.0 }
+}
+
 /// Re-assert HWND_TOPMOST without activating the window.
 ///
 /// Tauri's `set_always_on_top(true)` calls `SetWindowPos(HWND_TOPMOST)` without
@@ -541,6 +572,26 @@ pub fn re_assert_topmost(hwnd: HWND) {
     }
 }
 
+fn mostly_painted(pixels: &[u8]) -> bool {
+    pixels.chunks_exact(4).step_by(7).filter(|c| c[0] != 0 || c[1] != 0 || c[2] != 0).count() * 50 > pixels.len() / 28
+}
+
+fn encode_thumbnail(mut pixels: Vec<u8>, width: u32, height: u32, max_width: u32, max_height: u32) -> Option<String> {
+    for chunk in pixels.chunks_exact_mut(4) {
+        chunk.swap(0, 2);
+        chunk[3] = 255;
+    }
+    let mut img = image::RgbaImage::from_raw(width, height, pixels)?;
+    if img.width() > max_width || img.height() > max_height {
+        let dyn_img = image::DynamicImage::ImageRgba8(img);
+        img = dyn_img.resize(max_width, max_height, image::imageops::FilterType::Triangle).into_rgba8();
+    }
+    let mut buf = std::io::Cursor::new(Vec::new());
+    image::write_buffer_with_format(&mut buf, &img, img.width(), img.height(), image::ColorType::Rgba8, image::ImageFormat::Png).ok()?;
+    use base64::Engine;
+    Some(format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(buf.into_inner())))
+}
+
 /// Captures an HWND to a base64-encoded PNG thumbnail, scaling it down if it exceeds max_width x max_height.
 pub fn capture_hwnd_to_base64(hwnd: HWND, max_width: u32, max_height: u32) -> Option<String> {
     unsafe {
@@ -555,6 +606,14 @@ pub fn capture_hwnd_to_base64(hwnd: HWND, max_width: u32, max_height: u32) -> Op
         extern "system" { pub fn PrintWindow(hwnd: HWND, hdcBlt: HDC, nFlags: u32) -> i32; }
 
         if !IsWindow(Some(hwnd)).as_bool() { return None; }
+
+        if let Some((pixels, w, h)) = crate::capture::capture_window_bgra(hwnd) {
+            if mostly_painted(&pixels) {
+                if let Some(png) = encode_thumbnail(pixels, w, h, max_width, max_height) {
+                    return Some(png);
+                }
+            }
+        }
 
         let mut rect = RECT::default();
         let _ = DwmGetWindowAttribute(hwnd, DWMWA_EXTENDED_FRAME_BOUNDS, &mut rect as *mut _ as *mut _, std::mem::size_of::<RECT>() as u32);
@@ -574,52 +633,63 @@ pub fn capture_hwnd_to_base64(hwnd: HWND, max_width: u32, max_height: u32) -> Op
         let hdc_mem = CreateCompatibleDC(Some(hdc_screen));
         let hbm_mem = CreateCompatibleBitmap(hdc_screen, width, height);
         let h_old = SelectObject(hdc_mem, hbm_mem.into());
-        let success = PrintWindow(hwnd, hdc_mem, 2);
+        let printed = PrintWindow(hwnd, hdc_mem, 2) != 0;
+
+        let mut bmi = BITMAPINFO {
+            bmiHeader: BITMAPINFOHEADER {
+                biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+                biWidth: width,
+                biHeight: -height,
+                biPlanes: 1,
+                biBitCount: 32,
+                biCompression: BI_RGB.0,
+                biSizeImage: 0,
+                biXPelsPerMeter: 0,
+                biYPelsPerMeter: 0,
+                biClrUsed: 0,
+                biClrImportant: 0,
+            },
+            bmiColors: [windows::Win32::Graphics::Gdi::RGBQUAD::default(); 1],
+        };
+        let mut pixels = vec![0u8; (width * height * 4) as usize];
+        let mut captured = printed
+            && GetDIBits(hdc_mem, hbm_mem, 0, height as u32, Some(pixels.as_mut_ptr() as *mut _), &mut bmi, DIB_RGB_COLORS) != 0;
+        let in_front = windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow() == hwnd;
+        match capture_source(captured, captured && is_blank_bgrx(&pixels), in_front) {
+            CaptureSource::Printed => {}
+            CaptureSource::Screen => {
+                use windows::Win32::Graphics::Gdi::{BitBlt, SRCCOPY};
+                captured = BitBlt(hdc_mem, 0, 0, width, height, Some(hdc_screen), rect.left, rect.top, SRCCOPY).is_ok()
+                    && GetDIBits(hdc_mem, hbm_mem, 0, height as u32, Some(pixels.as_mut_ptr() as *mut _), &mut bmi, DIB_RGB_COLORS) != 0;
+            }
+            CaptureSource::Nothing => captured = false,
+        }
 
         let mut result = None;
-        if success != 0 {
-            let mut bmi = BITMAPINFO {
-                bmiHeader: BITMAPINFOHEADER {
-                    biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
-                    biWidth: width,
-                    biHeight: -height,
-                    biPlanes: 1,
-                    biBitCount: 32,
-                    biCompression: BI_RGB.0,
-                    biSizeImage: 0,
-                    biXPelsPerMeter: 0,
-                    biYPelsPerMeter: 0,
-                    biClrUsed: 0,
-                    biClrImportant: 0,
-                },
-                bmiColors: [windows::Win32::Graphics::Gdi::RGBQUAD::default(); 1],
-            };
-            let mut pixels = vec![0u8; (width * height * 4) as usize];
-            if GetDIBits(hdc_mem, hbm_mem, 0, height as u32, Some(pixels.as_mut_ptr() as *mut _), &mut bmi, DIB_RGB_COLORS) != 0 {
-                for chunk in pixels.chunks_exact_mut(4) {
-                    let b = chunk[0];
-                    let r = chunk[2];
-                    chunk[0] = r;
-                    chunk[2] = b;
-                    chunk[3] = 255;
-                }
-                if let Ok(Some(png_base64)) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    if let Some(mut img) = image::RgbaImage::from_raw(width as u32, height as u32, pixels) {
-                        if img.width() > max_width || img.height() > max_height {
-                            let dyn_img = image::DynamicImage::ImageRgba8(img);
-                            img = dyn_img.resize(max_width, max_height, image::imageops::FilterType::Triangle).into_rgba8();
-                        }
-                        let mut buf = std::io::Cursor::new(Vec::new());
-                        if image::write_buffer_with_format(&mut buf, &img, img.width(), img.height(), image::ColorType::Rgba8, image::ImageFormat::Png).is_ok() {
-                            use base64::Engine;
-                            let b64 = base64::engine::general_purpose::STANDARD.encode(buf.into_inner());
-                            return Some(format!("data:image/png;base64,{}", b64));
-                        }
+        if captured {
+            for chunk in pixels.chunks_exact_mut(4) {
+                let b = chunk[0];
+                let r = chunk[2];
+                chunk[0] = r;
+                chunk[2] = b;
+                chunk[3] = 255;
+            }
+            if let Ok(Some(png_base64)) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                if let Some(mut img) = image::RgbaImage::from_raw(width as u32, height as u32, pixels) {
+                    if img.width() > max_width || img.height() > max_height {
+                        let dyn_img = image::DynamicImage::ImageRgba8(img);
+                        img = dyn_img.resize(max_width, max_height, image::imageops::FilterType::Triangle).into_rgba8();
                     }
-                    None
-                })) {
-                    result = Some(png_base64);
+                    let mut buf = std::io::Cursor::new(Vec::new());
+                    if image::write_buffer_with_format(&mut buf, &img, img.width(), img.height(), image::ColorType::Rgba8, image::ImageFormat::Png).is_ok() {
+                        use base64::Engine;
+                        let b64 = base64::engine::general_purpose::STANDARD.encode(buf.into_inner());
+                        return Some(format!("data:image/png;base64,{}", b64));
+                    }
                 }
+                None
+            })) {
+                result = Some(png_base64);
             }
         }
         SelectObject(hdc_mem, h_old);
@@ -628,6 +698,61 @@ pub fn capture_hwnd_to_base64(hwnd: HWND, max_width: u32, max_height: u32) -> Op
         ReleaseDC(None, hdc_screen);
 
         result
+    }
+}
+
+#[derive(Debug, PartialEq)]
+enum CaptureSource {
+    Printed,
+    Screen,
+    Nothing,
+}
+
+/// PrintWindow can't reach an elevated window (Task Manager): it fails or leaves the bitmap black. If
+/// that window is in front, what it shows can be copied from the screen instead. Not otherwise, or the
+/// thumbnail would show whatever covers it. Better no image than a black one, callers keep their last
+/// good thumbnail then.
+fn capture_source(printed: bool, blank: bool, in_front: bool) -> CaptureSource {
+    if printed && !blank {
+        CaptureSource::Printed
+    } else if in_front {
+        CaptureSource::Screen
+    } else {
+        CaptureSource::Nothing
+    }
+}
+
+/// Colour channels only, the alpha byte of a GDI capture means nothing.
+fn is_blank_bgrx(pixels: &[u8]) -> bool {
+    pixels.chunks_exact(4).all(|p| p[0] == 0 && p[1] == 0 && p[2] == 0)
+}
+
+#[cfg(test)]
+mod capture_tests {
+    use super::{capture_source, is_blank_bgrx, CaptureSource};
+
+    #[test]
+    fn a_usable_print_is_kept() {
+        assert_eq!(capture_source(true, false, false), CaptureSource::Printed);
+        assert_eq!(capture_source(true, false, true), CaptureSource::Printed);
+    }
+
+    #[test]
+    fn a_failed_or_black_print_uses_the_screen_only_for_the_window_in_front() {
+        assert_eq!(capture_source(false, false, true), CaptureSource::Screen);
+        assert_eq!(capture_source(true, true, true), CaptureSource::Screen);
+    }
+
+    #[test]
+    fn a_failed_or_black_print_behind_other_windows_gives_nothing() {
+        assert_eq!(capture_source(false, false, false), CaptureSource::Nothing);
+        assert_eq!(capture_source(true, true, false), CaptureSource::Nothing);
+    }
+
+    #[test]
+    fn blank_ignores_alpha() {
+        assert!(is_blank_bgrx(&[0, 0, 0, 255, 0, 0, 0, 0]));
+        assert!(!is_blank_bgrx(&[0, 0, 0, 255, 0, 1, 0, 0]));
     }
 }
 

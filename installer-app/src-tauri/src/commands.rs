@@ -170,12 +170,23 @@ pub async fn start_install(
     crate::registry::write_uninstall_entry(all_users, &info)
         .map_err(|e| format!("Files were installed, but registering with Windows failed: {e}. Try running the installer as Administrator."))?;
 
+    run_agent_hooks(&exe_path, "install-hooks");
+
     let _ = app.emit(
         "install-progress",
         ProgressEvent { stage: "done".into(), percent: 1.0, message: "Done".into() },
     );
 
     Ok(exe_path.to_string_lossy().to_string())
+}
+
+fn run_agent_hooks(exe: &std::path::Path, command: &str) {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let _ = std::process::Command::new(exe)
+        .args(["agent", command])
+        .creation_flags(CREATE_NO_WINDOW)
+        .status();
 }
 
 #[tauri::command]

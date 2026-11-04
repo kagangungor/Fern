@@ -1,5 +1,5 @@
 use serde::Serialize;
-use windows::core::{GUID, HSTRING, PCWSTR};
+use windows::core::{GUID, PCWSTR};
 use windows::Win32::Foundation::HANDLE;
 use windows::Win32::NetworkManagement::WiFi::{
     dot11_BSS_type_infrastructure, wlan_connection_mode_profile, WlanCloseHandle, WlanConnect, WlanDeleteProfile,
@@ -19,12 +19,6 @@ pub struct WifiNetwork {
     known: bool,
 }
 
-#[derive(Serialize)]
-pub struct BluetoothDeviceInfo {
-    id: String,
-    name: String,
-    connected: bool,
-}
 
 struct Wlan {
     handle: HANDLE,
@@ -290,56 +284,4 @@ pub fn open_ethernet_settings() {
     }
 }
 
-fn paired_bluetooth_devices() -> Result<Vec<BluetoothDeviceInfo>, String> {
-    use windows::Devices::Bluetooth::{BluetoothConnectionStatus, BluetoothDevice};
-    use windows::Devices::Enumeration::DeviceInformation;
-    unsafe {
-        let _ = windows::Win32::System::Com::CoInitializeEx(None, windows::Win32::System::Com::COINIT_MULTITHREADED);
-    }
-    let selector = BluetoothDevice::GetDeviceSelectorFromPairingState(true).map_err(|e| e.to_string())?;
-    let infos = DeviceInformation::FindAllAsyncAqsFilter(&selector)
-        .and_then(|op| op.get())
-        .map_err(|e| e.to_string())?;
-    let mut devices = Vec::new();
-    for i in 0..infos.Size().unwrap_or(0) {
-        let Ok(info) = infos.GetAt(i) else { continue };
-        let (Ok(id), Ok(name)) = (info.Id(), info.Name()) else { continue };
-        let connected = BluetoothDevice::FromIdAsync(&id)
-            .and_then(|op| op.get())
-            .and_then(|device| device.ConnectionStatus())
-            .map(|status| status == BluetoothConnectionStatus::Connected)
-            .unwrap_or(false);
-        devices.push(BluetoothDeviceInfo { id: id.to_string(), name: name.to_string(), connected });
-    }
-    devices.sort_by(|a, b| b.connected.cmp(&a.connected).then(a.name.to_lowercase().cmp(&b.name.to_lowercase())));
-    Ok(devices)
-}
 
-#[tauri::command]
-pub async fn bluetooth_devices() -> Result<Vec<BluetoothDeviceInfo>, String> {
-    tauri::async_runtime::spawn_blocking(paired_bluetooth_devices).await.map_err(|e| e.to_string())?
-}
-
-#[tauri::command]
-pub async fn bluetooth_unpair(id: String) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        use windows::Devices::Enumeration::{DeviceInformation, DeviceUnpairingResultStatus};
-        unsafe {
-            let _ = windows::Win32::System::Com::CoInitializeEx(None, windows::Win32::System::Com::COINIT_MULTITHREADED);
-        }
-        let info = DeviceInformation::CreateFromIdAsync(&HSTRING::from(id))
-            .and_then(|op| op.get())
-            .map_err(|e| e.to_string())?;
-        let result = info
-            .Pairing()
-            .and_then(|pairing| pairing.UnpairAsync())
-            .and_then(|op| op.get())
-            .map_err(|e| e.to_string())?;
-        match result.Status() {
-            Ok(DeviceUnpairingResultStatus::Unpaired) | Ok(DeviceUnpairingResultStatus::AlreadyUnpaired) => Ok(()),
-            _ => Err("Could not remove this device".to_string()),
-        }
-    })
-    .await
-    .map_err(|e| e.to_string())?
-}

@@ -3,6 +3,9 @@
 mod types;
 mod state;
 mod utils;
+mod capture;
+mod attention;
+mod agent_api;
 mod services;
 mod commands;
 mod monitors;
@@ -18,9 +21,20 @@ mod ics;
 mod active_look;
 mod connections;
 mod audio_devices;
+mod wallpaper;
 mod i18n;
 mod shelf;
-mod settings_window;
+mod on_demand_windows;
+mod memory_saver;
+mod webview_args;
+mod window_region;
+mod buds;
+mod usb;
+mod jack;
+mod bluetooth;
+mod battery;
+mod dock_extras;
+mod launchers;
 
 use tauri::Manager;
 use windows::Win32::System::Console::SetConsoleCtrlHandler;
@@ -43,11 +57,17 @@ unsafe extern "system" fn ctrl_handler(ctrl_type: u32) -> BOOL {
 }
 
 fn main() {
+    let args: Vec<String> = std::env::args().collect();
+    if let Some(code) = agent_api::run_cli(&args) {
+        std::process::exit(code);
+    }
+
     if native_uninstall::requested() {
         native_uninstall::run();
         return;
     }
 
+    webview_args::apply();
     diagnostics::init();
 
     unsafe {
@@ -104,6 +124,8 @@ fn main() {
             close_settings_window,
             take_settings_page,
             open_calendar_window,
+            close_calendar_window,
+            window_region::set_window_regions,
             open_tray_window,
             open_tray_at_cursor,
             open_tray_from_button,
@@ -135,6 +157,12 @@ fn main() {
             launch_new_instance,
             update_dock_rect,
             update_notch_rect,
+            focus_agent_window,
+            agent_answer,
+            pick_agent_sound,
+            reset_agent_sound,
+            agent_sound_data,
+            agent_sound_custom,
             set_dock_hovered,
             set_notch_hovered,
             set_notch_hidden,
@@ -152,16 +180,34 @@ fn main() {
             set_window_keyboard_focus,
             get_drives,
             open_dock_extra,
+            dock_extras::get_recycle_bin_status,
+            dock_extras::empty_recycle_bin,
+            dock_extras::eject_drive,
+            dock_extras::shelf_read_text_preview,
+            launchers::get_search_launchers,
+            launchers::trigger_search_launcher,
             audio_devices::get_audio_devices,
             audio_devices::set_default_audio_device,
+            attention::get_attention_windows,
+            wallpaper::get_wallpaper_backdrop,
+            wallpaper::is_backdrop_covered,
             connections::get_lan_status,
             connections::open_ethernet_settings,
             connections::wifi_scan,
             connections::wifi_connect,
             connections::wifi_disconnect,
             connections::wifi_forget,
-            connections::bluetooth_devices,
-            connections::bluetooth_unpair,
+            bluetooth::bluetooth_devices,
+            bluetooth::bluetooth_list_devices,
+            bluetooth::bluetooth_set_connected,
+            bluetooth::bluetooth_refresh_buds,
+            bluetooth::bluetooth_discovery,
+            bluetooth::bluetooth_pair,
+            bluetooth::bluetooth_pairing_respond,
+            bluetooth::bluetooth_unpair,
+            usb::usb_list_devices,
+            jack::jack_list_devices,
+            battery::get_battery_details,
             focus_window,
             focus_app_windows,
             close_window,
@@ -239,6 +285,7 @@ fn main() {
             }
 
             crate::utils::init_settings_cache(app.handle());
+            agent_api::start(app.handle().clone());
 
             #[cfg(not(debug_assertions))]
             std::thread::spawn(crate::uninstall_registry::heal_uninstall_registration);
@@ -295,6 +342,7 @@ fn main() {
             setup_mouse_hook(app.handle().clone());
             setup_display_change_monitor(app.handle().clone());
             setup_window_change_hook(app.handle().clone());
+            attention::start(app.handle().clone());
             {
                 let _ = crate::state::THUMBNAIL_CACHE.set(std::sync::Mutex::new(std::collections::HashMap::new()));
                 let _ = crate::state::FOCUS_TIMESTAMPS.set(std::sync::Mutex::new(std::collections::HashMap::new()));
@@ -310,6 +358,10 @@ fn main() {
             start_window_style_guard(app.handle().clone());
             setup_audio_visualization(app.handle().clone());
             setup_settings_watcher(app.handle().clone());
+            memory_saver::start(app.handle().clone());
+            bluetooth::setup_bluetooth_notifications(app.handle().clone());
+            usb::setup_usb_notifications(app.handle().clone());
+            jack::setup_jack_notifications(app.handle().clone());
 
             // Listen for second-instance signal to open settings
             if let Some(&h_event) = SINGLE_INSTANCE_EVENT_HANDLE.get() {
@@ -322,29 +374,13 @@ fn main() {
                         loop {
                             let result = unsafe { WaitForSingleObject(h_event, INFINITE) };
                             if result == WAIT_OBJECT_0 {
-                                crate::settings_window::open(&app_handle);
+                                crate::on_demand_windows::open(&app_handle, crate::on_demand_windows::SETTINGS);
                             }
                         }
                     });
                 }
             }
 
-            if let Some(calendar_win) = app.get_webview_window("calendar") {
-                #[cfg(target_os = "windows")]
-                {
-                    let _ = window_vibrancy::apply_acrylic(&calendar_win, Some((10, 10, 15, 20)));
-                }
-                if let Ok(hwnd) = calendar_win.hwnd() {
-                    crate::active_look::keep_active_look(hwnd);
-                }
-                let win_clone = calendar_win.clone();
-                calendar_win.on_window_event(move |event| {
-                    if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                        api.prevent_close();
-                        let _ = win_clone.hide();
-                    }
-                });
-            }
             {
                 use tauri::menu::{Menu, MenuItem};
                 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
@@ -379,15 +415,14 @@ fn main() {
                                     if let Ok(hwnd) = w.hwnd() { unregister_appbar_native(hwnd); }
                                 }
                             }
-                            if let Some(w) = ah.get_webview_window("settings") { let _ = w.destroy(); }
-                            if let Some(w) = ah.get_webview_window("calendar") { let _ = w.destroy(); }
+                            crate::on_demand_windows::close_all(&ah);
                             std::env::set_var("FERN_RESTARTING", "1");
                             close_single_instance_handles();
 
                             ah.restart();
                         }
                         "settings" => {
-                            crate::settings_window::open(&ah);
+                            crate::on_demand_windows::open(&ah, crate::on_demand_windows::SETTINGS);
                         }
                         "calendar" => {
                             crate::commands::open_calendar_window(ah.clone());
@@ -401,7 +436,7 @@ fn main() {
                             ..
                         } = event
                         {
-                            crate::settings_window::open(tray.app_handle());
+                            crate::on_demand_windows::open(tray.app_handle(), crate::on_demand_windows::SETTINGS);
                         }
                     })
                     .build(app)?;

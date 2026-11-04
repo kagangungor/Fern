@@ -59,11 +59,6 @@ fn dock_win_number_enabled() -> bool {
         .unwrap_or(true)
 }
 
-fn legacy_mode() -> bool {
-    let Some(app) = KEYBOARD_HOOK_APP_HANDLE.get() else { return false };
-    crate::utils::get_setting_str(app, "fern-legacy-mode").is_some_and(|v| v == "true")
-}
-
 /// Win state straight from the OS. The tracked flag goes stale if a keyup never arrives.
 fn win_key_physically_down() -> bool {
     use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LWIN, VK_RWIN};
@@ -104,6 +99,7 @@ unsafe extern "system" fn keyboard_hook_proc(code: i32, wparam: windows::Win32::
     use windows::Win32::UI::WindowsAndMessaging::{KBDLLHOOKSTRUCT, WM_KEYDOWN, WM_SYSKEYDOWN, WM_KEYUP, WM_SYSKEYUP, LLKHF_INJECTED};
     use windows::Win32::UI::Input::KeyboardAndMouse::{VK_VOLUME_MUTE, VK_VOLUME_UP, VK_VOLUME_DOWN, VK_LWIN, VK_RWIN, VIRTUAL_KEY};
     if code >= 0 {
+        crate::memory_saver::note_input();
         let kb = *(lparam.0 as *const KBDLLHOOKSTRUCT);
         let vk_code = VIRTUAL_KEY(kb.vkCode as u16);
         let is_down = wparam.0 == WM_KEYDOWN as usize || wparam.0 == WM_SYSKEYDOWN as usize;
@@ -128,7 +124,6 @@ unsafe extern "system" fn keyboard_hook_proc(code: i32, wparam: windows::Win32::
                         WIN_B_HELD.store(false, Ordering::Relaxed);
                     } else if is_down && win_key_physically_down()
                         && NATIVE_TASKBAR_HIDDEN.load(Ordering::Relaxed)
-                        && !legacy_mode()
                     {
                         if !WIN_B_HELD.swap(true, Ordering::Relaxed) {
                             send_start_menu_mask();
@@ -592,7 +587,7 @@ pub fn setup_audio_visualization(app_handle: AppHandle) {
             let mut failures = 0u32;
             loop {
                 if !audio_visualization_wanted(&app_handle) {
-                    std::thread::sleep(std::time::Duration::from_millis(1000));
+                    std::thread::sleep(crate::memory_saver::poll_interval(std::time::Duration::from_millis(1000)));
                     continue;
                 }
                 let result: Result<(), String> = (|| {
@@ -1058,7 +1053,7 @@ pub fn setup_system_worker(app_handle: AppHandle) -> Sender<SystemCommand> {
                         last_emitted_info = Some((current.title, current.artist, current.is_playing, current.has_media, art_str, current.position_ms, current.duration_ms));
                     }
                 }
-                std::thread::sleep(std::time::Duration::from_millis(64));
+                std::thread::sleep(crate::memory_saver::poll_interval(std::time::Duration::from_millis(64)));
             }
         }
     });
@@ -1077,7 +1072,7 @@ pub fn setup_system_worker(app_handle: AppHandle) -> Sender<SystemCommand> {
                     if brightness != last_brightness { last_brightness = brightness; CURRENT_BRIGHTNESS.store(brightness, Ordering::Relaxed); let _ = handle_brightness.emit("brightness-change", BrightnessChangeEvent { brightness }); }
                 }
             }
-            std::thread::sleep(std::time::Duration::from_millis(1500));
+            std::thread::sleep(crate::memory_saver::poll_interval(std::time::Duration::from_millis(1500)));
         }
     });
 
@@ -1101,7 +1096,10 @@ pub fn setup_system_worker(app_handle: AppHandle) -> Sender<SystemCommand> {
         let my_process_id = std::process::id();
         let mut last_monitor_update = Instant::now() - Duration::from_secs(5);
         let mut cached_scale = 1.0f64;
-        
+        let mut last_start_check = HWND(std::ptr::null_mut());
+        let mut start_open = false;
+        let mut start_focused_at = Instant::now();
+
         loop {
             if SHUTTING_DOWN.load(Ordering::Relaxed) {
                 std::thread::sleep(std::time::Duration::from_millis(150));
@@ -1109,6 +1107,24 @@ pub fn setup_system_worker(app_handle: AppHandle) -> Sender<SystemCommand> {
             }
             unsafe {
                 let now = Instant::now();
+                // Start and Search open above the screen's bottom edge, where the dock would cover
+                // them. The check opens the process, so only redo it when the foreground changes.
+                let foreground = GetForegroundWindow();
+                if foreground != last_start_check {
+                    last_start_check = foreground;
+                    start_open = crate::commands::is_start_menu_window(foreground);
+                    start_focused_at = now;
+                }
+                let start_on_screen = start_open && IsWindowVisible(foreground).as_bool() && {
+                    let mut cloaked = 0u32;
+                    DwmGetWindowAttribute(foreground, windows::Win32::Graphics::Dwm::DWMWA_CLOAKED, &mut cloaked as *mut _ as *mut _, 4).is_err() || cloaked == 0
+                };
+                let start_shown = start_counts_as_shown(start_open, start_on_screen, now.duration_since(start_focused_at));
+                let start_monitor = if start_shown { monitor_rect_for_hwnd(foreground) } else { None };
+                let start_on = |window: HWND| match (start_monitor, monitor_rect_for_hwnd(window)) {
+                    (Some((sx, sy, _, _)), Some((x, y, _, _))) => sx == x && sy == y,
+                    _ => false,
+                };
                 if now.duration_since(last_monitor_update) > Duration::from_millis(1000) {
                     if let Some(m) = handle_visibility.primary_monitor().ok().flatten() {
                         cached_scale = m.scale_factor();
@@ -1164,8 +1180,9 @@ pub fn setup_system_worker(app_handle: AppHandle) -> Sender<SystemCommand> {
                     let title = String::from_utf16_lossy(&text[..text_len as usize]);
 
                     let is_desktop = class_str == "Progman" || class_str == "WorkerW";
-                    let is_start = (class_str == "Windows.UI.Core.CoreWindow" || class_str == "SimpleWindow") && 
-                                   (title == "Start" || title == "Search");
+                    let is_start = (hwnd == foreground && start_open)
+                        || ((class_str == "Windows.UI.Core.CoreWindow" || class_str == "SimpleWindow")
+                            && (title == "Start" || title == "Search"));
                     let is_shell = class_str == "Shell_TrayWnd" || class_str == "Shell_SecondaryTrayWnd" || is_start;
                     
                     is_known_shell = is_desktop || is_shell; 
@@ -1288,6 +1305,7 @@ pub fn setup_system_worker(app_handle: AppHandle) -> Sender<SystemCommand> {
                 if !fg_on("main") {
                     should_notch_overlap = false;
                 }
+                should_notch_overlap = notch_overlap_during_start(start_shown, should_notch_overlap, last_notch_overlap.unwrap_or(should_notch_overlap));
 
                 // Only report dock overlap when the dock window is actually visible.
                 // On autostart, the overlap thread starts before init_dock shows the window,
@@ -1300,7 +1318,12 @@ pub fn setup_system_worker(app_handle: AppHandle) -> Sender<SystemCommand> {
                 crate::state::set_overlap(crate::state::dock_overlap(), "dock", if effective_dock_overlap { 1 } else { 0 });
                 crate::state::set_overlap(crate::state::notch_overlap(), "main", if should_notch_overlap { 1 } else { 0 });
                 CURRENT_FOREGROUND_FULLSCREEN.store(current_is_fs, Ordering::Relaxed);
-                let fullscreen_on_dock = current_is_fs && fg_on("dock");
+                // Start counts as fullscreen for the dock, which then hides, stays click-through and
+                // doesn't reveal at the screen edge until Start closes.
+                let start_on_dock = handle_visibility.get_webview_window("dock")
+                    .and_then(|w| w.hwnd().ok())
+                    .is_some_and(start_on);
+                let fullscreen_on_dock = (current_is_fs && fg_on("dock")) || start_on_dock;
                 crate::state::set_flag(crate::state::dock_fullscreen(), "dock", fullscreen_on_dock);
                 CURRENT_FOREGROUND_FULLSCREEN_ON_DOCK.store(fullscreen_on_dock, Ordering::Relaxed);
                 if Some(fullscreen_on_dock) != last_dock_fullscreen || last_emit.elapsed() >= Duration::from_secs(3) {
@@ -1334,7 +1357,8 @@ pub fn setup_system_worker(app_handle: AppHandle) -> Sender<SystemCommand> {
                     let Ok(w_hwnd) = win.hwnd() else { continue };
                     let Some((mx, my, _mw, _mh)) = monitor_rect_for_hwnd(w_hwnd) else { continue };
                     {
-                        let fullscreen_here = current_is_fs && fg_info.is_some_and(|(screen, _, _)| screen.left == mx && screen.top == my);
+                        let fullscreen_here = (current_is_fs && fg_info.is_some_and(|(screen, _, _)| screen.left == mx && screen.top == my))
+                            || (is_dock && start_on(w_hwnd));
                         if is_dock {
                             crate::state::set_flag(crate::state::dock_fullscreen(), &label, fullscreen_here);
                         } else {
@@ -1373,6 +1397,11 @@ pub fn setup_system_worker(app_handle: AppHandle) -> Sender<SystemCommand> {
                     // Same visibility guard as the primary dock.
                     let overlap = overlap && (!is_dock || win.is_visible().unwrap_or(false));
                     let map = if is_dock { crate::state::dock_overlap() } else { crate::state::notch_overlap() };
+                    let overlap = if is_dock {
+                        overlap
+                    } else {
+                        notch_overlap_during_start(start_shown, overlap, crate::state::get_overlap(map, &label) == 1)
+                    };
                     let new_val = if overlap { 1 } else { 0 };
                     if crate::state::get_overlap(map, &label) != new_val {
                         crate::state::set_overlap(map, &label, new_val);
@@ -1432,7 +1461,7 @@ pub fn setup_system_worker(app_handle: AppHandle) -> Sender<SystemCommand> {
                     apply_capture_ui_state(&handle_visibility, active);
                 }
             }
-            std::thread::sleep(std::time::Duration::from_millis(150));
+            std::thread::sleep(crate::memory_saver::poll_interval(std::time::Duration::from_millis(150)));
         }
     });
 
@@ -1701,6 +1730,20 @@ static MH_LAST_RIGHT_EDGE_HOVER: AtomicI32 = AtomicI32::new(-1);
 static MH_DOCK_EXPIRY_MS: AtomicI64 = AtomicI64::new(0);
 static MH_TOPBAR_EXPIRY_MS: AtomicI64 = AtomicI64::new(0);
 static MH_LEFT_EXPIRY_MS: AtomicI64 = AtomicI64::new(0);
+static MH_LEFT_ENTER_MS: AtomicI64 = AtomicI64::new(0);
+static MH_RIGHT_ENTER_MS: AtomicI64 = AtomicI64::new(0);
+
+fn edge_dwell_met(entered: &AtomicI64, inside: bool, now: i64, dwell_ms: i64) -> bool {
+    if !inside {
+        entered.store(0, Ordering::Relaxed);
+        return false;
+    }
+    let since = entered.load(Ordering::Relaxed);
+    if since == 0 {
+        entered.store(now, Ordering::Relaxed);
+    }
+    dwell_ms <= 0 || (since != 0 && now - since >= dwell_ms)
+}
 static MH_RIGHT_EXPIRY_MS: AtomicI64 = AtomicI64::new(0);
 static MH_LAST_MONITOR_UPDATE_MS: AtomicI64 = AtomicI64::new(0);
 static MH_CACHED_MON_POS: Mutex<Option<(i32, i32)>> = Mutex::new(None);
@@ -1769,7 +1812,7 @@ fn apply_capture_ui_state(app: &AppHandle, active: bool) {
     for (label, win) in app.webview_windows() {
         if crate::state::is_notch_label(&label) {
             if active {
-                let _ = win.set_ignore_cursor_events(true);
+                crate::utils::set_window_click_through(&win, true);
                 let _ = win.hide();
             } else {
                 let _ = win.show();
@@ -1780,12 +1823,12 @@ fn apply_capture_ui_state(app: &AppHandle, active: bool) {
                 }
             }
         } else if crate::state::is_dock_label(&label) && active {
-            let _ = win.set_ignore_cursor_events(true);
+            crate::utils::set_window_click_through(&win, true);
         }
     }
     if active {
         if let Some(ov_win) = app.get_webview_window("overlay") {
-            let _ = ov_win.set_ignore_cursor_events(true);
+            crate::utils::set_window_click_through(&ov_win, true);
         }
     }
     // Force the mouse hook to re-evaluate hit-testing on the next move.
@@ -1806,7 +1849,30 @@ static MOUSE_WORKER: OnceLock<std::thread::Thread> = OnceLock::new();
 /// Stops a pass-through to a maximized window's title bar from triggering it.
 const TOP_EDGE_DWELL_MS: i64 = 200;
 const TOP_EDGE_POLL_MS: u64 = 40;
-static TOP_EDGE_PENDING: AtomicBool = AtomicBool::new(false);
+static CURSOR_RECHECK_PENDING: AtomicBool = AtomicBool::new(false);
+
+/// The webview only learns the cursor left through mouse events, and a click-through window gets none.
+/// So when the hit test makes the dock click-through with the hover still on (the cursor was over a
+/// preview that closed, say), only the backend can end it. Left on, it keeps a Smart dock from hiding.
+fn dock_hover_went_stale(should_ignore: bool, hovered: bool) -> bool {
+    should_ignore && hovered
+}
+
+/// A hover running out needs another look when it expires, and a still cursor won't trigger one.
+fn hover_waits_on_expiry(is_hovered: bool, final_hover: bool) -> bool {
+    final_hover && !is_hovered
+}
+
+/// Re-runs the hit test for a cursor that hasn't moved, when what's under it changed.
+pub fn request_cursor_recheck() {
+    if SHUTTING_DOWN.load(Ordering::Relaxed) {
+        return;
+    }
+    MOUSE_DIRTY.store(true, Ordering::Relaxed);
+    if let Some(worker) = MOUSE_WORKER.get() {
+        worker.unpark();
+    }
+}
 
 fn top_edge_armed(app_handle: &AppHandle, label: &str, in_band: bool, now: i64) -> bool {
     let enter = crate::state::notch_edge_enter_ms();
@@ -1832,14 +1898,14 @@ fn top_edge_armed(app_handle: &AppHandle, label: &str, in_band: bool, now: i64) 
     let entered = crate::state::get_i64(enter, label, 0);
     if entered == 0 {
         crate::state::set_i64(enter, label, now);
-        TOP_EDGE_PENDING.store(true, Ordering::Relaxed);
+        CURSOR_RECHECK_PENDING.store(true, Ordering::Relaxed);
         return false;
     }
     if now - entered >= dwell_ms {
         crate::state::set_flag(armed, label, true);
         return true;
     }
-    TOP_EDGE_PENDING.store(true, Ordering::Relaxed);
+    CURSOR_RECHECK_PENDING.store(true, Ordering::Relaxed);
     false
 }
 
@@ -1849,7 +1915,7 @@ fn start_mouse_worker(app_handle: AppHandle) {
         .spawn(move || loop {
             // A pending dwell has to finish with a still cursor, but the hook only fires on movement,
             // so also wake on a timer.
-            if TOP_EDGE_PENDING.load(Ordering::Relaxed) {
+            if CURSOR_RECHECK_PENDING.load(Ordering::Relaxed) {
                 std::thread::park_timeout(Duration::from_millis(TOP_EDGE_POLL_MS));
                 MOUSE_DIRTY.store(true, Ordering::Relaxed);
             } else {
@@ -1903,8 +1969,9 @@ fn volume_mixer_physical_rect_for(app: &AppHandle) -> Option<(i32, i32, i32, i32
 /// The hook only fires on movement, so a cursor that stops just outside the mixer would leave it
 /// open. This closes the card once the cursor is off it.
 fn setup_volume_mixer_watchdog(app_handle: AppHandle) {
+    let mut hook_missed_at: Option<Instant> = None;
     std::thread::spawn(move || loop {
-        std::thread::sleep(Duration::from_millis(200));
+        std::thread::sleep(cursor_watch_interval(hook_missed_at.map(|at| at.elapsed())));
         if SHUTTING_DOWN.load(Ordering::Relaxed) {
             continue;
         }
@@ -1912,8 +1979,12 @@ fn setup_volume_mixer_watchdog(app_handle: AppHandle) {
         if unsafe { windows::Win32::UI::WindowsAndMessaging::GetCursorPos(&mut pt) }.is_err() {
             continue;
         }
-        // The hook goes silent over elevated windows (Task Manager), so a stale click-through state would block them.
+        // The hook goes silent over elevated windows and while one has the foreground (Task Manager).
+        // The cursor being somewhere the hook didn't report proves that, and from then on this loop
+        // does the hook's job, or the dock would stay click-through with its clicks going underneath.
         if pt.x != MOUSE_X.load(Ordering::Relaxed) || pt.y != MOUSE_Y.load(Ordering::Relaxed) {
+            hook_missed_at = Some(Instant::now());
+            crate::memory_saver::note_input();
             MOUSE_X.store(pt.x, Ordering::Relaxed);
             MOUSE_Y.store(pt.y, Ordering::Relaxed);
             MOUSE_DIRTY.store(true, Ordering::Relaxed);
@@ -1935,13 +2006,39 @@ fn setup_volume_mixer_watchdog(app_handle: AppHandle) {
             .is_some_and(|m| {
                 let pos = m.position();
                 let size = m.size();
-                pt.x <= pos.x + 8 && pt.y >= pos.y && pt.y <= pos.y + size.height as i32
+                let on_right = crate::utils::get_setting_str(&app_handle, "fern-volume-side").as_deref() == Some("right");
+                let in_band = if on_right { pt.x >= pos.x + size.width as i32 - 8 && pt.x <= pos.x + size.width as i32 } else { pt.x >= pos.x && pt.x <= pos.x + 8 };
+                in_band && pt.y >= pos.y && pt.y <= pos.y + size.height as i32
             });
         if !at_left_edge && MH_LAST_LEFT_EDGE_HOVER.swap(0, Ordering::Relaxed) != 0 {
             MH_LEFT_EXPIRY_MS.store(0, Ordering::Relaxed);
             let _ = app_handle.emit("volume-edge-hover", false);
         }
     });
+}
+
+/// Start takes the foreground a moment before it appears, and judging the windows under it in that
+/// moment would flash the dock. But its window can also stay foreground after closing, off screen,
+/// so this only holds for a moment or the dock could stay hidden with Start gone.
+fn start_counts_as_shown(start_open: bool, on_screen: bool, since_focused: Duration) -> bool {
+    const APPEARING: Duration = Duration::from_millis(1000);
+    start_open && (on_screen || since_focused < APPEARING)
+}
+
+/// Start doesn't reach the top of the screen, so it has no say over the notch. Judged like any other
+/// window it would count as "nothing overlaps", and a Smart notch hidden by a maximized window would
+/// come down for as long as Start is open.
+fn notch_overlap_during_start(start_shown: bool, computed: bool, last: bool) -> bool {
+    if start_shown { last } else { computed }
+}
+
+/// Slow while the hook reports the cursor, at the hook's own pace for a while after it missed a move.
+fn cursor_watch_interval(since_hook_missed: Option<Duration>) -> Duration {
+    const TAKEOVER: Duration = Duration::from_millis(1000);
+    match since_hook_missed {
+        Some(elapsed) if elapsed < TAKEOVER => Duration::from_millis(32),
+        _ => crate::memory_saver::poll_interval(Duration::from_millis(200)),
+    }
 }
 
 pub fn setup_mouse_hook(app_handle: AppHandle) {
@@ -1952,6 +2049,7 @@ pub fn setup_mouse_hook(app_handle: AppHandle) {
 
 unsafe extern "system" fn mouse_hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> windows::Win32::Foundation::LRESULT {
     if code >= 0 && wparam.0 == WM_MOUSEMOVE as usize && !SHUTTING_DOWN.load(Ordering::Relaxed) {
+        crate::memory_saver::note_input();
         crate::diagnostics::HOOK_EVENTS.fetch_add(1, Ordering::Relaxed);
         crate::diagnostics::HOOK_LAST_EVENT_MS.store(now_ms(), Ordering::Relaxed);
         let pt = &*(lparam.0 as *const MSLLHOOKSTRUCT);
@@ -2006,22 +2104,22 @@ fn dock_edge_hover_allowed(fullscreen_on_dock: bool, at_bottom_edge: bool, dock_
 
 unsafe fn process_mouse_move(app_handle: &AppHandle, cursor: windows::Win32::Foundation::POINT) {
     let now = now_ms();
-    TOP_EDGE_PENDING.store(false, Ordering::Relaxed);
+    CURSOR_RECHECK_PENDING.store(false, Ordering::Relaxed);
     {
         {
 
             // click-through and skipped entirely so the tool owns the screen.
             if CAPTURE_UI_ACTIVE.load(Ordering::Relaxed) {
                 if MH_LAST_MAIN_IGNORE.load(Ordering::Relaxed) != 1 {
-                    if let Some(w) = app_handle.get_webview_window("main") { let _ = w.set_ignore_cursor_events(true); }
+                    if let Some(w) = app_handle.get_webview_window("main") { crate::utils::set_window_click_through(&w, true); }
                     MH_LAST_MAIN_IGNORE.store(1, Ordering::Relaxed);
                 }
                 if MH_LAST_DOCK_IGNORE.load(Ordering::Relaxed) != 1 {
-                    if let Some(w) = app_handle.get_webview_window("dock") { let _ = w.set_ignore_cursor_events(true); }
+                    if let Some(w) = app_handle.get_webview_window("dock") { crate::utils::set_window_click_through(&w, true); }
                     MH_LAST_DOCK_IGNORE.store(1, Ordering::Relaxed);
                 }
                 if MH_LAST_OV_IGNORE.load(Ordering::Relaxed) != 1 {
-                    if let Some(w) = app_handle.get_webview_window("overlay") { let _ = w.set_ignore_cursor_events(true); }
+                    if let Some(w) = app_handle.get_webview_window("overlay") { crate::utils::set_window_click_through(&w, true); }
                     MH_LAST_OV_IGNORE.store(1, Ordering::Relaxed);
                 }
                 if MH_LAST_EDGE_HOVER.swap(0, Ordering::Relaxed) != 0 {
@@ -2160,6 +2258,9 @@ unsafe fn process_mouse_move(app_handle: &AppHandle, cursor: windows::Win32::Fou
                     }
 
                     let final_dock_hover = is_hovered || now < MH_DOCK_EXPIRY_MS.load(Ordering::Relaxed);
+                    if hover_waits_on_expiry(is_hovered, final_dock_hover) {
+                        CURSOR_RECHECK_PENDING.store(true, Ordering::Relaxed);
+                    }
                     let prev = MH_LAST_EDGE_HOVER.load(Ordering::Relaxed);
                     let new_val = if final_dock_hover { 1 } else { 0 };
                     if prev != new_val {
@@ -2178,11 +2279,15 @@ unsafe fn process_mouse_move(app_handle: &AppHandle, cursor: windows::Win32::Fou
                     let should_ignore = dock_fg_fs || (!is_click_interactive
                         && !MENU_IS_OPEN.load(Ordering::Relaxed)
                         && !DOCK_IS_DRAGGING.load(Ordering::Relaxed));
+                    if dock_hover_went_stale(should_ignore, in_dock_hover) {
+                        crate::state::set_flag(crate::state::dock_hovered(), "dock", false);
+                        let _ = app_handle.emit_to("dock", "dock-cursor-left", ());
+                    }
                     let prev_ignore = MH_LAST_DOCK_IGNORE.load(Ordering::Relaxed);
                     let new_ignore = if should_ignore { 1 } else { 0 };
                     if prev_ignore != new_ignore {
                         if let Ok(hwnd) = dock_win.hwnd() { re_assert_topmost(hwnd); }
-                        let _ = dock_win.set_ignore_cursor_events(should_ignore);
+                        crate::utils::set_window_click_through(&dock_win, should_ignore);
                         MH_LAST_DOCK_IGNORE.store(new_ignore, Ordering::Relaxed);
                     }
                 } else {
@@ -2190,7 +2295,7 @@ unsafe fn process_mouse_move(app_handle: &AppHandle, cursor: windows::Win32::Fou
                         let _ = app_handle.emit_to("dock", "dock-edge-hover", false);
                     }
                     if MH_LAST_DOCK_IGNORE.swap(1, Ordering::Relaxed) != 1 {
-                        let _ = dock_win.set_ignore_cursor_events(true);
+                        crate::utils::set_window_click_through(&dock_win, true);
                     }
                 }
             }
@@ -2289,7 +2394,7 @@ unsafe fn process_mouse_move(app_handle: &AppHandle, cursor: windows::Win32::Fou
                         let new_ignore = if final_ignore { 1 } else { 0 };
                         if prev_ignore != new_ignore {
                             if let Ok(hwnd) = main_win.hwnd() { re_assert_topmost(hwnd); }
-                            let _ = main_win.set_ignore_cursor_events(final_ignore);
+                            crate::utils::set_window_click_through(&main_win, final_ignore);
                             MH_LAST_MAIN_IGNORE.store(new_ignore, Ordering::Relaxed);
                         }
                     } else {
@@ -2299,7 +2404,7 @@ unsafe fn process_mouse_move(app_handle: &AppHandle, cursor: windows::Win32::Fou
                             MH_LAST_TOP_EDGE_HOVER.store(0, Ordering::Relaxed);
                         }
                         if MH_LAST_MAIN_IGNORE.swap(1, Ordering::Relaxed) != 1 {
-                            let _ = main_win.set_ignore_cursor_events(true);
+                            crate::utils::set_window_click_through(&main_win, true);
                         }
                     }
                 }
@@ -2314,15 +2419,26 @@ unsafe fn process_mouse_move(app_handle: &AppHandle, cursor: windows::Win32::Fou
             // The overlay zooms by fern-scale, so the cards are bigger than 42x196 off the default scale.
             let overlay_fern_scale = crate::utils::get_fern_scale(app_handle);
 
-            // --- Left Edge (Volume) ---
-            if !fg_fs {
-                let at_left_edge = cursor.x <= (mon_x + 8) &&
-                                   cursor.y >= mon_y &&
-                                   cursor.y <= (mon_y + mon_h);
+            let side_of = |key: &str, default: &str| -> bool {
+                crate::utils::get_setting_str(app_handle, key).unwrap_or_else(|| default.to_string()) == "right"
+            };
+            let edge_dwell = crate::utils::get_setting_str(app_handle, "fern-edge-delay")
+                .and_then(|v| v.parse::<i64>().ok())
+                .unwrap_or(300)
+                .clamp(0, 3000);
+            let volume_right = side_of("fern-volume-side", "left");
+            let brightness_right = side_of("fern-brightness-side", "right");
 
+            if !fg_fs {
+                let at_edge = |right: bool| {
+                    cursor.y >= mon_y && cursor.y <= (mon_y + mon_h)
+                        && if right { cursor.x >= (mon_x + mon_w - 8) && cursor.x <= mon_x + mon_w } else { cursor.x >= mon_x && cursor.x <= (mon_x + 8) }
+                };
+
+                let at_volume_edge = at_edge(volume_right);
                 // The collapsed card sticks out past the 8px edge band, keep the hover alive over it too
                 // or the HUD hides mid-click.
-                let over_card = !at_left_edge
+                let over_card = !at_volume_edge
                     && !in_mixer
                     && MH_LAST_LEFT_EDGE_HOVER.load(Ordering::Relaxed) != 0
                     && app_handle.primary_monitor().ok().flatten().is_some_and(|m| {
@@ -2331,52 +2447,44 @@ unsafe fn process_mouse_move(app_handle: &AppHandle, cursor: windows::Win32::Fou
                         let sc = m.scale_factor() * overlay_fern_scale;
                         let nw = (42.0 * sc) as i32;
                         let nh = (196.0 * sc) as i32;
-                        let nx = mp.x;
+                        let nx = if volume_right { mp.x + ms.width as i32 - nw } else { mp.x };
                         let ny = mp.y + (ms.height as i32 / 2) - (nh / 2);
                         cursor.x >= nx && cursor.x <= nx + nw && cursor.y >= ny && cursor.y <= ny + nh
                     });
 
-                if at_left_edge || in_mixer || over_card {
+                let volume_enter = if volume_right { &MH_RIGHT_ENTER_MS } else { &MH_LEFT_ENTER_MS };
+                let volume_confirmed = edge_dwell_met(volume_enter, at_volume_edge, now, edge_dwell);
+                if volume_confirmed || in_mixer || over_card {
                     MH_LEFT_EXPIRY_MS.store(now + 500, Ordering::Relaxed);
                 }
 
-                let final_left_hover = now < MH_LEFT_EXPIRY_MS.load(Ordering::Relaxed);
+                let final_volume_hover = now < MH_LEFT_EXPIRY_MS.load(Ordering::Relaxed);
                 let prev = MH_LAST_LEFT_EDGE_HOVER.load(Ordering::Relaxed);
-                let new_val = if final_left_hover { 1 } else { 0 };
+                let new_val = if final_volume_hover { 1 } else { 0 };
                 if prev != new_val {
-                    let _ = app_handle.emit("volume-edge-hover", final_left_hover);
+                    let _ = app_handle.emit("volume-edge-hover", final_volume_hover);
                     MH_LAST_LEFT_EDGE_HOVER.store(new_val, Ordering::Relaxed);
                 }
-            } else {
-                let prev = MH_LAST_LEFT_EDGE_HOVER.load(Ordering::Relaxed);
-                if prev != 0 {
-                    let _ = app_handle.emit("volume-edge-hover", false);
-                    MH_LAST_LEFT_EDGE_HOVER.store(0, Ordering::Relaxed);
-                }
-            }
 
-            // --- Right Edge (Brightness) ---
-            if !fg_fs {
-                let at_right_edge = cursor.x >= (mon_x + mon_w - 8) &&
-                                    cursor.y >= mon_y &&
-                                    cursor.y <= (mon_y + mon_h);
-
-                if at_right_edge {
+                let brightness_enter = if brightness_right { &MH_RIGHT_ENTER_MS } else { &MH_LEFT_ENTER_MS };
+                let brightness_band = at_edge(brightness_right) && brightness_right != volume_right;
+                if edge_dwell_met(brightness_enter, brightness_band, now, edge_dwell) {
                     MH_RIGHT_EXPIRY_MS.store(now + 500, Ordering::Relaxed);
                 }
 
-                let final_right_hover = now < MH_RIGHT_EXPIRY_MS.load(Ordering::Relaxed);
+                let final_brightness_hover = now < MH_RIGHT_EXPIRY_MS.load(Ordering::Relaxed);
                 let prev = MH_LAST_RIGHT_EDGE_HOVER.load(Ordering::Relaxed);
-                let new_val = if final_right_hover { 1 } else { 0 };
+                let new_val = if final_brightness_hover { 1 } else { 0 };
                 if prev != new_val {
-                    let _ = app_handle.emit("brightness-edge-hover", final_right_hover);
+                    let _ = app_handle.emit("brightness-edge-hover", final_brightness_hover);
                     MH_LAST_RIGHT_EDGE_HOVER.store(new_val, Ordering::Relaxed);
                 }
             } else {
-                let prev = MH_LAST_RIGHT_EDGE_HOVER.load(Ordering::Relaxed);
-                if prev != 0 {
+                if MH_LAST_LEFT_EDGE_HOVER.swap(0, Ordering::Relaxed) != 0 {
+                    let _ = app_handle.emit("volume-edge-hover", false);
+                }
+                if MH_LAST_RIGHT_EDGE_HOVER.swap(0, Ordering::Relaxed) != 0 {
                     let _ = app_handle.emit("brightness-edge-hover", false);
-                    MH_LAST_RIGHT_EDGE_HOVER.store(0, Ordering::Relaxed);
                 }
             }
 
@@ -2386,7 +2494,7 @@ unsafe fn process_mouse_move(app_handle: &AppHandle, cursor: windows::Win32::Fou
                     let prev = MH_LAST_OV_IGNORE.load(Ordering::Relaxed);
                     if prev != 1 {
                         if let Ok(hwnd) = ov_win.hwnd() { re_assert_topmost(hwnd); }
-                        let _ = ov_win.set_ignore_cursor_events(true);
+                        crate::utils::set_window_click_through(&ov_win, true);
                         MH_LAST_OV_IGNORE.store(1, Ordering::Relaxed);
                     }
                 } else {
@@ -2417,7 +2525,7 @@ unsafe fn process_mouse_move(app_handle: &AppHandle, cursor: windows::Win32::Fou
                     let new_val = if should_ignore { 1 } else { 0 };
                     if prev != new_val {
                         if let Ok(hwnd) = ov_win.hwnd() { re_assert_topmost(hwnd); }
-                        let _ = ov_win.set_ignore_cursor_events(should_ignore);
+                        crate::utils::set_window_click_through(&ov_win, should_ignore);
                         MH_LAST_OV_IGNORE.store(new_val, Ordering::Relaxed);
                     }
                 }
@@ -2451,7 +2559,7 @@ fn hit_test_extra_dock_windows(app_handle: &AppHandle, cursor: windows::Win32::F
     for (label, dock_win) in windows {
         if !dock_win.is_visible().unwrap_or(false) {
             if crate::state::get_i32(crate::state::dock_extra_last_ignore(), &label, -1) != 1 {
-                let _ = dock_win.set_ignore_cursor_events(true);
+                crate::utils::set_window_click_through(&dock_win, true);
                 crate::state::set_i32(crate::state::dock_extra_last_ignore(), &label, 1);
             }
             continue;
@@ -2526,6 +2634,9 @@ fn hit_test_extra_dock_windows(app_handle: &AppHandle, cursor: windows::Win32::F
 
         let expiry = crate::state::get_i64(crate::state::dock_extra_expiry_ms(), &label, 0);
         let final_dock_hover = is_hovered || now < expiry;
+        if hover_waits_on_expiry(is_hovered, final_dock_hover) {
+            CURSOR_RECHECK_PENDING.store(true, Ordering::Relaxed);
+        }
         let prev_hover = crate::state::get_i32(crate::state::dock_extra_last_edge_hover(), &label, -1);
         let new_hover = if final_dock_hover { 1 } else { 0 };
         if prev_hover != new_hover {
@@ -2536,11 +2647,15 @@ fn hit_test_extra_dock_windows(app_handle: &AppHandle, cursor: windows::Win32::F
         let should_ignore = dock_fs || (!is_click_interactive
             && !MENU_IS_OPEN.load(Ordering::Relaxed)
             && !DOCK_IS_DRAGGING.load(Ordering::Relaxed));
+        if dock_hover_went_stale(should_ignore, in_dock_hover) {
+            crate::state::set_flag(crate::state::dock_hovered(), &label, false);
+            let _ = app_handle.emit_to(label.as_str(), "dock-cursor-left", ());
+        }
         let prev_ignore = crate::state::get_i32(crate::state::dock_extra_last_ignore(), &label, -1);
         let new_ignore = if should_ignore { 1 } else { 0 };
         if prev_ignore != new_ignore {
             re_assert_topmost(hwnd);
-            let _ = dock_win.set_ignore_cursor_events(should_ignore);
+            crate::utils::set_window_click_through(&dock_win, should_ignore);
             crate::state::set_i32(crate::state::dock_extra_last_ignore(), &label, new_ignore);
         }
     }
@@ -2572,7 +2687,7 @@ fn hit_test_extra_notch_windows(app_handle: &AppHandle, cursor: windows::Win32::
     for (label, main_win) in windows {
         if !main_win.is_visible().unwrap_or(false) {
             if crate::state::get_i32(crate::state::notch_extra_last_ignore(), &label, -1) != 1 {
-                let _ = main_win.set_ignore_cursor_events(true);
+                crate::utils::set_window_click_through(&main_win, true);
                 crate::state::set_i32(crate::state::notch_extra_last_ignore(), &label, 1);
             }
             continue;
@@ -2647,7 +2762,7 @@ fn hit_test_extra_notch_windows(app_handle: &AppHandle, cursor: windows::Win32::
         let new_ignore = if final_ignore { 1 } else { 0 };
         if prev_ignore != new_ignore {
             re_assert_topmost(hwnd);
-            let _ = main_win.set_ignore_cursor_events(final_ignore);
+            crate::utils::set_window_click_through(&main_win, final_ignore);
             crate::state::set_i32(crate::state::notch_extra_last_ignore(), &label, new_ignore);
         }
     }
@@ -3549,7 +3664,7 @@ unsafe extern "system" fn display_monitor_proc(
 
 pub fn start_window_style_guard(app: AppHandle) {
     std::thread::spawn(move || loop {
-        std::thread::sleep(std::time::Duration::from_millis(300));
+        std::thread::sleep(crate::memory_saver::poll_interval(std::time::Duration::from_millis(300)));
         for (label, win) in app.webview_windows() {
             let is_notch = is_notch_label(&label);
             let is_dock = is_dock_label(&label);
@@ -3557,7 +3672,7 @@ pub fn start_window_style_guard(app: AppHandle) {
             let Ok(hwnd) = win.hwnd() else { continue };
             unsafe {
                 use windows::Win32::UI::WindowsAndMessaging::{
-                    GetWindowLongPtrW, SetWindowLongPtrW, GWL_EXSTYLE, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT,
+                    GetWindowLongPtrW, SetWindowLongPtrW, GWL_EXSTYLE, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT,
                 };
                 let ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as usize;
                 let keyboard = crate::state::KEYBOARD_FOCUS_LABEL.lock().ok().is_some_and(|l| l.as_deref() == Some(label.as_str()));
@@ -3566,7 +3681,6 @@ pub fn start_window_style_guard(app: AppHandle) {
                     SetWindowLongPtrW(hwnd, GWL_EXSTYLE, (ex | want) as isize);
                 }
 
-                let actual_ignore = (ex & WS_EX_TRANSPARENT.0 as usize) != 0;
                 let extra = crate::state::monitor_suffix(&label).is_some();
                 let last = if label == "overlay" {
                     MH_LAST_OV_IGNORE.load(Ordering::Relaxed)
@@ -3579,18 +3693,12 @@ pub fn start_window_style_guard(app: AppHandle) {
                 } else {
                     crate::state::get_i32(crate::state::dock_extra_last_ignore(), &label, -1)
                 };
-                if last != -1 && (last == 1) != actual_ignore {
-                    if label == "overlay" {
-                        MH_LAST_OV_IGNORE.store(-1, Ordering::Relaxed);
-                    } else if is_notch && !extra {
-                        MH_LAST_MAIN_IGNORE.store(-1, Ordering::Relaxed);
-                    } else if is_dock && !extra {
-                        MH_LAST_DOCK_IGNORE.store(-1, Ordering::Relaxed);
-                    } else if is_notch {
-                        crate::state::set_i32(crate::state::notch_extra_last_ignore(), &label, -1);
-                    } else {
-                        crate::state::set_i32(crate::state::dock_extra_last_ignore(), &label, -1);
-                    }
+                // tao rewrites the extended style on its own flag changes. Restore what the hit test
+                // last decided (see set_click_through), the cursor may not move again to trigger it.
+                if last != -1 {
+                    crate::utils::set_click_through(hwnd, last == 1);
+                } else if ex & WS_EX_LAYERED.0 as usize == 0 {
+                    crate::utils::set_click_through(hwnd, ex & WS_EX_TRANSPARENT.0 as usize != 0);
                 }
             }
         }
@@ -3605,38 +3713,43 @@ static RECOVERING_FROM_WEBVIEW_FAILURE: AtomicBool = AtomicBool::new(false);
 pub fn watch_webview_processes(app: &AppHandle) {
     let _ = WEBVIEWS_WATCHED_AT.set(Instant::now());
     for (_, window) in app.webview_windows() {
-        let handle = app.clone();
-        let _ = window.with_webview(move |webview| unsafe {
-            use webview2_com::Microsoft::Web::WebView2::Win32::{
-                COREWEBVIEW2_PROCESS_FAILED_KIND,
-                COREWEBVIEW2_PROCESS_FAILED_KIND_BROWSER_PROCESS_EXITED,
-                COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_EXITED,
-            };
-            use webview2_com::ProcessFailedEventHandler;
-
-            let Ok(core) = webview.controller().CoreWebView2() else {
-                return;
-            };
-            let mut token = 0i64;
-            let _ = core.add_ProcessFailed(
-                &ProcessFailedEventHandler::create(Box::new(move |_, args| {
-                    let Some(args) = args else {
-                        return Ok(());
-                    };
-                    let mut kind = COREWEBVIEW2_PROCESS_FAILED_KIND::default();
-                    args.ProcessFailedKind(&mut kind)?;
-                    crate::diagnostics::log(&format!("webview process failed: kind={}", kind.0));
-                    if kind == COREWEBVIEW2_PROCESS_FAILED_KIND_BROWSER_PROCESS_EXITED
-                        || kind == COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_EXITED
-                    {
-                        recover_from_webview_failure(&handle);
-                    }
-                    Ok(())
-                })),
-                &mut token,
-            );
-        });
+        watch_webview_process(app, &window);
     }
+}
+
+/// Also called for each on-demand window, those don't exist yet when the app starts.
+pub fn watch_webview_process(app: &AppHandle, window: &tauri::WebviewWindow) {
+    let handle = app.clone();
+    let _ = window.with_webview(move |webview| unsafe {
+        use webview2_com::Microsoft::Web::WebView2::Win32::{
+            COREWEBVIEW2_PROCESS_FAILED_KIND,
+            COREWEBVIEW2_PROCESS_FAILED_KIND_BROWSER_PROCESS_EXITED,
+            COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_EXITED,
+        };
+        use webview2_com::ProcessFailedEventHandler;
+
+        let Ok(core) = webview.controller().CoreWebView2() else {
+            return;
+        };
+        let mut token = 0i64;
+        let _ = core.add_ProcessFailed(
+            &ProcessFailedEventHandler::create(Box::new(move |_, args| {
+                let Some(args) = args else {
+                    return Ok(());
+                };
+                let mut kind = COREWEBVIEW2_PROCESS_FAILED_KIND::default();
+                args.ProcessFailedKind(&mut kind)?;
+                crate::diagnostics::log(&format!("webview process failed: kind={}", kind.0));
+                if kind == COREWEBVIEW2_PROCESS_FAILED_KIND_BROWSER_PROCESS_EXITED
+                    || kind == COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_EXITED
+                {
+                    recover_from_webview_failure(&handle);
+                }
+                Ok(())
+            })),
+            &mut token,
+        );
+    });
 }
 
 fn recover_from_webview_failure(handle: &AppHandle) {
@@ -3666,7 +3779,47 @@ fn recover_from_webview_failure(handle: &AppHandle) {
 
 #[cfg(test)]
 mod tests {
-    use super::{dock_edge_hover_allowed, hides_own_window, is_helper_name, is_launchable_entry, win_number_index};
+    use super::{cursor_watch_interval, dock_edge_hover_allowed, dock_hover_went_stale, notch_overlap_during_start, start_counts_as_shown, hides_own_window, hover_waits_on_expiry, is_helper_name, is_launchable_entry, win_number_index};
+    use std::time::Duration;
+
+    #[test]
+    fn start_leaves_the_notch_as_it_was() {
+        assert!(notch_overlap_during_start(true, false, true), "hidden stays hidden");
+        assert!(!notch_overlap_during_start(true, true, false), "visible stays visible");
+        assert!(notch_overlap_during_start(false, true, false), "without Start the computed value counts");
+        assert!(!notch_overlap_during_start(false, false, true));
+    }
+
+    #[test]
+    fn start_counts_while_opening_but_not_forever() {
+        let just_now = Duration::from_millis(100);
+        let long_ago = Duration::from_millis(1000);
+        assert!(start_counts_as_shown(true, true, long_ago), "on screen");
+        assert!(start_counts_as_shown(true, false, just_now), "focused but still appearing");
+        assert!(!start_counts_as_shown(true, false, long_ago), "focused but closed, the dock must come back");
+        assert!(!start_counts_as_shown(false, true, just_now), "not Start");
+    }
+
+    #[test]
+    fn hover_goes_stale_only_once_the_window_stopped_taking_input() {
+        assert!(dock_hover_went_stale(true, true));
+        assert!(!dock_hover_went_stale(false, true), "still taking input, the webview sees the leave itself");
+        assert!(!dock_hover_went_stale(true, false));
+    }
+
+    #[test]
+    fn a_hover_kept_only_by_its_expiry_needs_a_recheck() {
+        assert!(hover_waits_on_expiry(false, true));
+        assert!(!hover_waits_on_expiry(true, true), "the cursor is really there");
+        assert!(!hover_waits_on_expiry(false, false));
+    }
+
+    #[test]
+    fn cursor_watch_takes_over_after_the_hook_misses_a_move() {
+        assert_eq!(cursor_watch_interval(None), Duration::from_millis(200));
+        assert_eq!(cursor_watch_interval(Some(Duration::from_millis(999))), Duration::from_millis(32));
+        assert_eq!(cursor_watch_interval(Some(Duration::from_millis(1000))), Duration::from_millis(200));
+    }
 
     #[test]
     fn only_our_own_process_is_hidden_from_the_dock() {

@@ -22,8 +22,9 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2.11", features = ["tray-icon", "image-png"] }
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+serde_json = { version = "1", features = ["preserve_order"] }
 windows-core = "0.61"
+windows-collections = "0.2"
 windows = { version = "0.61", features = [
   "Win32_UI_Input_KeyboardAndMouse",
   "Win32_UI_Shell",
@@ -36,6 +37,7 @@ windows = { version = "0.61", features = [
   "Media_Control",
   "Win32_Media_Audio",
   "Win32_Media_Audio_Endpoints",
+  "Win32_Media_KernelStreaming",
   "Win32_System_Threading",
   "Win32_System_Com_StructuredStorage",
   "Win32_System_SystemInformation",
@@ -54,12 +56,18 @@ windows = { version = "0.61", features = [
   "Win32_System_LibraryLoader",
   "Win32_System_IO",
   "Win32_Security",
+  "Win32_Security_Cryptography",
   "Win32_System_Registry",
   "Win32_Globalization",
   "Win32_Devices_FunctionDiscovery",
   "Devices_Radios",
   "Devices_Bluetooth",
+  "Devices_Bluetooth_Advertisement",
+  "Devices_Bluetooth_Rfcomm",
+  "Networking_Sockets",
   "Devices_Enumeration",
+  "Devices_Power",
+  "Foundation",
   "Foundation_Collections",
   "System_Power",
   "Win32_NetworkManagement_IpHelper",
@@ -67,7 +75,18 @@ windows = { version = "0.61", features = [
   "Win32_NetworkManagement_Ndis",
   "Win32_Networking_WinSock",
   "Win32_System_Diagnostics_ToolHelp",
-  "Win32_System_ProcessStatus"
+  "Win32_System_ProcessStatus",
+  "Win32_System_RemoteDesktop",
+  "Graphics_Capture",
+  "Graphics_DirectX",
+  "Graphics_DirectX_Direct3D11",
+  "Win32_Graphics_Direct3D",
+  "Win32_Graphics_Direct3D11",
+  "Win32_Graphics_Dxgi",
+  "Win32_Graphics_Dxgi_Common",
+  "Win32_System_WinRT",
+  "Win32_System_WinRT_Direct3D11",
+  "Win32_System_WinRT_Graphics_Capture"
 ] }
 base64 = "0.22"
 tauri-plugin-autostart = "2.5.1"

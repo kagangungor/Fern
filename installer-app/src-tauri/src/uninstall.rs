@@ -115,7 +115,19 @@ fn remove_app_files_command(install_dir: &Path, all_users: bool) -> String {
     )
 }
 
+fn run_agent_hooks(exe: &Path, command: &str) {
+    let _ = std::process::Command::new(exe)
+        .args(["agent", command])
+        .creation_flags(CREATE_NO_WINDOW)
+        .status();
+}
+
 pub fn uninstall(install_dir: &Path, all_users: bool, shortcuts: &[PathBuf]) -> Result<(), String> {
+    let exe = install_dir.join("fern.exe");
+    if exe.exists() {
+        run_agent_hooks(&exe, "remove-hooks");
+    }
+
     stop_running_fern();
 
     for s in shortcuts {
