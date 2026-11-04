@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" aria-label="Fern mascot" viewBox="0 0 360 440" shape-rendering="crispEdges">
+  <style>
+    
+      @keyframes cheer { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-16px); } }
+      @keyframes spinStar { 0% { opacity: 0.3; transform: scale(0.8); } 50% { opacity: 1; transform: scale(1.1); } 100% { opacity: 0.3; transform: scale(0.8); } }
+      .cheer-body { animation: cheer 0.6s ease-in-out infinite; }
+      .star { animation: spinStar 1s ease-in-out infinite; }
+    
+  </style>
+  <g class="cheer-body">
+    <!-- Sprout / Koru spiral -->
+    <rect x="160" y="40" width="40" height="20" fill="#A7F3D0" />
+    <rect x="140" y="60" width="20" height="40" fill="#6EE7B7" />
+    <rect x="200" y="60" width="20" height="20" fill="#A7F3D0" />
+    <rect x="160" y="80" width="40" height="20" fill="#6EE7B7" />
+    <rect x="160" y="100" width="40" height="40" fill="#10B981" />
+    <rect x="160" y="140" width="40" height="20" fill="#059669" />
+    <!-- Body -->
+    <rect x="120" y="160" width="120" height="20" fill="#059669" />
+    <rect x="100" y="180" width="160" height="20" fill="#059669" />
+    <rect x="80" y="200" width="200" height="20" fill="#059669" />
+    <rect x="60" y="220" width="240" height="80" fill="#059669" />
+    <rect x="80" y="300" width="200" height="20" fill="#059669" />
+    <rect x="100" y="320" width="160" height="20" fill="#059669" />
+    <rect x="120" y="180" width="120" height="20" fill="#34D399" />
+    <rect x="100" y="200" width="160" height="20" fill="#34D399" />
+    <rect x="80" y="220" width="200" height="80" fill="#34D399" />
+    <rect x="100" y="300" width="160" height="20" fill="#34D399" />
+    <rect x="120" y="180" width="60" height="20" fill="#6EE7B7" />
+    <rect x="100" y="200" width="40" height="20" fill="#6EE7B7" />
+    <rect x="80" y="260" width="40" height="20" fill="#F472B6" />
+    <rect x="240" y="260" width="40" height="20" fill="#F472B6" />
+    <rect x="140" y="260" width="80" height="60" fill="#D1FAE5" />
+    <!-- Feet -->
+    <rect x="120" y="340" width="40" height="20" fill="#059669" />
+    <rect x="200" y="340" width="40" height="20" fill="#059669" />
+    <!-- Face -->
+    <rect x="100" y="240" width="20" height="20" fill="#064E3B" />
+    <rect x="120" y="220" width="40" height="20" fill="#064E3B" />
+    <rect x="180" y="220" width="40" height="20" fill="#064E3B" />
+    <rect x="220" y="240" width="20" height="20" fill="#064E3B" />
+    <rect x="140" y="260" width="80" height="20" fill="#064E3B" />
+    <rect x="160" y="280" width="40" height="20" fill="#F43F5E" />
+    <!-- Arms -->
+    <rect x="40" y="180" width="40" height="60" fill="#10B981" />
+    <rect x="280" y="180" width="40" height="60" fill="#10B981" />
+    <!-- Props & Overlays -->
+    <rect x="40" y="100" width="40" height="40" fill="#FBBF24" class="star" />
+    <rect x="280" y="80" width="40" height="40" fill="#FBBF24" class="star" />
+  </g>
+</svg>

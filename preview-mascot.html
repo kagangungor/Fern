@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Fernie - Mascot Test & Gallery</title>
+  <style>
+    :root {
+      --bg: #0e1117;
+      --card-bg: rgba(255, 255, 255, 0.05);
+      --card-border: rgba(255, 255, 255, 0.1);
+      --text: #f0f6fc;
+      --text-muted: #8b949e;
+      --accent: #10b981;
+    }
+
+    body.light {
+      --bg: #f3f4f6;
+      --card-bg: rgba(0, 0, 0, 0.04);
+      --card-border: rgba(0, 0, 0, 0.08);
+      --text: #111827;
+      --text-muted: #6b7280;
+      --accent: #059669;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      padding: 40px 24px;
+      transition: background 0.3s ease, color 0.3s ease;
+    }
+
+    .container {
+      max-width: 1000px;
+      margin: 0 auto;
+    }
+
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 32px;
+      padding-bottom: 20px;
+      border-bottom: 1px solid var(--card-border);
+    }
+
+    h1 {
+      font-size: 26px;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .controls {
+      display: flex;
+      gap: 12px;
+    }
+
+    button {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      color: var(--text);
+      padding: 8px 16px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 500;
+      transition: all 0.2s ease;
+    }
+
+    button:hover {
+      background: rgba(255, 255, 255, 0.12);
+      border-color: var(--accent);
+    }
+
+    button.primary {
+      background: var(--accent);
+      color: #fff;
+      border-color: var(--accent);
+    }
+
+    /* Simulated Notch Preview */
+    .notch-simulation {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 16px;
+      padding: 24px;
+      margin-bottom: 40px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 16px;
+    }
+
+    .notch-sim-title {
+      font-size: 13px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--text-muted);
+    }
+
+    .notch-bar {
+      height: 38px;
+      background: #000;
+      border-radius: 19px;
+      padding: 0 16px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      box-shadow: 0 10px 25px rgba(0,0,0,0.4);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      transition: all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+    }
+
+    .notch-bar img {
+      width: 24px;
+      height: 24px;
+    }
+
+    .notch-text {
+      font-size: 12px;
+      font-weight: 600;
+      color: #fff;
+      white-space: nowrap;
+    }
+
+    .notch-detail {
+      font-size: 11px;
+      color: rgba(255, 255, 255, 0.6);
+    }
+
+    /* Grid Gallery */
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+      gap: 20px;
+    }
+
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 14px;
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 14px;
+      transition: transform 0.2s ease, border-color 0.2s ease;
+      cursor: pointer;
+    }
+
+    .card:hover {
+      transform: translateY(-4px);
+      border-color: var(--accent);
+    }
+
+    .card.active {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 2px var(--accent);
+    }
+
+    .icon-wrapper {
+      width: 80px;
+      height: 80px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: rgba(0, 0, 0, 0.15);
+      border-radius: 12px;
+    }
+
+    .card img {
+      width: 64px;
+      height: 64px;
+      image-rendering: pixelated;
+    }
+
+    .card-title {
+      font-weight: 600;
+      font-size: 15px;
+    }
+
+    .card-desc {
+      font-size: 12px;
+      color: var(--text-muted);
+      text-align: center;
+      line-height: 1.4;
+    }
+
+    .sound-badge {
+      font-size: 11px;
+      padding: 3px 8px;
+      border-radius: 6px;
+      background: rgba(16, 185, 129, 0.15);
+      color: #10b981;
+      font-weight: 600;
+    }
+
+    .sit-toggle-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>🌿 Fernie (Fern Mascot Test & Gallery)</h1>
+      <div class="controls">
+        <label class="sit-toggle-row">
+          <input type="checkbox" id="sitToggle">
+          <span>Oturan Mod (-sit)</span>
+        </label>
+        <button id="themeToggle">🌓 Tema Değiştir</button>
+      </div>
+    </header>
+
+    <!-- Simulated Notch Section -->
+    <div class="notch-simulation">
+      <div class="notch-sim-title">Çentik Canlı Simülasyonu (Aşağıdaki bir karta tıkla)</div>
+      <div class="notch-bar" id="notchSim">
+        <img id="simMascot" src="public/mascot/working.svg" alt="Fernie">
+        <span class="notch-text" id="simTitle">Claude Code · Kod yazıyor...</span>
+        <span class="notch-detail" id="simDetail">Fern / src/App.tsx</span>
+      </div>
+      <button id="playSoundBtn" style="display: none;">🔊 Sesi Çal</button>
+    </div>
+
+    <!-- 7 Mascot States -->
+    <div class="grid" id="mascotGrid"></div>
+  </div>
+
+  <script>
+    const states = [
+      { id: "idle", name: "Idle (Boşta)", desc: "Ajan beklemede veya sakin dururken", sound: null },
+      { id: "working", name: "Working (Çalışıyor)", desc: "Ajan kod yazarken, düşünürken veya işlem yaparken", sound: null },
+      { id: "needs-input", name: "Needs Input (Girdi Bekliyor)", desc: "Ajan kullanıcıdan komut/onay beklerken", sound: "public/sounds/agent-needs_input.wav" },
+      { id: "done", name: "Done (Tamamlandı)", desc: "İşlem başarıyla tamamlandığında çiçek açar", sound: "public/sounds/agent-done.wav" },
+      { id: "error", name: "Error (Hata)", desc: "Hata oluştuğunda şaşkın/üzgün ifade", sound: "public/sounds/agent-error.wav" },
+      { id: "sleeping", name: "Sleeping (Uyuyor)", desc: "Uzun süre işlem yapılmadığında derin dinlenme", sound: null },
+      { id: "music", name: "Music (Müzik)", desc: "Müzik/medya çalarken eşlik eden mod", sound: null }
+    ];
+
+    let isSit = false;
+    let currentState = states[1];
+
+    const grid = document.getElementById("mascotGrid");
+    const simMascot = document.getElementById("simMascot");
+    const simTitle = document.getElementById("simTitle");
+    const simDetail = document.getElementById("simDetail");
+    const playSoundBtn = document.getElementById("playSoundBtn");
+    const sitToggle = document.getElementById("sitToggle");
+    const themeToggle = document.getElementById("themeToggle");
+
+    function getSvgPath(id) {
+      return `public/mascot/${id}${isSit ? "-sit" : ""}.svg`;
+    }
+
+    function renderGrid() {
+      grid.innerHTML = "";
+      states.forEach(s => {
+        const card = document.createElement("div");
+        card.className = `card ${s.id === currentState.id ? "active" : ""}`;
+        card.innerHTML = `
+          <div class="icon-wrapper">
+            <img src="${getSvgPath(s.id)}" alt="${s.name}">
+          </div>
+          <div class="card-title">${s.name}</div>
+          <div class="card-desc">${s.desc}</div>
+          ${s.sound ? `<span class="sound-badge">🔊 Ses Efekti Var</span>` : ""}
+        `;
+        card.onclick = () => selectState(s);
+        grid.appendChild(card);
+      });
+    }
+
+    function selectState(s) {
+      currentState = s;
+      simMascot.src = getSvgPath(s.id);
+      simTitle.textContent = `Claude Code · ${s.name}`;
+      simDetail.textContent = s.desc;
+
+      if (s.sound) {
+        playSoundBtn.style.display = "inline-flex";
+        playSoundBtn.onclick = () => {
+          const audio = new Audio(s.sound);
+          audio.volume = 0.7;
+          audio.play();
+        };
+        // Auto play on click
+        playSoundBtn.click();
+      } else {
+        playSoundBtn.style.display = "none";
+      }
+
+      renderGrid();
+    }
+
+    sitToggle.onchange = (e) => {
+      isSit = e.target.checked;
+      simMascot.src = getSvgPath(currentState.id);
+      renderGrid();
+    };
+
+    themeToggle.onclick = () => {
+      document.body.classList.toggle("light");
+    };
+
+    renderGrid();
+    selectState(states[1]);
+  </script>
+</body>
+</html>
