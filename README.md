@@ -9,7 +9,7 @@
   <img src="docs/wordmark-light.png" height="44" alt="Fern" />
 </picture>
 
-<p><strong>A notch and a dock for Windows.<br />Physics-animated, reactive, and built to replace your taskbar.</strong></p>
+<p><strong>A notch and a dock for Windows.<br />Physics-animated, reactive, and built to replace your taskbar.</strong><br /><em>Not a cosmetic macOS clone — the missing productivity, media, and hardware control layer for Windows 11.</em></p>
 
 [![Latest release](https://shieldcn.dev/github/release/kagangungor/Fern.svg?logo=lu:Tag)](https://github.com/kagangungor/Fern/releases/latest)
 [![Downloads](https://shieldcn.dev/github/downloads/kagangungor/Fern.svg?logo=lu:Download)](https://github.com/kagangungor/Fern/releases)
@@ -161,13 +161,36 @@ bun run tauri dev
 
 ## Roadmap
 
-All core milestones for v1.0.0 have been achieved:
+> **Vision:** Fern is not a cosmetic macOS clone — it is the missing productivity, media, and hardware control layer built to give Windows users real desktop superpowers.
 
-- [x] Lower memory use, with Settings and secondary windows loaded on demand
-- [x] Connected devices status & battery levels (Bluetooth, Buds, USB)
-- [x] Fernie companion mascot with agent integration & audio alerts
-- [x] Background tray programs (antivirus, VPN) accessible directly from the notch
-- [x] Cryptographic update signing with the Fern minisign key and SHA-256 release verification
+### Completed in v1.0.0
+- [x] **Lightweight Performance Core:** Secondary windows (Settings, Calendar) loaded on-demand and destroyed on close
+- [x] **Memory Saver Engine:** Idle WebView working set trimming and relaxed background polling
+- [x] **Connected Hardware & Earbuds:** Real-time multi-part battery levels (AirPods, Galaxy Buds, Fast Pair) and dynamic vector art
+- [x] **Fernie Companion & Agent API:** Interactive desktop mascot with live local AI agent state reporting and audio cues
+- [x] **Native Taskbar Replacement:** Win+1..9 shortcuts, real tray flyout access, attention flashing badges, drag-to-dock window reveal
+- [x] **Verified Releases:** Cryptographic update signing with the Fern minisign key and SHA-256 validation
+
+### Upcoming Milestones
+
+#### 🎙️ Universal Meeting & Privacy HUD
+- [ ] **System-Wide Universal Mute:** Instant microphone toggle (via island click or global shortcut `Ctrl+F1`) working across Zoom, Microsoft Teams, Google Meet, and Discord
+- [ ] **Privacy Aura:** Visible reactive indicator on the island whenever the camera or microphone is active
+- [ ] **Meeting Timer & Speaker Detection:** Ambient meeting duration and speaking activity tracking
+
+#### 💻 Developer & Terminal Ambient HUD (Dev HUD)
+- [ ] **Long-Running Task & Build Progress:** Visual progress line across the notch for CLI tasks (`cargo build`, `npm install`, `docker`, test suites, long scripts) via Agent API
+- [ ] **Active Git Context:** Compact branch name and uncommitted changes count when IDE or terminal is focused
+- [ ] **Streaming AI Agent Actions:** Real-time micro-log and status streaming in the expanded island
+
+#### 🎚️ Per-App Audio Scroll Mixer & Live Synchronized Lyrics
+- [ ] **Per-App Scroll Wheel Volume:** Adjust individual application volumes (Spotify, Discord, browser) directly by scrolling the mouse wheel over their dock or notch icons
+- [ ] **Synchronized Live Lyrics (Karaoke Mode):** Real-time synced lyric lines streaming smoothly inside the music notch
+
+#### 📋 Pro Clipboard & Smart Developer Inspector
+- [ ] **Fast Island Clipboard:** Lightweight, accessible recent clipboard history integrated right into the island
+- [ ] **Color & Token Inspector:** Instant live preview when copying color codes (`#hex`, `rgb`, `hsl`) with one-click conversion to Tailwind, CSS, or Hex
+- [ ] **Code & Format Quick Actions:** Instant JSON beautify, Base64 toggle, and regex tester right from the clipboard shelf
 
 See the [open issues](https://github.com/kagangungor/Fern/issues) for requests and known bugs.
 
