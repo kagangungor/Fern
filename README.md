@@ -29,12 +29,14 @@
 
 | What you get | How |
 | --- | --- |
-| **A notch that does things** | Music, a Control Center you arrange yourself, status, a calendar and a file shelf in one spring-animated island. |
-| **A dock that replaces your taskbar** | Mirrors your real taskbar, same pinned apps and order, with real icons and names. |
-| **Native where it counts** | The tray opens the real Windows flyout, and Quit ends an app like Task Manager's End task. |
-| **Out of your way** | Fixed, Smart or Peek modes, and both stay hidden over fullscreen games. |
+| **A notch that does things** | Music, a Control Center you arrange yourself, status, calendar, connected devices, and a file shelf in one spring-animated island. |
+| **Hardware & Connected Devices** | Real-time battery levels for Bluetooth earbuds (AirPods, Galaxy Buds), headsets, and USB peripherals with custom dynamic vector art. |
+| **Fernie Mascot & Agent Status** | Interactive desktop companion with reactive states (idle, working, music, sleeping) and audio cues for local AI agent workflows. |
+| **A dock that replaces your taskbar** | Mirrors your real taskbar, same pinned apps and order, window previews, attention badges, with real icons and names. |
+| **Native where it counts** | The tray opens the real Windows flyout, Win+1..9 switches apps, and Quit ends an app like Task Manager's End task. |
+| **Out of your way** | Fixed, Smart or Peek modes, with intelligent click-through and zero interference over fullscreen games. |
 | **Made for your setup** | Every monitor, one monitor, or a specific one. English and Turkish. Every option lives in a plain `settings.json`. |
-| **Light on the system** | Audio capture, cursor tracking and thumbnail work pause themselves when nothing needs them. |
+| **Light on the system** | Secondary windows (Settings, Calendar) load on demand, background memory saver suspends idle WebViews, and sensors pause when not needed. |
 
 <div align="center">
 <table>
@@ -79,8 +81,10 @@ Get-FileHash .\Fern-Setup-<version>.exe -Algorithm SHA256
 | **Music** | Album art, track info, playback controls, a visualizer, and a switch between several playing apps. |
 | **Control Center** | Wi-Fi, Bluetooth, Do Not Disturb, volume and brightness. Drag tiles, buttons and sliders into your own layout. |
 | **Status** | Battery (hidden on desktops without one) and weather, in a layout you choose. |
+| **Connected Devices** | Live battery indicators and hardware detection for Bluetooth earbuds (AirPods, Galaxy Buds case & buds), headsets, and USB devices. |
 | **Calendar** | Day, week, month and agenda views, a timer, a stopwatch and Pomodoro. |
 | **Shelf** | Drop files or text on the notch and drag them out later. |
+| **Agent Companion** | Fernie mascot animations reflecting background AI agent status (idle, working, needs input, done, error) with subtle audio cues. |
 
 **Visibility modes.** The notch and the dock each have their own.
 
@@ -119,7 +123,7 @@ Start Fern again, it restores the taskbar on launch even after a crash. Uninstal
 
 <br />
 
-Every window runs in its own WebView2 process, so each monitor adds a notch and a dock. Set **Show On** to one monitor to cut it down.
+With on-demand window loading and the background memory saver, Fern keeps memory usage minimal during normal use. However, when **Show On** is set to **All Monitors**, each extra monitor runs its own notch and dock windows. Set **Show On** to **Primary Monitor** to reduce memory footprint even further.
 
 </details>
 
@@ -158,8 +162,10 @@ bun run tauri dev
 
 These are ideas under consideration, not promises.
 
+- [x] Lower memory use, with Settings and secondary windows loaded on demand
+- [x] Connected devices status & battery levels (Bluetooth, Buds, USB)
+- [x] Fernie companion mascot with agent integration & audio alerts
 - [ ] Background tray programs (antivirus, VPN) in the notch
-- [ ] Lower memory use, with Settings loaded on demand
 - [ ] Code signing for the installer
 
 See the [open issues](https://github.com/kagangungor/Fern/issues) for requests and known bugs.
