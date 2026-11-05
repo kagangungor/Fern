@@ -836,7 +836,7 @@ pub fn is_window_fullscreen(hwnd: HWND) -> bool {
     unsafe {
         use windows::Win32::Foundation::{POINT, RECT};
         use windows::Win32::Graphics::Gdi::{ClientToScreen, GetMonitorInfoA, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST};
-        use windows::Win32::UI::WindowsAndMessaging::{GetClientRect, GetWindowLongW, IsZoomed, GWL_STYLE, WS_CAPTION, WS_MAXIMIZE};
+        use windows::Win32::UI::WindowsAndMessaging::{GetClientRect, GetWindowLongW, IsZoomed, GWL_STYLE, WS_MAXIMIZE};
 
         let monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
         if monitor.is_invalid() { return false; }
@@ -852,7 +852,7 @@ pub fn is_window_fullscreen(hwnd: HWND) -> bool {
         let _ = ClientToScreen(hwnd, &mut bottom_right);
 
         let style = GetWindowLongW(hwnd, GWL_STYLE) as u32;
-        let is_maximized_standard = (IsZoomed(hwnd).as_bool() || (style & WS_MAXIMIZE.0) != 0) && (style & WS_CAPTION.0) != 0;
+        let is_maximized = IsZoomed(hwnd).as_bool() || (style & WS_MAXIMIZE.0) != 0;
 
         // Tolerance for subpixel DPI rounding (2px)
         let client_fullscreen = top_left.x <= screen.left + 2 && top_left.y <= screen.top + 2
@@ -861,7 +861,7 @@ pub fn is_window_fullscreen(hwnd: HWND) -> bool {
         let is_d3d_fs = windows::Win32::UI::Shell::SHQueryUserNotificationState()
             .is_ok_and(|state| state == windows::Win32::UI::Shell::QUNS_RUNNING_D3D_FULL_SCREEN);
 
-        (client_fullscreen && !is_maximized_standard) || is_d3d_fs
+        (client_fullscreen && !is_maximized) || is_d3d_fs
     }
 }
 

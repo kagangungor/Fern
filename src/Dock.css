@@ -1003,6 +1003,12 @@ body {
   border-radius: 6px;
 }
 
+.dock-icon-wrapper.dock-icon-drag-hover .dock-icon {
+  filter: drop-shadow(0 0 12px var(--fern-accent, rgba(255, 255, 255, 0.6))) brightness(1.25);
+  transform: translateY(-4px) scale(1.08);
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
 .preview-item-icon-fallback img {
   width: 44px;
   height: 44px;

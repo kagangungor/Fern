@@ -1054,6 +1054,27 @@ pub async fn focus_window(hwnd: isize) {
     }).await.unwrap_or_default();
 }
 
+/// Brings a window to the foreground and restores it if minimized.
+/// Unlike `focus_window`, this NEVER minimizes the window, making it safe for hover-to-activate / drag-and-drop.
+#[tauri::command]
+pub async fn bring_hwnd_to_front(hwnd: isize) {
+    tauri::async_runtime::spawn_blocking(move || unsafe {
+        use windows::Win32::UI::WindowsAndMessaging::{
+            ShowWindow, SW_RESTORE, SW_SHOW, IsIconic, IsWindowVisible,
+        };
+        let hwnd = windows::Win32::Foundation::HWND(hwnd as *mut _);
+        if !IsWindowVisible(hwnd).as_bool() {
+            let _ = ShowWindow(hwnd, SW_SHOW);
+        }
+        if IsIconic(hwnd).as_bool() {
+            let _ = ShowWindow(hwnd, SW_RESTORE);
+        }
+        force_set_foreground(hwnd);
+    })
+    .await
+    .unwrap_or_default();
+}
+
 /// Focuses one window of a multi-window item. hwnds are most recent first: if none is
 /// in front take the first, otherwise go to the next one so clicks cycle through all of them.
 #[tauri::command]

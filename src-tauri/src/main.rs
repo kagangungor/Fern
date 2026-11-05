@@ -209,6 +209,7 @@ fn main() {
             jack::jack_list_devices,
             battery::get_battery_details,
             focus_window,
+            bring_hwnd_to_front,
             focus_app_windows,
             close_window,
             end_task,

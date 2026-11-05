@@ -353,6 +353,9 @@ const Dock = memo(function Dock() {
   const [activeOrder, setActiveOrder] = useState<string[]>([]);
   const [isDragging, setIsDragging] = useState(false);
   const [hoveredApp, setHoveredApp] = useState<string | null>(null);
+  const [dragHoveringApp, setDragHoveringApp] = useState<string | null>(null);
+  const dragHoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const dragHoverAppKeyRef = useRef<string | null>(null);
   const [trayOpen, setTrayOpen] = useState(false);
   const [clickedShortcut, setClickedShortcut] = useState<string | null>(null);
   const [pressedApp, setPressedApp] = useState<string | null>(null);
@@ -1056,6 +1059,70 @@ const Dock = memo(function Dock() {
     }
   };
 
+  const handleAppDragOver = useCallback((e: React.DragEvent, app: AppInfo) => {
+    if (isDragging) return;
+    if (!app.is_running) return;
+    const targetHwnd = app.all_hwnds && app.all_hwnds.length > 0 ? app.all_hwnds[0][0] : app.hwnd;
+    if (!targetHwnd) return;
+
+    e.preventDefault();
+    e.stopPropagation();
+    e.dataTransfer.dropEffect = 'copy';
+
+    const key = itemKey(app);
+    if (dragHoverAppKeyRef.current === key) {
+      return;
+    }
+
+    if (dragHoverTimerRef.current) {
+      clearTimeout(dragHoverTimerRef.current);
+      dragHoverTimerRef.current = null;
+    }
+
+    dragHoverAppKeyRef.current = key;
+    setDragHoveringApp(key);
+
+    dragHoverTimerRef.current = setTimeout(async () => {
+      try {
+        await invoke('bring_hwnd_to_front', { hwnd: targetHwnd });
+      } catch (err) {
+        console.error('Failed to bring window to front on drag hover:', err);
+      }
+    }, 450);
+  }, [isDragging]);
+
+  const handleAppDragLeave = useCallback((_e: React.DragEvent, app: AppInfo) => {
+    if (isDragging) return;
+    const key = itemKey(app);
+    if (dragHoverAppKeyRef.current === key) {
+      if (dragHoverTimerRef.current) {
+        clearTimeout(dragHoverTimerRef.current);
+        dragHoverTimerRef.current = null;
+      }
+      dragHoverAppKeyRef.current = null;
+      setDragHoveringApp(null);
+    }
+  }, [isDragging]);
+
+  const handleAppDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (dragHoverTimerRef.current) {
+      clearTimeout(dragHoverTimerRef.current);
+      dragHoverTimerRef.current = null;
+    }
+    dragHoverAppKeyRef.current = null;
+    setDragHoveringApp(null);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (dragHoverTimerRef.current) {
+        clearTimeout(dragHoverTimerRef.current);
+      }
+    };
+  }, []);
+
   const handleMixedDragEnd = (app: AppInfo) => {
     setIsDragging(false);
     setPressedApp(null);
@@ -1288,7 +1355,17 @@ const Dock = memo(function Dock() {
   }, []);
 
   return (
-    <div className={`dock-container ${isDragging ? 'dragging' : ''}`} onClick={closeMenu}>
+    <div
+      className={`dock-container ${isDragging ? 'dragging' : ''}`}
+      onClick={closeMenu}
+      onDragOver={(e) => {
+        e.preventDefault();
+        if (!isDockHovered) setIsDockHovered(true);
+      }}
+      onDrop={(e) => {
+        e.preventDefault();
+      }}
+    >
       <div style={{ width: '100%', height: '100%', display: 'flex', justifyContent: 'center', alignItems: 'flex-end' }}>
         <motion.div
           ref={dockRef}
@@ -1298,6 +1375,23 @@ const Dock = memo(function Dock() {
           // The backend may have ended the hover without the DOM knowing, then no new mouseenter comes.
           onMouseMove={() => { if (!isDockHovered) setIsDockHovered(true); }}
           onMouseLeave={() => { setIsDockHovered(false); setHoveredApp(null); setPressedApp(null); }}
+          onDragOver={(e) => {
+            e.preventDefault();
+            if (!isDockHovered) setIsDockHovered(true);
+          }}
+          onDragLeave={(e) => {
+            if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+              if (dragHoverTimerRef.current) {
+                clearTimeout(dragHoverTimerRef.current);
+                dragHoverTimerRef.current = null;
+              }
+              dragHoverAppKeyRef.current = null;
+              setDragHoveringApp(null);
+            }
+          }}
+          onDrop={(e) => {
+            e.preventDefault();
+          }}
         initial={{ y: -800, opacity: 1, width: 34, height: 34, borderTopLeftRadius: 17, borderTopRightRadius: 17, borderBottomLeftRadius: 17, borderBottomRightRadius: 17 }}
         animate={{
           y: !isReady ? -800 : (isHidden ? 100 : 0),
@@ -1502,6 +1596,9 @@ const Dock = memo(function Dock() {
                     style={{ position: 'relative' }}
                     onDragStart={() => { setIsDragging(true); setHoveredApp(null); setPressedApp(null); }}
                     onDragEnd={handleDragEnd}
+                    onDragOver={(e) => handleAppDragOver(e, app)}
+                    onDragLeave={(e) => handleAppDragLeave(e, app)}
+                    onDrop={handleAppDrop}
                     onContextMenu={(e) => handleContextMenu(e, app)}
                     onMouseDown={(e) => { if (e.button === 1) e.preventDefault(); }}
                     onAuxClick={(e) => handleMiddleClick(e, app)}
@@ -1511,7 +1608,7 @@ const Dock = memo(function Dock() {
                     }}
                   >
                     <motion.div
-                      className="dock-icon-wrapper"
+                      className={`dock-icon-wrapper ${dragHoveringApp === itemKey(app) ? 'dock-icon-drag-hover' : ''}`}
                       initial={ITEM_INITIAL}
                       animate={ITEM_ANIMATE}
                       exit={ITEM_EXIT}
@@ -1532,7 +1629,17 @@ const Dock = memo(function Dock() {
                     >
                       <div className="preview-items">
                         {previewData.previews.map((prev, idx) => (
-                          <div key={prev.hwnd} className="preview-item" onClick={() => invoke('focus_window', { hwnd: prev.hwnd })}>
+                            <div
+                              key={prev.hwnd}
+                              className="preview-item"
+                              onClick={() => invoke('focus_window', { hwnd: prev.hwnd })}
+                              onDragOver={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                e.dataTransfer.dropEffect = 'copy';
+                                invoke('bring_hwnd_to_front', { hwnd: prev.hwnd }).catch(() => {});
+                              }}
+                            >
                             {prev.image ? (
                               <img src={prev.image} alt={`Preview ${idx}`} />
                             ) : (
@@ -1605,6 +1712,9 @@ const Dock = memo(function Dock() {
                     style={{ position: 'relative' }}
                     onDragStart={() => { setIsDragging(true); setHoveredApp(null); setPressedApp(null); }}
                     onDragEnd={handleUnpinnedDragEnd}
+                    onDragOver={(e) => handleAppDragOver(e, app)}
+                    onDragLeave={(e) => handleAppDragLeave(e, app)}
+                    onDrop={handleAppDrop}
                     onContextMenu={(e) => handleContextMenu(e, app)}
                     onMouseDown={(e) => { if (e.button === 1) e.preventDefault(); }}
                     onAuxClick={(e) => handleMiddleClick(e, app)}
@@ -1614,7 +1724,7 @@ const Dock = memo(function Dock() {
                     }}
                   >
                     <motion.div
-                      className="dock-icon-wrapper"
+                      className={`dock-icon-wrapper ${dragHoveringApp === itemKey(app) ? 'dock-icon-drag-hover' : ''}`}
                       initial={{ opacity: 0, scale: 0 }}
                       animate={{ opacity: 1, scale: 1 }}
                       exit={{ opacity: 0, scale: 0, transition: { duration: 0.12 } }}
@@ -1635,7 +1745,17 @@ const Dock = memo(function Dock() {
                           >
                             <div className="preview-items">
                               {previewData.previews.map((prev, idx) => (
-                                <div key={prev.hwnd} className="preview-item" onClick={() => invoke('focus_window', { hwnd: prev.hwnd })}>
+                                  <div
+                              key={prev.hwnd}
+                              className="preview-item"
+                              onClick={() => invoke('focus_window', { hwnd: prev.hwnd })}
+                              onDragOver={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                e.dataTransfer.dropEffect = 'copy';
+                                invoke('bring_hwnd_to_front', { hwnd: prev.hwnd }).catch(() => {});
+                              }}
+                            >
                                   {prev.image ? (
                                     <img src={prev.image} alt={`Preview ${idx}`} />
                                   ) : (
@@ -1703,6 +1823,9 @@ const Dock = memo(function Dock() {
                     style={{ position: 'relative' }}
                     onDragStart={() => { setIsDragging(true); setHoveredApp(null); setPressedApp(null); }}
                     onDragEnd={() => handleMixedDragEnd(app)}
+                    onDragOver={(e) => handleAppDragOver(e, app)}
+                    onDragLeave={(e) => handleAppDragLeave(e, app)}
+                    onDrop={handleAppDrop}
                     onContextMenu={(e) => handleContextMenu(e, app)}
                     onMouseDown={(e) => { if (e.button === 1) e.preventDefault(); }}
                     onAuxClick={(e) => handleMiddleClick(e, app)}
@@ -1712,7 +1835,7 @@ const Dock = memo(function Dock() {
                     }}
                   >
                     <motion.div
-                      className="dock-icon-wrapper"
+                      className={`dock-icon-wrapper ${dragHoveringApp === itemKey(app) ? 'dock-icon-drag-hover' : ''}`}
                       initial={ITEM_INITIAL}
                       animate={ITEM_ANIMATE}
                       exit={ITEM_EXIT}
@@ -1733,7 +1856,17 @@ const Dock = memo(function Dock() {
                           >
                             <div className="preview-items">
                               {previewData.previews.map((prev, idx) => (
-                                <div key={prev.hwnd} className="preview-item" onClick={() => invoke('focus_window', { hwnd: prev.hwnd })}>
+                                  <div
+                              key={prev.hwnd}
+                              className="preview-item"
+                              onClick={() => invoke('focus_window', { hwnd: prev.hwnd })}
+                              onDragOver={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                e.dataTransfer.dropEffect = 'copy';
+                                invoke('bring_hwnd_to_front', { hwnd: prev.hwnd }).catch(() => {});
+                              }}
+                            >
                                   {prev.image ? (
                                     <img src={prev.image} alt={`Preview ${idx}`} />
                                   ) : (
