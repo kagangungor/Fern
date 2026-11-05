@@ -11,7 +11,7 @@
 
 <p><strong>A notch and a dock for Windows.<br />Physics-animated, reactive, and built to replace your taskbar.</strong><br /><em>Not a cosmetic macOS clone — the missing productivity, media, and hardware control layer for Windows 11.</em></p>
 
-[![Latest release](https://shieldcn.dev/github/release/kagangungor/Fern.svg?logo=lu:Tag)](https://github.com/kagangungor/Fern/releases/latest)
+[![Latest release](https://shieldcn.dev/github/release/kagangungor/Fern/stable.svg?logo=lu:Tag)](https://github.com/kagangungor/Fern/releases/latest)
 [![Downloads](https://shieldcn.dev/github/downloads/kagangungor/Fern.svg?logo=lu:Download)](https://github.com/kagangungor/Fern/releases)
 [![License](https://shieldcn.dev/github/license/kagangungor/Fern.svg?logo=lu:Scale)](LICENSE)
 [![Platform](https://shieldcn.dev/badge/platform-Windows.svg?logo=ri:FaWindows)](https://www.microsoft.com/windows)
