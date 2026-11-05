@@ -160,13 +160,13 @@ bun run tauri dev
 
 ## Roadmap
 
-These are ideas under consideration, not promises.
+All core milestones for v1.0.0 have been achieved:
 
 - [x] Lower memory use, with Settings and secondary windows loaded on demand
 - [x] Connected devices status & battery levels (Bluetooth, Buds, USB)
 - [x] Fernie companion mascot with agent integration & audio alerts
-- [ ] Background tray programs (antivirus, VPN) in the notch
-- [ ] Code signing for the installer
+- [x] Background tray programs (antivirus, VPN) accessible directly from the notch
+- [x] Cryptographic update signing with the Fern minisign key and SHA-256 release verification
 
 See the [open issues](https://github.com/kagangungor/Fern/issues) for requests and known bugs.
 
