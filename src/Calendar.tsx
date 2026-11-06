@@ -81,14 +81,13 @@ function CalendarWindow() {
   useEffect(() => initTheme(), []);
 
   useEffect(() => {
-    appWindow.setEffects({ effects: [Effect.Acrylic], state: EffectState.Active, color: [10, 10, 15, 20] }).catch(() => {});
-    const showTimer = setTimeout(() => {
-      appWindow.show().then(() => appWindow.setFocus()).catch(() => {});
-    }, 40);
+    appWindow.setEffects({ effects: [Effect.Acrylic], state: EffectState.Active, color: [10, 10, 15, 20] }).catch(() => {})
+      .finally(() => {
+        requestAnimationFrame(() => requestAnimationFrame(() => invoke("on_demand_window_ready").catch(() => {})));
+      });
     const preventContext = (e: MouseEvent) => e.preventDefault();
     document.addEventListener("contextmenu", preventContext);
     return () => {
-      clearTimeout(showTimer);
       document.removeEventListener("contextmenu", preventContext);
     };
   }, []);

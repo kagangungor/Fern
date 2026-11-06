@@ -163,20 +163,17 @@ bun run tauri dev
 
 > **Vision:** Fern is not a cosmetic macOS clone — it is the missing productivity, media, and hardware control layer built to give Windows users real desktop superpowers.
 
-### Completed in v1.0.0
-- [x] **Lightweight Performance Core:** Secondary windows (Settings, Calendar) loaded on-demand and destroyed on close
-- [x] **Memory Saver Engine:** Idle WebView working set trimming and relaxed background polling
-- [x] **Connected Hardware & Earbuds:** Real-time multi-part battery levels (AirPods, Galaxy Buds, Fast Pair) and dynamic vector art
-- [x] **Fernie Companion & Agent API:** Interactive desktop mascot with live local AI agent state reporting and audio cues
-- [x] **Native Taskbar Replacement:** Win+1..9 shortcuts, real tray flyout access, attention flashing badges, drag-to-dock window reveal
-- [x] **Verified Releases:** Cryptographic update signing with the Fern minisign key and SHA-256 validation
+### Completed
+- [x] **Universal Meeting & Privacy HUD:**
+  - [x] **System-Wide Universal Mic Mute:** Instant microphone mute toggle via island click or configurable global shortcut (default `Ctrl+F1`) operating at Windows Core Audio level across Zoom, Microsoft Teams, Google Meet, Discord, and all apps.
+  - [x] **Privacy Aura & Indicators:** Silhouette-matching dynamic glow and camera/microphone usage indicator dots on the island whenever recording hardware is active.
+- [x] **Desktop Shell & Notch Stability Fixes:**
+  - [x] **Fixed Notch Mode Persistence:** Resolved per-monitor state conflicts that prevented the notch from staying fixed, ensuring reliable visibility across window states.
+  - [x] **Widget & Island Flow:** Eliminated overlap collisions between privacy indicators and right status widgets (RAM, CPU, Battery) with adaptive flex layout and dynamic width expansion.
+  - [x] **Dock DWM Live Previews & Focus:** Resolved tooltip and context menu collisions; added `AttachThreadInput` foreground activation for background windows.
+  - [x] **Settings Reorganization:** Consolidated 11 scattered sections in the Notch settings tab into 7 clean, logical groups.
 
 ### Upcoming Milestones
-
-#### 🎙️ Universal Meeting & Privacy HUD
-- [ ] **System-Wide Universal Mute:** Instant microphone toggle (via island click or global shortcut `Ctrl+F1`) working across Zoom, Microsoft Teams, Google Meet, and Discord
-- [ ] **Privacy Aura:** Visible reactive indicator on the island whenever the camera or microphone is active
-- [ ] **Meeting Timer & Speaker Detection:** Ambient meeting duration and speaking activity tracking
 
 #### 💻 Developer & Terminal Ambient HUD (Dev HUD)
 - [ ] **Long-Running Task & Build Progress:** Visual progress line across the notch for CLI tasks (`cargo build`, `npm install`, `docker`, test suites, long scripts) via Agent API

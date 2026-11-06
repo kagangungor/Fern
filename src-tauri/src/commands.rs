@@ -394,7 +394,7 @@ pub async fn init_notch_window(app: &AppHandle, main_win: tauri::WebviewWindow, 
         let m_size = monitor.size();
         let scale = monitor.scale_factor();
         let fern_scale = crate::utils::get_fern_scale(app);
-        let target_height = (420.0 * fern_scale * scale) as u32;
+        let target_height = (640.0 * fern_scale * scale) as u32;
         let _ = main_win.set_position(tauri::PhysicalPosition::new(m_pos.x, m_pos.y));
         let _ = main_win.set_size(tauri::PhysicalSize::new(m_size.width, target_height));
     }
@@ -469,7 +469,7 @@ fn send_key_tap(vk: windows::Win32::UI::Input::KeyboardAndMouse::VIRTUAL_KEY, ho
 /// SearchApp/SearchUI on older builds. Window titles are localized, so the executable decides.
 fn is_start_menu_exe(path: &str) -> bool {
     let file = path.rsplit(['\\', '/']).next().unwrap_or("").to_lowercase();
-    matches!(file.as_str(), "startmenuexperiencehost.exe" | "searchhost.exe" | "searchapp.exe" | "searchui.exe")
+    matches!(file.as_str(), "startmenuexperiencehost.exe" | "searchhost.exe" | "searchapp.exe" | "searchui.exe" | "shellexperiencehost.exe")
 }
 
 /// True while the native Start menu or Search has focus.
@@ -480,27 +480,39 @@ fn is_start_menu_open() -> bool {
 pub(crate) fn is_start_menu_window(window: HWND) -> bool {
     use windows::Win32::Foundation::CloseHandle;
     use windows::Win32::System::Threading::{OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION};
-    use windows::Win32::UI::WindowsAndMessaging::GetWindowThreadProcessId;
+    use windows::Win32::UI::WindowsAndMessaging::{GetAncestor, GetClassNameW, GetWindowTextW, GetWindowThreadProcessId, GA_ROOT};
 
     unsafe {
         if window.0.is_null() {
             return false;
         }
+        let root = GetAncestor(window, GA_ROOT);
+        let target = if !root.is_invalid() && !root.0.is_null() { root } else { window };
+
         let mut pid = 0u32;
-        GetWindowThreadProcessId(window, Some(&mut pid));
-        if pid == 0 {
-            return false;
-        }
-        if let Ok(process) = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) {
-            let mut buf = [0u16; 260];
-            let mut len = buf.len() as u32;
-            let ok = QueryFullProcessImageNameW(process, PROCESS_NAME_WIN32, windows::core::PWSTR(buf.as_mut_ptr()), &mut len);
-            let _ = CloseHandle(process);
-            if ok.is_ok() {
-                return is_start_menu_exe(&String::from_utf16_lossy(&buf[..len as usize]));
+        GetWindowThreadProcessId(target, Some(&mut pid));
+        if pid != 0 {
+            if let Ok(process) = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) {
+                let mut buf = [0u16; 260];
+                let mut len = buf.len() as u32;
+                let ok = QueryFullProcessImageNameW(process, PROCESS_NAME_WIN32, windows::core::PWSTR(buf.as_mut_ptr()), &mut len);
+                let _ = CloseHandle(process);
+                if ok.is_ok() && is_start_menu_exe(&String::from_utf16_lossy(&buf[..len as usize])) {
+                    return true;
+                }
             }
         }
-        false
+
+        let mut class = [0u16; 128];
+        let class_len = GetClassNameW(target, &mut class).max(0) as usize;
+        let class_str = String::from_utf16_lossy(&class[..class_len]);
+
+        let mut text = [0u16; 128];
+        let text_len = GetWindowTextW(target, &mut text).max(0) as usize;
+        let title = String::from_utf16_lossy(&text[..text_len]);
+
+        (class_str == "Windows.UI.Core.CoreWindow" || class_str == "SimpleWindow" || class_str == "XamlExplorerHostIslandWindow")
+            && (title == "Start" || title == "Search" || title.is_empty())
     }
 }
 
@@ -1059,17 +1071,33 @@ pub async fn focus_window(hwnd: isize) {
 #[tauri::command]
 pub async fn bring_hwnd_to_front(hwnd: isize) {
     tauri::async_runtime::spawn_blocking(move || unsafe {
+        use windows::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
         use windows::Win32::UI::WindowsAndMessaging::{
-            ShowWindow, SW_RESTORE, SW_SHOW, IsIconic, IsWindowVisible,
+            BringWindowToTop, GetForegroundWindow, GetWindowLongW, GetWindowThreadProcessId, IsIconic, IsWindowVisible, SetWindowPos,
+            ShowWindow, GWL_EXSTYLE, HWND_NOTOPMOST, HWND_TOPMOST, SWP_NOMOVE, SWP_NOSIZE, SW_RESTORE, SW_SHOW, WS_EX_TOPMOST,
         };
         let hwnd = windows::Win32::Foundation::HWND(hwnd as *mut _);
         if !IsWindowVisible(hwnd).as_bool() {
             let _ = ShowWindow(hwnd, SW_SHOW);
-        }
-        if IsIconic(hwnd).as_bool() {
+            let _ = ShowWindow(hwnd, SW_RESTORE);
+        } else if IsIconic(hwnd).as_bool() {
             let _ = ShowWindow(hwnd, SW_RESTORE);
         }
+
+        let mine = GetCurrentThreadId();
+        let front = GetWindowThreadProcessId(GetForegroundWindow(), None);
+        let attached = front != 0 && front != mine && AttachThreadInput(mine, front, true).as_bool();
+
         force_set_foreground(hwnd);
+        let _ = BringWindowToTop(hwnd);
+        if (GetWindowLongW(hwnd, GWL_EXSTYLE) as u32 & WS_EX_TOPMOST.0) == 0 {
+            let _ = SetWindowPos(hwnd, Some(HWND_TOPMOST), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
+            let _ = SetWindowPos(hwnd, Some(HWND_NOTOPMOST), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
+        }
+
+        if attached {
+            let _ = AttachThreadInput(mine, front, false);
+        }
     })
     .await
     .unwrap_or_default();
@@ -3053,12 +3081,24 @@ pub fn get_notch_mode_for_window(window: tauri::WebviewWindow, app: AppHandle) -
 
 #[tauri::command]
 pub fn set_dock_mode_for_window(window: tauri::WebviewWindow, app: AppHandle, mode: String) -> Result<(), String> {
-    crate::monitors::set_mode_for_label(&app, crate::types::WindowKind::Dock, window.label(), &mode)
+    let res = crate::monitors::set_mode_for_label(&app, crate::types::WindowKind::Dock, window.label(), &mode);
+    let app_clone = app.clone();
+    let mode_clone = mode.clone();
+    tauri::async_runtime::spawn(async move {
+        change_dock_mode(app_clone, mode_clone).await;
+    });
+    res
 }
 
 #[tauri::command]
 pub fn set_notch_mode_for_window(window: tauri::WebviewWindow, app: AppHandle, mode: String) -> Result<(), String> {
-    crate::monitors::set_mode_for_label(&app, crate::types::WindowKind::Notch, window.label(), &mode)
+    let res = crate::monitors::set_mode_for_label(&app, crate::types::WindowKind::Notch, window.label(), &mode);
+    let app_clone = app.clone();
+    let mode_clone = mode.clone();
+    tauri::async_runtime::spawn(async move {
+        change_notch_mode(app_clone, mode_clone).await;
+    });
+    res
 }
 
 
@@ -4287,4 +4327,53 @@ pub async fn agent_sound_data(state: String) -> Option<String> {
 #[tauri::command]
 pub async fn agent_sound_custom() -> Vec<String> {
     AGENT_SOUND_STATES.iter().filter(|s| !agent_sound_files(s).is_empty()).map(|s| s.to_string()).collect()
+}
+
+
+// Windows Accent
+#[tauri::command]
+pub async fn sync_windows_accent(app: tauri::AppHandle, hex: String) -> Result<(), String> {
+    crate::windows_accent::sync(&app, &hex)
+}
+
+#[tauri::command]
+pub async fn restore_windows_accent(app: tauri::AppHandle) -> Result<(), String> {
+    crate::windows_accent::restore(&app)
+}
+
+#[tauri::command]
+pub fn has_windows_accent_backup(app: tauri::AppHandle) -> bool {
+    crate::windows_accent::has_backup(&app)
+}
+
+#[tauri::command]
+pub fn windows_accent_backup_exists(app: tauri::AppHandle) -> bool {
+    crate::windows_accent::has_backup(&app)
+}
+
+// Hotkeys
+#[tauri::command]
+pub fn reload_hotkeys() {
+    crate::hotkeys::reload();
+}
+
+// Live Previews
+#[tauri::command]
+pub fn set_live_thumbnails(
+    window: tauri::Window,
+    targets: Vec<crate::live_preview::LiveThumbnailTarget>,
+    client_area_only: Option<bool>,
+) -> Result<Vec<isize>, String> {
+    let dest_hwnd = window.hwnd().map_err(|e| e.to_string())?.0 as isize;
+    crate::live_preview::set_live_thumbnails(dest_hwnd, targets, client_area_only.unwrap_or(false))
+}
+
+#[tauri::command]
+pub fn clear_live_thumbnails() -> Result<(), String> {
+    crate::live_preview::clear_all_thumbnails()
+}
+
+#[tauri::command]
+pub fn is_dwm_composition_enabled() -> Result<bool, String> {
+    Ok(crate::live_preview::is_composition_enabled())
 }

@@ -1115,12 +1115,14 @@ pub fn setup_system_worker(app_handle: AppHandle) -> Sender<SystemCommand> {
                     start_open = crate::commands::is_start_menu_window(foreground);
                     start_focused_at = now;
                 }
-                let start_on_screen = start_open && IsWindowVisible(foreground).as_bool() && {
+                let root_fg = windows::Win32::UI::WindowsAndMessaging::GetAncestor(foreground, windows::Win32::UI::WindowsAndMessaging::GA_ROOT);
+                let target_fg = if !root_fg.is_invalid() && !root_fg.0.is_null() { root_fg } else { foreground };
+                let start_on_screen = start_open && IsWindowVisible(target_fg).as_bool() && {
                     let mut cloaked = 0u32;
-                    DwmGetWindowAttribute(foreground, windows::Win32::Graphics::Dwm::DWMWA_CLOAKED, &mut cloaked as *mut _ as *mut _, 4).is_err() || cloaked == 0
+                    DwmGetWindowAttribute(target_fg, windows::Win32::Graphics::Dwm::DWMWA_CLOAKED, &mut cloaked as *mut _ as *mut _, 4).is_err() || cloaked == 0
                 };
                 let start_shown = start_counts_as_shown(start_open, start_on_screen, now.duration_since(start_focused_at));
-                let start_monitor = if start_shown { monitor_rect_for_hwnd(foreground) } else { None };
+                let start_monitor = if start_shown { monitor_rect_for_hwnd(target_fg) } else { None };
                 let start_on = |window: HWND| match (start_monitor, monitor_rect_for_hwnd(window)) {
                     (Some((sx, sy, _, _)), Some((x, y, _, _))) => sx == x && sy == y,
                     _ => false,
@@ -2373,6 +2375,12 @@ unsafe fn process_mouse_move(app_handle: &AppHandle, cursor: windows::Win32::Fou
                             }
                         }
 
+                        if is_click_interactive && !in_notch_hover && !left_button_held() && caption_buttons_under(cursor) {
+                            is_click_interactive = false;
+                            is_notch_hovered = false;
+                            MH_TOPBAR_EXPIRY_MS.store(0, Ordering::Relaxed);
+                        }
+
                         let final_notch_hover = is_notch_hovered || now < MH_TOPBAR_EXPIRY_MS.load(Ordering::Relaxed);
                         let prev = MH_LAST_TOP_EDGE_HOVER.load(Ordering::Relaxed);
                         let new_val = if final_notch_hover { 1 } else { 0 };
@@ -2550,6 +2558,72 @@ fn monitor_rect_for_hwnd(hwnd: HWND) -> Option<(i32, i32, i32, i32)> {
         }
     }
 }
+
+struct CaptionProbe {
+    point: windows::Win32::Foundation::POINT,
+    own_pid: u32,
+    over_buttons: bool,
+}
+
+unsafe extern "system" fn caption_probe_proc(hwnd: HWND, lparam: windows::Win32::Foundation::LPARAM) -> windows::core::BOOL {
+    use windows::Win32::Foundation::RECT;
+    use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CAPTION_BUTTON_BOUNDS, DWMWA_CLOAKED};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetClassNameW, GetWindowLongW, GetWindowRect, GetWindowThreadProcessId, IsIconic, IsWindowVisible, GWL_EXSTYLE,
+        WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT,
+    };
+    let probe = &mut *(lparam.0 as *mut CaptionProbe);
+    if !IsWindowVisible(hwnd).as_bool() || IsIconic(hwnd).as_bool() {
+        return true.into();
+    }
+    let mut pid = 0u32;
+    GetWindowThreadProcessId(hwnd, Some(&mut pid));
+    if pid == probe.own_pid {
+        return true.into();
+    }
+    let ex = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
+    if ex & (WS_EX_TOOLWINDOW.0 | WS_EX_TRANSPARENT.0) != 0 {
+        return true.into();
+    }
+    let mut cloaked = 0u32;
+    if DwmGetWindowAttribute(hwnd, DWMWA_CLOAKED, &mut cloaked as *mut _ as *mut _, 4).is_ok() && cloaked != 0 {
+        return true.into();
+    }
+    let mut class = [0u16; 64];
+    let len = GetClassNameW(hwnd, &mut class).max(0) as usize;
+    if matches!(String::from_utf16_lossy(&class[..len]).as_str(), "Progman" | "WorkerW" | "Shell_TrayWnd" | "Shell_SecondaryTrayWnd") {
+        return true.into();
+    }
+    let mut wr = RECT::default();
+    if GetWindowRect(hwnd, &mut wr).is_err() {
+        return true.into();
+    }
+    let p = probe.point;
+    if p.x < wr.left || p.x >= wr.right || p.y < wr.top || p.y >= wr.bottom {
+        return true.into();
+    }
+    let mut cb = RECT::default();
+    let known = DwmGetWindowAttribute(hwnd, DWMWA_CAPTION_BUTTON_BOUNDS, &mut cb as *mut _ as *mut _, std::mem::size_of::<RECT>() as u32).is_ok()
+        && cb.right > cb.left && cb.bottom > cb.top;
+    probe.over_buttons = if known {
+        let (x, y) = (p.x - wr.left, p.y - wr.top);
+        x >= cb.left && x < cb.right && y >= cb.top && y < cb.bottom
+    } else {
+        p.y - wr.top < 40 && wr.right - p.x < 150
+    };
+    false.into()
+}
+
+/// True when the top-most app window under the cursor has its close, minimize or maximize buttons there.
+fn caption_buttons_under(point: windows::Win32::Foundation::POINT) -> bool {
+    use windows::Win32::UI::WindowsAndMessaging::EnumWindows;
+    let mut probe = CaptionProbe { point, own_pid: std::process::id(), over_buttons: false };
+    unsafe {
+        let _ = EnumWindows(Some(caption_probe_proc), windows::Win32::Foundation::LPARAM(&mut probe as *mut _ as isize));
+    }
+    probe.over_buttons
+}
+
 
 fn hit_test_extra_dock_windows(app_handle: &AppHandle, cursor: windows::Win32::Foundation::POINT, now: i64, _fg_fs: bool) {
     let windows: Vec<(String, tauri::WebviewWindow)> = app_handle.webview_windows().into_iter()
@@ -2749,6 +2823,12 @@ fn hit_test_extra_notch_windows(app_handle: &AppHandle, cursor: windows::Win32::
         }
 
         let expiry = crate::state::get_i64(crate::state::notch_extra_expiry_ms(), &label, 0);
+        if is_click_interactive && !in_notch_hover && !left_button_held() && caption_buttons_under(cursor) {
+            is_click_interactive = false;
+            is_notch_hovered = false;
+            crate::state::set_i64(crate::state::notch_extra_expiry_ms(), &label, 0);
+        }
+
         let final_notch_hover = is_notch_hovered || now < expiry;
         let prev_hover = crate::state::get_i32(crate::state::notch_extra_last_edge_hover(), &label, -1);
         let new_hover = if final_notch_hover { 1 } else { 0 };
@@ -2968,7 +3048,7 @@ pub fn register_appbar(window: tauri::WebviewWindow) {
         let hwnd = window.hwnd().unwrap();
         let scale = monitor.scale_factor();
         let fern_scale = crate::utils::get_fern_scale(window.app_handle());
-        let ph = ((420.0 * fern_scale) * scale) as i32;
+        let ph = ((640.0 * fern_scale) * scale) as i32;
 
         unsafe {
             use windows::Win32::UI::WindowsAndMessaging::{SetWindowPos, GetWindowRect, SWP_NOZORDER, SWP_NOACTIVATE, GetWindowLongPtrW, SetWindowLongPtrW, GWL_EXSTYLE, WS_EX_TOOLWINDOW, WS_EX_NOACTIVATE as WS_EX_NA, SWP_FRAMECHANGED};

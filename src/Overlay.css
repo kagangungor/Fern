@@ -615,11 +615,17 @@ body,
     align-items: center;
     justify-content: space-between;
     padding: 16px 0;
+    background: var(--fern-bg, rgba(0, 0, 0, 0.8));
     border-radius: 18px 0 0 18px;
+    border: 1px solid var(--fern-border, rgba(255, 255, 255, 0.1));
+    border-right: none;
+    border-top: none;
+    border-bottom: none;
     width: 42px;
     height: 196px;
     position: relative;
     pointer-events: auto;
+    transition: background 0.3s ease;
 }
 
 .brightness-notch::before,
@@ -764,6 +770,8 @@ body,
   border-radius: 0 18px 18px 0;
   border: 1px solid var(--fern-border, rgba(255, 255, 255, 0.1));
   border-left: none;
+  border-top: none;
+  border-bottom: none;
 }
 
 .side-left .brightness-notch::before,

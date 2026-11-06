@@ -57,15 +57,12 @@ function SettingsApp() {
     const preventContext = (e: MouseEvent) => e.preventDefault();
     document.addEventListener("contextmenu", preventContext as any);
 
-    appWindow.setEffects({ effects: [Effect.Acrylic], state: EffectState.Active, color: [10, 10, 15, 20] }).catch(() => {});
-
-    // Show window only after initial paint, eliminating blank acrylic window delay
-    const showTimer = setTimeout(() => {
-      appWindow.show().then(() => appWindow.setFocus()).catch(() => {});
-    }, 40);
+    appWindow.setEffects({ effects: [Effect.Acrylic], state: EffectState.Active, color: [10, 10, 15, 20] }).catch(() => {})
+      .finally(() => {
+        requestAnimationFrame(() => requestAnimationFrame(() => invoke("on_demand_window_ready").catch(() => {})));
+      });
 
     return () => {
-      clearTimeout(showTimer);
       document.removeEventListener("contextmenu", preventContext as any);
     };
   }, []);

@@ -84,6 +84,20 @@ pub fn resolve_mode_for_label(app: &AppHandle, kind: WindowKind, label: &str) ->
     let fallback = if matches!(kind, WindowKind::Dock) { "smart" } else { "fixed" };
     let default_mode = normalize(get_setting_str(app, default_key).unwrap_or_else(|| fallback.to_string()));
 
+    let monitors = app.available_monitors().unwrap_or_default();
+    if monitors.len() <= 1 {
+        return default_mode;
+    }
+
+    let (monitor_mode_key, _) = match kind {
+        WindowKind::Dock => ("fern-dock-monitor-mode", "fern-dock-monitor-id"),
+        WindowKind::Notch => ("fern-notch-monitor-mode", "fern-notch-monitor-id"),
+    };
+    let monitor_mode = get_setting_str(app, monitor_mode_key).unwrap_or_else(|| "primary".to_string());
+    if monitor_mode != "all" {
+        return default_mode;
+    }
+
     let Some(monitor) = monitor_for_window_label(app, kind, label) else { return default_mode };
     let Some(monitor_id) = monitor.name().cloned() else { return default_mode };
     let Some(map_json) = get_setting_str(app, map_key) else { return default_mode };
@@ -94,7 +108,12 @@ pub fn resolve_mode_for_label(app: &AppHandle, kind: WindowKind, label: &str) ->
 /// Sets the mode override for whichever monitor a window is currently on,
 /// so an in-notch/in-dock mode switcher affects only that screen.
 pub fn set_mode_for_label(app: &AppHandle, kind: WindowKind, label: &str, mode: &str) -> Result<(), String> {
-    let (_, map_key) = mode_setting_keys(kind);
+    let (default_key, map_key) = mode_setting_keys(kind);
+    let monitors = app.available_monitors().unwrap_or_default();
+    if monitors.len() <= 1 {
+        return crate::commands::save_setting(app.clone(), default_key.to_string(), serde_json::Value::String(mode.to_string()));
+    }
+
     let monitor = monitor_for_window_label(app, kind, label).ok_or("no monitor for this window")?;
     let monitor_id = monitor.name().cloned().ok_or("monitor has no stable id")?;
 

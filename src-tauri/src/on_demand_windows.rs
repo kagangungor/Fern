@@ -2,6 +2,7 @@
 //! close, so its WebView2 renderer doesn't sit in memory unused. Closing one any other way (Alt+F4)
 //! also destroys it, since nothing prevents the default close.
 
+use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
@@ -12,6 +13,20 @@ pub const CALENDAR: &str = "calendar";
 
 static SETTINGS_CREATING: AtomicBool = AtomicBool::new(false);
 static CALENDAR_CREATING: AtomicBool = AtomicBool::new(false);
+static WAITING_FOR_PAINT: Mutex<Option<HashSet<&'static str>>> = Mutex::new(None);
+const PAINT_WAIT: std::time::Duration = std::time::Duration::from_millis(2500);
+
+fn take_waiting(label: &str) -> bool {
+    let Ok(mut guard) = WAITING_FOR_PAINT.lock() else { return false };
+    guard.as_mut().is_some_and(|set| set.remove(label))
+}
+
+fn start_waiting(label: &'static str) {
+    if let Ok(mut guard) = WAITING_FOR_PAINT.lock() {
+        guard.get_or_insert_with(HashSet::new).insert(label);
+    }
+}
+
 
 fn creating_flag(label: &str) -> Option<&'static AtomicBool> {
     match label {
@@ -65,11 +80,12 @@ where
                 if let Err(e) = scheduled {
                     crate::diagnostics::log(&format!("{label} window setup failed: {e}"));
                 }
-                let fallback = window.clone();
-                std::thread::spawn(move || {
-                    std::thread::sleep(std::time::Duration::from_millis(1500));
-                    if let Ok(false) = fallback.is_visible() {
-                        let _ = fallback.show();
+                start_waiting(label);
+                let handle = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    tokio::time::sleep(PAINT_WAIT).await;
+                    if take_waiting(label) {
+                        crate::commands::bring_window_to_front(&handle, label);
                     }
                 });
             }
@@ -141,4 +157,11 @@ pub fn close(app: &AppHandle, label: &str) {
 pub fn close_all(app: &AppHandle) {
     close(app, SETTINGS);
     close(app, CALENDAR);
+}
+
+#[tauri::command]
+pub fn on_demand_window_ready(app: AppHandle, window: tauri::Window) {
+    if take_waiting(window.label()) {
+        crate::commands::bring_window_to_front(&app, window.label());
+    }
 }

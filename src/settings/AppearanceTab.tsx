@@ -1,3 +1,4 @@
+import { WindowsAccentSync } from "./WindowsAccentSync";
 import { Palette, Droplet, Contrast, Droplets, Sun, Square, Maximize2, Layers } from "lucide-react";
 import { SettingRow } from "./SettingRow";
 import { SettingSection } from "./SettingSection";
@@ -99,7 +100,9 @@ export function AppearanceTab({
           />
         </SettingRow>
 
-        {showCustomColor && (
+        <WindowsAccentSync accentColor={themeColor} />
+
+            {showCustomColor && (
           <SettingRow icon={Droplet} label={t("appearance.color")} desc={t("appearance.color.desc")}>
             <div className="color-picker-row">
               <input

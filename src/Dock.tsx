@@ -1,7 +1,7 @@
 import { useState, useEffect, useLayoutEffect, useMemo, useRef, memo, useCallback } from 'react';
 import { motion, AnimatePresence, Reorder } from 'framer-motion';
 import { invoke } from '@tauri-apps/api/core';
-import { listen } from '@tauri-apps/api/event';
+import { emit, listen } from '@tauri-apps/api/event';
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
 import './Dock.css';
 import './surfaces.css';
@@ -267,6 +267,149 @@ function AttentionBadge({ count, isFlashing }: { count: number | null; isFlashin
   );
 }
 
+let liveThumbnailGeneration = 0;
+
+interface DockPreviewTooltipProps {
+  app: AppInfo;
+  previews: { hwnd: number; title: string; image: string }[];
+  onClosePreview: (e: React.MouseEvent, hwnd: number) => void;
+  renderMedia: (app: AppInfo) => React.ReactNode;
+  renderPreviewMedia?: (app: AppInfo) => React.ReactNode;
+  onMouseEnter: () => void;
+  onMouseLeave: () => void;
+}
+
+function DockPreviewTooltip({
+  app,
+  previews,
+  onClosePreview,
+  renderMedia,
+  renderPreviewMedia,
+  onMouseEnter,
+  onMouseLeave,
+}: DockPreviewTooltipProps) {
+  const t = useT();
+  const [liveHwnds, setLiveHwnds] = useState<Set<number>>(() => new Set());
+  const surfaceRefs = useRef<Map<number, HTMLDivElement>>(new Map());
+
+  useLayoutEffect(() => {
+    const generation = ++liveThumbnailGeneration;
+    let cancelled = false;
+    let rafId: number | null = null;
+    let t1: any = null;
+    let t2: any = null;
+
+    const syncThumbnails = async () => {
+      if (cancelled) return;
+      const dpr = window.devicePixelRatio || 1;
+      const targets: { hwnd: number; x: number; y: number; width: number; height: number }[] = [];
+
+      for (const p of previews) {
+        const el = surfaceRefs.current.get(p.hwnd);
+        if (el) {
+          const r = el.getBoundingClientRect();
+          if (r.width > 0 && r.height > 0) {
+            targets.push({
+              hwnd: p.hwnd,
+              x: Math.round(r.left * dpr),
+              y: Math.round(r.top * dpr),
+              width: Math.round(r.width * dpr),
+              height: Math.round(r.height * dpr),
+            });
+          }
+        }
+      }
+
+      if (targets.length > 0) {
+        try {
+          const active = await invoke<number[]>('set_live_thumbnails', { targets, clientAreaOnly: false });
+          if (!cancelled && active) {
+            setLiveHwnds(new Set(active));
+          }
+        } catch {}
+      }
+    };
+
+    rafId = requestAnimationFrame(() => {
+      syncThumbnails();
+      t1 = setTimeout(syncThumbnails, 80);
+      t2 = setTimeout(syncThumbnails, 220);
+    });
+
+    return () => {
+      cancelled = true;
+      if (rafId) cancelAnimationFrame(rafId);
+      if (t1) clearTimeout(t1);
+      if (t2) clearTimeout(t2);
+      if (generation === liveThumbnailGeneration) invoke('clear_live_thumbnails').catch(() => {});
+    };
+  }, [previews]);
+
+  return (
+    <motion.div
+      className={`preview-tooltip ${previews.length > 1 ? 'multi' : ''}`}
+      initial={{ opacity: 0, y: 10, scale: 0.95 }}
+      animate={{ opacity: 1, y: 0, scale: 1 }}
+      exit={{ opacity: 0, scale: 0.95 }}
+      transition={{ duration: 0.15 }}
+      onMouseEnter={onMouseEnter}
+      onMouseLeave={onMouseLeave}
+    >
+      {renderPreviewMedia && renderPreviewMedia(app)}
+      <div className="preview-items">
+        {previews.map((prev, idx) => {
+          const isLive = liveHwnds.has(prev.hwnd);
+          return (
+            <div
+              key={prev.hwnd}
+              className="preview-item"
+              onClick={() => invoke('focus_window', { hwnd: prev.hwnd })}
+              onDragOver={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                e.dataTransfer.dropEffect = 'copy';
+                invoke('bring_hwnd_to_front', { hwnd: prev.hwnd }).catch(() => {});
+              }}
+            >
+              <div
+                className={`preview-surface${isLive ? ' has-live' : ''}`}
+                ref={(el) => {
+                  if (el) surfaceRefs.current.set(prev.hwnd, el);
+                  else surfaceRefs.current.delete(prev.hwnd);
+                }}
+              >
+                <div className="preview-live-mount" />
+                {prev.image ? (
+                  <img
+                    src={prev.image}
+                    alt={`Preview ${idx}`}
+                    className={`preview-thumb-img${isLive ? ' is-live' : ''}`}
+                  />
+                ) : (
+                  <div className="preview-item-icon-fallback">{renderMedia(app)}</div>
+                )}
+              </div>
+              <div className="preview-label">{prev.title || app.name}</div>
+              <button
+                className="preview-close-btn"
+                onClick={(e) => onClosePreview(e, prev.hwnd)}
+                data-tooltip={t("dockmenu.closeWindow")}
+              >
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round">
+                  <line x1="18" y1="6" x2="6" y2="18"></line>
+                  <line x1="6" y1="6" x2="18" y2="18"></line>
+                </svg>
+              </button>
+            </div>
+          );
+        })}
+      </div>
+    </motion.div>
+  );
+}
+
+const tourDockAction = () => { emit('tour-dock-action').catch(() => {}); };
+
 const Dock = memo(function Dock() {
   const rest = useRestState();
   const rectPollMs = restingInterval(500, rest);
@@ -286,6 +429,7 @@ const Dock = memo(function Dock() {
     return raw;
   });
   const [dockPreviewEnabled, setDockPreviewEnabled] = useState(() => localStorage.getItem("fern-dock-preview-enabled") !== "false");
+  const [previewDelay, setPreviewDelay] = useState(() => { const v = localStorage.getItem("fern-dock-preview-delay"); return v === null ? 300 : Number(v) || 0; });
   const [dockSearchEnabled, setDockSearchEnabled] = useState(() => localStorage.getItem("fern-dock-search-enabled") !== "false");
   const [dockCalendarEnabled, setDockCalendarEnabled] = useState(() => localStorage.getItem("fern-dock-calendar-enabled") !== "false");
   const [dockTray, setDockTray] = useState(() => localStorage.getItem("fern-dock-tray-enabled") !== "false");
@@ -294,6 +438,39 @@ const Dock = memo(function Dock() {
   const [dockRecycle, setDockRecycle] = useState(() => localStorage.getItem("fern-dock-recycle-enabled") === "true");
   const [dockDrives, setDockDrives] = useState<string[]>(() => parseDrives(localStorage.getItem("fern-dock-drives")));
   const [dockIconOnly, setDockIconOnly] = useState(() => localStorage.getItem("fern-dock-icon-only") === "true");
+  const [hiddenApps, setHiddenApps] = useState<string[]>(() => {
+    try {
+      const raw = localStorage.getItem("fern-dock-hidden-apps");
+      return raw ? JSON.parse(raw) : [];
+    } catch {
+      return [];
+    }
+  });
+
+  useEffect(() => {
+    const handler = () => {
+      try {
+        const raw = localStorage.getItem("fern-dock-hidden-apps");
+        setHiddenApps(raw ? JSON.parse(raw) : []);
+      } catch {}
+    };
+    window.addEventListener("storage", handler);
+    const unlisten = listen("refresh-hidden-apps", handler);
+    return () => {
+      window.removeEventListener("storage", handler);
+      unlisten.then((u) => u());
+    };
+  }, []);
+
+  const handleHideApp = (app: AppInfo) => {
+    const identifier = app.executable || app.path || app.name;
+    if (!identifier) return;
+    const updated = Array.from(new Set([...hiddenApps, identifier]));
+    setHiddenApps(updated);
+    localStorage.setItem("fern-dock-hidden-apps", JSON.stringify(updated));
+    invoke("save_setting", { key: "fern-dock-hidden-apps", value: JSON.stringify(updated) }).catch(() => {});
+    emit("refresh-hidden-apps").catch(() => {});
+  };
   const [dockAdaptive, setDockAdaptive] = useState(() => localStorage.getItem("fern-dock-adaptive") === "true");
   const [dockAttentionEnabled, setDockAttentionEnabled] = useState(() => localStorage.getItem("fern-dock-attention-enabled") !== "false");
   const [dockHideDelay, setDockHideDelay] = useState(() => parseInt(localStorage.getItem("fern-dock-hide-delay") || "800", 10));
@@ -625,6 +802,7 @@ const Dock = memo(function Dock() {
       "fern-dock-monitor-mode": refreshDockMode,
       "fern-dock-monitor-id": refreshDockMode,
       "fern-dock-preview-enabled": setDockPreviewEnabled,
+      "fern-dock-preview-delay": (v) => setPreviewDelay(Number(v) || 0),
       "fern-dock-search-enabled": setDockSearchEnabled,
       "fern-dock-calendar-enabled": setDockCalendarEnabled,
       "fern-dock-tray-enabled": (v) => setDockTray(v !== false && v !== "false"),
@@ -801,6 +979,7 @@ const Dock = memo(function Dock() {
   };
 
   const handleAppClick = async (app: AppInfo) => {
+    tourDockAction();
     try {
       if (app.path === 'start') {
         await invoke('open_app', { appName: 'start' });
@@ -832,6 +1011,7 @@ const Dock = memo(function Dock() {
     if (e.button !== 1) return;
     e.preventDefault();
     e.stopPropagation();
+    tourDockAction();
     handleNewInstance(app);
   };
 
@@ -858,6 +1038,12 @@ const Dock = memo(function Dock() {
   const handleContextMenu = (e: React.MouseEvent, app: AppInfo | null) => {
     e.stopPropagation();
     e.preventDefault();
+    tourDockAction();
+    if (previewTimerRef.current) clearTimeout(previewTimerRef.current);
+    isPreviewHoveredRef.current = false;
+    setPreviewData(null);
+    setHoveredApp(null);
+    invoke('clear_live_thumbnails').catch(() => {});
     setContextMenuHeight(0);
     setContextMenuWidth(0);
     const dockRect = dockRef.current?.getBoundingClientRect();
@@ -879,6 +1065,16 @@ const Dock = memo(function Dock() {
     setShowAddPopup(false);
     invoke('set_menu_open', { open: false, rect: null }).catch(() => {});
   };
+
+  useEffect(() => {
+    if (contextMenu) {
+      if (previewTimerRef.current) clearTimeout(previewTimerRef.current);
+      isPreviewHoveredRef.current = false;
+      setPreviewData(null);
+      setHoveredApp(null);
+      invoke('clear_live_thumbnails').catch(() => {});
+    }
+  }, [contextMenu]);
 
   useLayoutEffect(() => {
     if (contextMenu && menuRef.current) {
@@ -985,12 +1181,22 @@ const Dock = memo(function Dock() {
       })
     ];
 
+    const isAppHidden = (a: AppInfo) => {
+      const key1 = a.path?.toLowerCase();
+      const key2 = a.executable?.toLowerCase();
+      const key3 = a.name?.toLowerCase();
+      return hiddenApps.some((h) => {
+        const hl = h.toLowerCase();
+        return hl === key1 || hl === key2 || hl === key3;
+      });
+    };
+
     const unpinned = activeOrder
       .map(id => activeApps.find(a => appIdentity(a.path, a.executable, a.name) === id))
-      .filter((a): a is AppInfo => !!a && !matchedRunningKeys.has(appIdentity(a.path, a.executable, a.name)));
+      .filter((a): a is AppInfo => !!a && !matchedRunningKeys.has(appIdentity(a.path, a.executable, a.name)) && !isAppHidden(a));
 
     return [...pinned, ...unpinned];
-  }, [pinnedApps, activeApps, activeOrder]);
+  }, [pinnedApps, activeApps, activeOrder, hiddenApps]);
 
   const startItem = useMemo(() => dockItems.find(i => i.path === 'start') as AppInfo, [dockItems]);
   const pinnedItems = useMemo(() => dockItems.filter(i => i.path !== 'start' && i.is_pinned), [dockItems]);
@@ -1151,6 +1357,14 @@ const Dock = memo(function Dock() {
   }, []);
 
   useEffect(() => {
+    if (contextMenu) {
+      if (previewTimerRef.current) clearTimeout(previewTimerRef.current);
+      isPreviewHoveredRef.current = false;
+      setPreviewData(null);
+      invoke('clear_live_thumbnails').catch(() => {});
+      return;
+    }
+
     if (previewTimerRef.current) clearTimeout(previewTimerRef.current);
     isPreviewHoveredRef.current = false;
     hoveredAppRef.current = hoveredApp;
@@ -1185,7 +1399,7 @@ const Dock = memo(function Dock() {
               .map(({ hwnd, title, image }) => ({ hwnd, title, image }));
 
             const currentHovered = hoveredAppRef.current;
-            if (captured.length > 0 && currentHovered === itemKey(app)) {
+            if (!contextMenu && captured.length > 0 && currentHovered === itemKey(app)) {
               setPreviewData({ id: itemKey(app), previews: captured });
             } else if (currentHovered === itemKey(app)) {
               setPreviewData(null);
@@ -1194,7 +1408,7 @@ const Dock = memo(function Dock() {
             console.error("Failed to capture thumbnails:", e);
             setPreviewData(null);
           }
-        }, 300);
+        }, previewDelay);
       } else {
         setPreviewData(null);
       }
@@ -1203,7 +1417,7 @@ const Dock = memo(function Dock() {
     return () => {
       if (previewTimerRef.current) clearTimeout(previewTimerRef.current);
     };
-  }, [hoveredApp, isDragging, dockItems]);
+  }, [hoveredApp, isDragging, dockItems, previewDelay, contextMenu]);
 
   const iconVariants = {
     idle: { y: 0, scale: 1 },
@@ -1285,10 +1499,10 @@ const Dock = memo(function Dock() {
         transition={{ opacity: { duration: 0.15, delay }, scale: { type: "spring", stiffness: 400, damping: 25, delay } }}
         className={`dock-icon-wrapper ${hideTooltip ? 'shortcut-active' : ''}`}
         onContextMenu={onContextMenu}
-        onMouseEnter={() => setHoveredApp(id)}
+        onMouseEnter={() => { if (!contextMenu) setHoveredApp(id); }}
         onMouseLeave={() => { setHoveredApp(null); setPressedApp(null); setClickedShortcut(null); }}
       >
-        {hoveredApp === id && !hideTooltip && <div className="tooltip">{label}</div>}
+        {!contextMenu && hoveredApp === id && !hideTooltip && <div className="tooltip">{label}</div>}
         <motion.div
           className="dock-icon"
           variants={iconVariants}
@@ -1442,10 +1656,10 @@ const Dock = memo(function Dock() {
                   transition={{ opacity: { duration: 0.15, delay: 0.15 }, scale: { type: "spring", stiffness: 400, damping: 25, delay: 0.15 } }}
                   className="dock-icon-wrapper"
                   onContextMenu={(e) => handleContextMenu(e, startItem)}
-                  onMouseEnter={() => setHoveredApp(itemKey(startItem))}
+                  onMouseEnter={() => { if (!contextMenu) setHoveredApp(itemKey(startItem)); }}
                   onMouseLeave={() => { setHoveredApp(null); setPressedApp(null); }}
                 >
-                  {(!dockPreviewEnabled || (dockPreviewEnabled && hoveredApp === itemKey(startItem))) && (
+                  {!contextMenu && (!dockPreviewEnabled || (dockPreviewEnabled && hoveredApp === itemKey(startItem))) && (
                     <div className="tooltip">{t("dockmenu.start")}</div>
                   )}
                   <motion.div 
@@ -1471,10 +1685,10 @@ const Dock = memo(function Dock() {
                   animate={{ opacity: 1, scale: 1 }}
                   transition={{ opacity: { duration: 0.15, delay: 0.18 }, scale: { type: "spring", stiffness: 400, damping: 25, delay: 0.18 } }}
                   className="dock-icon-wrapper"
-                  onMouseEnter={() => setHoveredApp('search')}
+                  onMouseEnter={() => { if (!contextMenu) setHoveredApp('search'); }}
                   onMouseLeave={() => { setHoveredApp(null); setPressedApp(null); }}
                 >
-                  {(!dockPreviewEnabled || (dockPreviewEnabled && hoveredApp === 'search')) && (
+                  {!contextMenu && (!dockPreviewEnabled || (dockPreviewEnabled && hoveredApp === 'search')) && (
                     <div className="tooltip">{t("dockmenu.search")}</div>
                   )}
                   <motion.div
@@ -1500,10 +1714,10 @@ const Dock = memo(function Dock() {
                   animate={{ opacity: 1, scale: 1 }}
                   transition={{ opacity: { duration: 0.15, delay: 0.2 }, scale: { type: "spring", stiffness: 400, damping: 25, delay: 0.2 } }}
                   className="dock-icon-wrapper"
-                  onMouseEnter={() => setHoveredApp('calendar')}
+                  onMouseEnter={() => { if (!contextMenu) setHoveredApp('calendar'); }}
                   onMouseLeave={() => { setHoveredApp(null); setPressedApp(null); }}
                 >
-                  {(!dockPreviewEnabled || (dockPreviewEnabled && hoveredApp === 'calendar')) && (
+                  {!contextMenu && (!dockPreviewEnabled || (dockPreviewEnabled && hoveredApp === 'calendar')) && (
                     <div className="tooltip">{t("dockmenu.calendar")}</div>
                   )}
                   <motion.div
@@ -1545,6 +1759,13 @@ const Dock = memo(function Dock() {
                 (e) => {
                   e.stopPropagation();
                   e.preventDefault();
+                  if (previewTimerRef.current) clearTimeout(previewTimerRef.current);
+                  isPreviewHoveredRef.current = false;
+                  setPreviewData(null);
+                  setHoveredApp(null);
+                  invoke('clear_live_thumbnails').catch(() => {});
+                  setContextMenuHeight(0);
+                  setContextMenuWidth(0);
                   refreshDriveDetails();
                   const target = e.currentTarget.getBoundingClientRect();
                   setContextMenu({
@@ -1568,6 +1789,13 @@ const Dock = memo(function Dock() {
                 (e) => {
                   e.stopPropagation();
                   e.preventDefault();
+                  if (previewTimerRef.current) clearTimeout(previewTimerRef.current);
+                  isPreviewHoveredRef.current = false;
+                  setPreviewData(null);
+                  setHoveredApp(null);
+                  invoke('clear_live_thumbnails').catch(() => {});
+                  setContextMenuHeight(0);
+                  setContextMenuWidth(0);
                   refreshRecycleStatus();
                   const target = e.currentTarget.getBoundingClientRect();
                   setContextMenu({
@@ -1613,61 +1841,25 @@ const Dock = memo(function Dock() {
                       animate={ITEM_ANIMATE}
                       exit={ITEM_EXIT}
                       transition={ITEM_ENTRY_TRANSITION}
-                      onMouseEnter={() => setHoveredApp(itemKey(app))}
+                      onMouseEnter={() => { if (!contextMenu) setHoveredApp(itemKey(app)); }}
                       onMouseLeave={() => { if (!isPreviewHoveredRef.current) { setHoveredApp(null); setPressedApp(null); } }}
                     >
                 <AnimatePresence>
-                  {dockPreviewEnabled && previewData && previewData.id === itemKey(app) && hoveredApp === itemKey(app) && (
-                    <motion.div 
-                      className={`preview-tooltip ${previewData.previews.length > 1 ? 'multi' : ''}`} 
-                      initial={{opacity: 0, y: 10, scale: 0.95}} 
-                      animate={{opacity: 1, y: 0, scale: 1}} 
-                      exit={{opacity: 0, scale: 0.95}} 
-                      transition={{duration: 0.15}}
+                  {dockPreviewEnabled && !contextMenu && previewData && previewData.id === itemKey(app) && hoveredApp === itemKey(app) && (
+                    <DockPreviewTooltip
+                      app={app}
+                      previews={previewData.previews}
+                      onClosePreview={handleClosePreview}
+                      renderMedia={renderAppIcon}
+                      renderPreviewMedia={renderPreviewMedia}
                       onMouseEnter={() => { isPreviewHoveredRef.current = true; }}
                       onMouseLeave={() => { isPreviewHoveredRef.current = false; setHoveredApp(null); setPressedApp(null); }}
-                    >
-                      <div className="preview-items">
-                        {previewData.previews.map((prev, idx) => (
-                            <div
-                              key={prev.hwnd}
-                              className="preview-item"
-                              onClick={() => invoke('focus_window', { hwnd: prev.hwnd })}
-                              onDragOver={(e) => {
-                                e.preventDefault();
-                                e.stopPropagation();
-                                e.dataTransfer.dropEffect = 'copy';
-                                invoke('bring_hwnd_to_front', { hwnd: prev.hwnd }).catch(() => {});
-                              }}
-                            >
-                            {prev.image ? (
-                              <img src={prev.image} alt={`Preview ${idx}`} />
-                            ) : (
-                              <div className="preview-item-icon-fallback">
-                                {renderAppIcon(app)}
-                              </div>
-                            )}
-                            <div className="preview-label">{prev.title || app.name}</div>
-                            <button
-                              className="preview-close-btn"
-                              onClick={(e) => handleClosePreview(e, prev.hwnd)}
-                              data-tooltip={t("dockmenu.closeWindow")}
-                            >
-                              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round">
-                                <line x1="18" y1="6" x2="6" y2="18"></line>
-                                <line x1="6" y1="6" x2="18" y2="18"></line>
-                              </svg>
-                            </button>
-                          </div>
-                        ))}
-                      </div>
-                      {renderPreviewMedia(app)}
-                    </motion.div>
+                    />
                   )}
                 </AnimatePresence>
                 
                 {/* Fallback to text tooltip if previews are disabled, app isn't running, or preview failed to load */}
-                {(!dockPreviewEnabled || (dockPreviewEnabled && hoveredApp === itemKey(app) && !previewData)) && (
+                {!contextMenu && (!dockPreviewEnabled || (dockPreviewEnabled && hoveredApp === itemKey(app) && !previewData)) && (
                   <div className="tooltip">{app.name}</div>
                 )}
                 <motion.div 
@@ -1729,59 +1921,23 @@ const Dock = memo(function Dock() {
                       animate={{ opacity: 1, scale: 1 }}
                       exit={{ opacity: 0, scale: 0, transition: { duration: 0.12 } }}
                       transition={ITEM_ENTRY_TRANSITION}
-                      onMouseEnter={() => setHoveredApp(itemKey(app))}
+                      onMouseEnter={() => { if (!contextMenu) setHoveredApp(itemKey(app)); }}
                       onMouseLeave={() => { if (!isPreviewHoveredRef.current) { setHoveredApp(null); setPressedApp(null); } }}
                     >
                       <AnimatePresence>
-                        {dockPreviewEnabled && previewData && previewData.id === itemKey(app) && hoveredApp === itemKey(app) && (
-                          <motion.div
-                            className={`preview-tooltip ${previewData.previews.length > 1 ? 'multi' : ''}`}
-                            initial={{opacity: 0, y: 10, scale: 0.95}}
-                            animate={{opacity: 1, y: 0, scale: 1}}
-                            exit={{opacity: 0, scale: 0.95}}
-                            transition={{duration: 0.15}}
-                            onMouseEnter={() => { isPreviewHoveredRef.current = true; }}
-                            onMouseLeave={() => { isPreviewHoveredRef.current = false; setHoveredApp(null); setPressedApp(null); }}
-                          >
-                            <div className="preview-items">
-                              {previewData.previews.map((prev, idx) => (
-                                  <div
-                              key={prev.hwnd}
-                              className="preview-item"
-                              onClick={() => invoke('focus_window', { hwnd: prev.hwnd })}
-                              onDragOver={(e) => {
-                                e.preventDefault();
-                                e.stopPropagation();
-                                e.dataTransfer.dropEffect = 'copy';
-                                invoke('bring_hwnd_to_front', { hwnd: prev.hwnd }).catch(() => {});
-                              }}
-                            >
-                                  {prev.image ? (
-                                    <img src={prev.image} alt={`Preview ${idx}`} />
-                                  ) : (
-                                    <div className="preview-item-icon-fallback">
-                                      {renderAppIcon(app)}
-                                    </div>
-                                  )}
-                                  <div className="preview-label">{prev.title || app.name}</div>
-                                  <button
-                                    className="preview-close-btn"
-                                    onClick={(e) => handleClosePreview(e, prev.hwnd)}
-                                    data-tooltip={t("dockmenu.closeWindow")}
-                                  >
-                                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round">
-                                      <line x1="18" y1="6" x2="6" y2="18"></line>
-                                      <line x1="6" y1="6" x2="18" y2="18"></line>
-                                    </svg>
-                                  </button>
-                                </div>
-                              ))}
-                            </div>
-                            {renderPreviewMedia(app)}
-                          </motion.div>
+                        {dockPreviewEnabled && !contextMenu && previewData && previewData.id === itemKey(app) && hoveredApp === itemKey(app) && (
+                          <DockPreviewTooltip
+                      app={app}
+                      previews={previewData.previews}
+                      onClosePreview={handleClosePreview}
+                      renderMedia={renderAppIcon}
+                      renderPreviewMedia={renderPreviewMedia}
+                      onMouseEnter={() => { isPreviewHoveredRef.current = true; }}
+                      onMouseLeave={() => { isPreviewHoveredRef.current = false; setHoveredApp(null); setPressedApp(null); }}
+                    />
                         )}
                       </AnimatePresence>
-                      {(!dockPreviewEnabled || (dockPreviewEnabled && hoveredApp === itemKey(app) && !previewData)) && (
+                      {!contextMenu && (!dockPreviewEnabled || (dockPreviewEnabled && hoveredApp === itemKey(app) && !previewData)) && (
                         <div className="tooltip">{app.name}</div>
                       )}
                       <motion.div
@@ -1840,60 +1996,24 @@ const Dock = memo(function Dock() {
                       animate={ITEM_ANIMATE}
                       exit={ITEM_EXIT}
                       transition={ITEM_ENTRY_TRANSITION}
-                      onMouseEnter={() => setHoveredApp(itemKey(app))}
+                      onMouseEnter={() => { if (!contextMenu) setHoveredApp(itemKey(app)); }}
                       onMouseLeave={() => { if (!isPreviewHoveredRef.current) { setHoveredApp(null); setPressedApp(null); } }}
                     >
                       <AnimatePresence>
-                        {dockPreviewEnabled && previewData && previewData.id === itemKey(app) && hoveredApp === itemKey(app) && (
-                          <motion.div
-                            className={`preview-tooltip ${previewData.previews.length > 1 ? 'multi' : ''}`}
-                            initial={{opacity: 0, y: 10, scale: 0.95}}
-                            animate={{opacity: 1, y: 0, scale: 1}}
-                            exit={{opacity: 0, scale: 0.95}}
-                            transition={{duration: 0.15}}
-                            onMouseEnter={() => { isPreviewHoveredRef.current = true; }}
-                            onMouseLeave={() => { isPreviewHoveredRef.current = false; setHoveredApp(null); setPressedApp(null); }}
-                          >
-                            <div className="preview-items">
-                              {previewData.previews.map((prev, idx) => (
-                                  <div
-                              key={prev.hwnd}
-                              className="preview-item"
-                              onClick={() => invoke('focus_window', { hwnd: prev.hwnd })}
-                              onDragOver={(e) => {
-                                e.preventDefault();
-                                e.stopPropagation();
-                                e.dataTransfer.dropEffect = 'copy';
-                                invoke('bring_hwnd_to_front', { hwnd: prev.hwnd }).catch(() => {});
-                              }}
-                            >
-                                  {prev.image ? (
-                                    <img src={prev.image} alt={`Preview ${idx}`} />
-                                  ) : (
-                                    <div className="preview-item-icon-fallback">
-                                      {renderAppIcon(app)}
-                                    </div>
-                                  )}
-                                  <div className="preview-label">{prev.title || app.name}</div>
-                                  <button
-                                    className="preview-close-btn"
-                                    onClick={(e) => handleClosePreview(e, prev.hwnd)}
-                                    data-tooltip={t("dockmenu.closeWindow")}
-                                  >
-                                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round">
-                                      <line x1="18" y1="6" x2="6" y2="18"></line>
-                                      <line x1="6" y1="6" x2="18" y2="18"></line>
-                                    </svg>
-                                  </button>
-                                </div>
-                              ))}
-                            </div>
-                            {renderPreviewMedia(app)}
-                          </motion.div>
+                        {dockPreviewEnabled && !contextMenu && previewData && previewData.id === itemKey(app) && hoveredApp === itemKey(app) && (
+                          <DockPreviewTooltip
+                      app={app}
+                      previews={previewData.previews}
+                      onClosePreview={handleClosePreview}
+                      renderMedia={renderAppIcon}
+                      renderPreviewMedia={renderPreviewMedia}
+                      onMouseEnter={() => { isPreviewHoveredRef.current = true; }}
+                      onMouseLeave={() => { isPreviewHoveredRef.current = false; setHoveredApp(null); setPressedApp(null); }}
+                    />
                         )}
                       </AnimatePresence>
 
-                      {(!dockPreviewEnabled || (dockPreviewEnabled && hoveredApp === itemKey(app) && !previewData)) && (
+                      {!contextMenu && (!dockPreviewEnabled || (dockPreviewEnabled && hoveredApp === itemKey(app) && !previewData)) && (
                         <div className="tooltip">{app.name}</div>
                       )}
                       <motion.div
@@ -2015,6 +2135,11 @@ const Dock = memo(function Dock() {
               <div className="menu-item" onClick={() => togglePin(contextMenu.app!)}>
                 {contextMenu.app.is_pinned ? t("dockmenu.unpin") : t("dockmenu.pin")}
               </div>
+              {contextMenu.app.is_running && !contextMenu.app.is_pinned && contextMenu.app.path !== 'start' && (
+                <div className="menu-item" onClick={() => { handleHideApp(contextMenu.app!); closeMenu(); }}>
+                  {t("dockmenu.hideApp")}
+                </div>
+              )}
               {contextMenu.app.is_pinned && contextMenu.app.path !== 'start' && (
                 <>
                   <div className="menu-divider" />

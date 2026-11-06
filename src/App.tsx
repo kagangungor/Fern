@@ -19,6 +19,7 @@ import { useConnectedDevices } from "./hooks/useConnectedDevices";
 
 import { initTheme } from "./theme";
 import { SurfaceShape } from "./components/SurfaceShape";
+import { PrivacyAura } from "./components/PrivacyAura";
 import { playAgentSound } from "./agentSounds";
 import { AgentLeft, AgentDot, AgentPanel, type AgentActivity } from "./components/AgentStatus";
 import { PlayIcon, PauseIcon, SkipBackIcon, SkipForwardIcon, VolumeLowIcon, VolumeHighIcon, MusicNoteIcon } from "./icons";
@@ -30,7 +31,7 @@ import { useCaldav } from "./hooks/useCaldav";
 import { NotchCalendar } from "./components/NotchCalendar";
 import { NotchClock, StopwatchReadout } from "./components/NotchClock";
 import { ConnectionsView } from "./components/ConnectionsView";
-import { NotchTour } from "./components/NotchTour";
+import { NotchTour, TOUR_STEPS } from "./components/NotchTour";
 import { useStopwatch } from "./hooks/useStopwatch";
 import { t as translate, useT } from "./i18n";
 import { NotchShelf, useShelf } from "./components/NotchShelf";
@@ -52,8 +53,12 @@ import {
   MemoryStick,
   HardDrive,
   ArrowUpDown,
+  Wifi,
+  EthernetPort,
+  WifiOff,
   Zap,
   ChevronLeft,
+  MicOff,
 } from "lucide-react";
 
 // Timer chime, synthesized with Web Audio so there's no asset. The context is made on the
@@ -464,6 +469,12 @@ function App() {
   const [scale, setScale] = useState(() => parseFloat(localStorage.getItem("fern-scale") || "1.0"));
   const [timeFormat24h, setTimeFormat24h] = useState(() => localStorage.getItem("fern-time-format-24h") === "true");
 
+  const [isMicMuted, setIsMicMuted] = useState(false);
+  const [privacyState, setPrivacyState] = useState<{ mic_active: boolean; cam_active: boolean }>({ mic_active: false, cam_active: false });
+  const [privacyAuraEnabled, setPrivacyAuraEnabled] = useState(() => {
+    return localStorage.getItem("fern-privacy-aura-enabled") !== "false";
+  });
+
 
   const [batteryLevel, setBatteryLevel] = useState(100);
   const [isCharging, setIsCharging] = useState(false);
@@ -555,6 +566,7 @@ function App() {
   const [diskSpace, setDiskSpace] = useState(0);
   const [netUpSpeed, setNetUpSpeed] = useState(0);
   const [netDownSpeed, setNetDownSpeed] = useState(0);
+  const [netWidgetMode, setNetWidgetMode] = useState<"speed" | "status">(() => localStorage.getItem("fern-net-widget-mode") === "status" ? "status" : "speed");
   const [statusWidgets, setStatusWidgets] = useState<WidgetConfig>({ left: ["weather"], right: ["battery"] });
 
   const [windowLabel, setWindowLabel] = useState<string>("");
@@ -630,7 +642,9 @@ function App() {
   const dockModeInitial = useRef(true);
   const notchModeInitial = useRef(true);
 
-  const [fernMode, setFernMode] = useState<'music' | 'calendar' | 'command-center' | 'status' | 'shelf' | 'tour' | 'device' | 'devices' | 'agent'>('status');
+  const [fernMode, setFernMode] = useState<'music' | 'calendar' | 'command-center' | 'status' | 'shelf' | 'device' | 'devices' | 'agent'>('status');
+  const [tourActive, setTourActive] = useState(false);
+  const [tourStep, setTourStep] = useState(0);
   const [deviceAlert, setDeviceAlert] = useState<DeviceAlert | null>(null);
   const [budsById, setBudsById] = useState<Record<string, BudsBattery>>({});
   const [deviceAlertOnScreen, setDeviceAlertOnScreen] = useState(false);
@@ -642,8 +656,8 @@ function App() {
   const connectedDevices = useConnectedDevices(windowLabel === "main");
 
   const isAnyInteraction = isHovered || isNotchHovered || isEdgeHovered;
-  const isHidden = isFullscreen ||
-    (!startupAnimating && fernMode !== 'tour' && !deviceAlertOnScreen && !(agentActivity && isNotchWindow) && (
+  const isHidden = (notchMode !== 'fixed' && isFullscreen) ||
+    (!startupAnimating && !tourActive && !deviceAlertOnScreen && !(agentActivity && isNotchWindow) && (
       (notchMode === 'smart' && isOverlapped && interactionState === 'none') ||
       (notchMode === 'peek' && interactionState === 'none' && !eventPeek)
     ));
@@ -676,11 +690,15 @@ function App() {
     const updateRect = () => {
       if (fernRef.current && isNotchWindow) {
         const rect = fernRef.current.getBoundingClientRect();
+        const card = tourActive ? document.querySelector('.tour-bar')?.getBoundingClientRect() : undefined;
+        const left = card ? Math.min(rect.left, card.left) : rect.left;
+        const right = card ? Math.max(rect.right, card.right) : rect.right;
+        const bottom = card ? Math.max(rect.bottom, card.bottom) : rect.bottom;
         const next = {
-          x: Math.round(rect.x),
+          x: Math.round(left),
           y: Math.round(rect.y),
-          width: Math.round(rect.width),
-          height: Math.round(rect.height)
+          width: Math.round(right - left),
+          height: Math.round(bottom - rect.y)
         };
         const key = `${next.x},${next.y},${next.width},${next.height}`;
         if (key === lastSent) return;
@@ -712,7 +730,7 @@ function App() {
       clearInterval(poll);
       cancelAnimationFrame(rafId);
     };
-  }, [isExpanded, isHidden, windowLabel, scale]);
+  }, [isExpanded, isHidden, windowLabel, scale, tourActive, tourStep, fernMode, ccView]);
 
   useEffect(() => {
     if (!windowLabel) return;
@@ -822,7 +840,7 @@ function App() {
   };
 
   const showDeviceAlert = useCallback((alert: Omit<DeviceAlert, "runId">) => {
-    if (fernMode === "tour" || fernMode === "shelf") return;
+    if (tourActive || fernMode === "shelf") return;
     const current = deviceAlertRef.current;
     if (current && current.id !== alert.id) {
       const queue = deviceAlertQueueRef.current.filter((queued) => queued.id !== alert.id);
@@ -830,7 +848,7 @@ function App() {
       return;
     }
     presentDeviceAlertRef.current(alert);
-  }, [fernMode]);
+  }, [fernMode, tourActive]);
 
   useEffect(() => () => {
     if (deviceAlertTimerRef.current) clearTimeout(deviceAlertTimerRef.current);
@@ -1069,6 +1087,10 @@ function App() {
     const preventContext = (e: MouseEvent) => e.preventDefault();
     document.addEventListener('contextmenu', preventContext);
 
+    const unlistenHotkey = listen("notch-hotkey-toggle", () => {
+      setIsVisible((prev) => !prev);
+    });
+
     const unlistenVisibility = listen<boolean>("visibility-change", (event) => {
       setIsVisible(event.payload);
     });
@@ -1098,12 +1120,36 @@ function App() {
       window.location.reload();
     });
 
+    invoke<boolean>("get_microphone_mute")
+      .then(setIsMicMuted)
+      .catch(() => {});
+
+    invoke<{ mic_active: boolean; cam_active: boolean }>("get_privacy_status")
+      .then(setPrivacyState)
+      .catch(() => {});
+
+    const unlistenMute = listen<{ is_muted: boolean }>("mic-mute-changed", (event) => {
+      setIsMicMuted(event.payload.is_muted);
+    });
+
+    const unlistenPrivacy = listen<{ mic_active: boolean; cam_active: boolean }>("privacy-status-changed", (event) => {
+      setPrivacyState(event.payload);
+    });
+
+    const unlistenAuraSetting = listen<{ enabled: boolean }>("privacy-aura-setting-changed", (event) => {
+      setPrivacyAuraEnabled(event.payload.enabled);
+    });
+
     return () => {
       unlistenVisibility.then(f => f());
+      unlistenHotkey.then(f => f());
       unlistenNotchOverlap.then(f => f());
       unlistenNotchEdgeHover.then(f => f());
       unlistenNotchFullscreen.then(f => f());
       unlistenSettingsReset.then(f => f());
+      unlistenMute.then(f => f());
+      unlistenPrivacy.then(f => f());
+      unlistenAuraSetting.then(f => f());
       document.removeEventListener('contextmenu', preventContext);
     };
   }, [windowLabel]);
@@ -1111,6 +1157,7 @@ function App() {
   // Settings sync — consolidated dispatch for all settings events
   useSettingsSync(
     {
+      "fern-net-widget-mode": (value) => setNetWidgetMode(value === "status" ? "status" : "speed"),
       "fern-weather-enabled": setSettingsWeatherEnabled,
       "fern-calendar-enabled": setSettingsCalendarEnabled,
       "fern-timer-enabled": setSettingsTimerEnabled,
@@ -1190,19 +1237,96 @@ function App() {
     invoke("change_notch_mode", { mode: notchMode });
   }, [notchMode, windowLabel]);
 
-  const [tourStep, setTourStep] = useState(0);
   const tourAutoStartedRef = useRef(false);
 
+  const fernModeRef = useRef(fernMode);
+  fernModeRef.current = fernMode;
+  const tourLiveRef = useRef({ volume: 0.5, brightness: 50, wifi: false, bluetooth: true, notchMode: 'smart', dockMode: 'smart' });
+  tourLiveRef.current = { volume, brightness: currentBrightness, wifi: wifiEnabled, bluetooth: bluetoothEnabled, notchMode, dockMode };
+  const tourSnapshotRef = useRef<{ mode: 'music' | 'calendar' | 'command-center' | 'status'; volume: number; brightness: number; wifi: boolean; bluetooth: boolean; notchMode: string; dockMode: string } | null>(null);
+  const [tourDone, setTourDone] = useState<Set<string>>(() => new Set());
+  const tourCountsRef = useRef<Record<string, number>>({});
+  const tourStepRef = useRef(0);
+  tourStepRef.current = tourStep;
+  const tourActiveRef = useRef(false);
+  tourActiveRef.current = tourActive;
+
+  const tourSignal = useCallback((kind: string) => {
+    if (!tourActiveRef.current) return;
+    const def = TOUR_STEPS[tourStepRef.current];
+    if (!def || def.signal !== kind) return;
+    tourCountsRef.current[kind] = (tourCountsRef.current[kind] ?? 0) + 1;
+    if (tourCountsRef.current[kind] >= (def.need ?? 1)) {
+      setTourDone((prev) => (prev.has(def.key) ? prev : new Set(prev).add(def.key)));
+    }
+  }, []);
+  const tourSignalRef = useRef(tourSignal);
+  tourSignalRef.current = tourSignal;
+
   const startTour = useCallback(() => {
+    const current = fernModeRef.current;
+    const live = tourLiveRef.current;
+    tourSnapshotRef.current = {
+      mode: current === 'music' || current === 'calendar' || current === 'command-center' ? current : 'status',
+      ...live,
+    };
+    tourCountsRef.current = {};
+    setTourDone(new Set());
     setTourStep(0);
-    setFernMode('tour');
+    setIsHovered(true);
+    setFernMode('status');
+    setTourActive(true);
   }, []);
 
   const closeTour = useCallback(() => {
-    setFernMode('status');
+    const snap = tourSnapshotRef.current;
+    tourSnapshotRef.current = null;
+    if (snap) {
+      const live = tourLiveRef.current;
+      if (Math.abs(live.volume - snap.volume) > 0.001) {
+        setVolume(snap.volume);
+        invoke("set_volume", { volume: snap.volume }).catch(() => {});
+      }
+      if (Math.abs(live.brightness - snap.brightness) > 0.5) {
+        setCurrentBrightness(snap.brightness);
+        invoke("set_brightness", { brightness: snap.brightness }).catch(() => {});
+      }
+      if (live.wifi !== snap.wifi) invoke("set_wifi_state", { enabled: snap.wifi }).catch(() => {});
+      if (live.bluetooth !== snap.bluetooth) {
+        setBluetoothEnabled(snap.bluetooth);
+        invoke("set_bluetooth_state", { enabled: snap.bluetooth }).catch(() => {});
+      }
+      if (live.notchMode !== snap.notchMode) {
+        setNotchMode(snap.notchMode);
+        invoke("set_notch_mode_for_window", { mode: snap.notchMode })
+          .then(() => invoke("change_notch_mode", { mode: snap.notchMode }))
+          .catch(() => {});
+      }
+      if (live.dockMode !== snap.dockMode) {
+        setDockMode(snap.dockMode);
+        localStorage.setItem("fern-dock-mode", snap.dockMode);
+        invoke("save_setting", { key: "fern-dock-mode", value: snap.dockMode }).catch(() => {});
+        invoke("change_dock_mode", { mode: snap.dockMode }).catch(() => {});
+      }
+    }
+    setFernMode(snap?.mode ?? 'status');
+    setCcView('main');
+    setTourActive(false);
     localStorage.setItem("fern-tour-seen", "1");
     invoke("save_setting", { key: "fern-tour-seen", value: "1" }).catch(console.error);
   }, []);
+
+  useEffect(() => {
+    if (ccView !== 'main' || fernMode === 'command-center') tourSignalRef.current('cc');
+    if (fernMode === 'shelf') tourSignalRef.current('shelf');
+  }, [ccView, fernMode]);
+
+  useEffect(() => {
+    if (windowLabel !== 'main') return;
+    const unlisten = listen("shelf-item-added", () => tourSignalRef.current('shelf'));
+    const unlistenDock = listen("tour-dock-action", () => tourSignalRef.current('dock'));
+    return () => { unlisten.then(f => f()); unlistenDock.then(f => f()); };
+  }, [windowLabel]);
 
   useEffect(() => {
     if (windowLabel !== 'main' || settingsLegacyMode || !isReady || !isExpanded || tourAutoStartedRef.current) return;
@@ -1250,10 +1374,12 @@ function App() {
   };
 
   const handleWheel = (e: React.WheelEvent) => {
+    if (fernMode === 'command-center' && (showConnections || ccView !== 'main')) return;
+    if (fernMode === 'devices') return;
     const target = e.target as HTMLElement;
-    if (target.closest('.calendar-grid') || target.closest('.timer-column') || target.closest('.cal-scroll')) {
-      return;
-    }
+    if (target.closest('.cv-root, .cv-list, .cal-scroll, .timer-column, .shelf-row, .connected-devices-panel')) return;
+    const scroller = target.closest('.cal-scroll') as HTMLElement | null;
+    if (scroller && scroller.scrollHeight > scroller.clientHeight + 1) return;
 
     if (!isHovered) return;
 
@@ -1272,14 +1398,14 @@ function App() {
     const availableModes = availableNotchModes();
 
     if (fernMode === 'agent') { if (availableModes[0]) setFernMode(availableModes[0]); return; }
-    if (fernMode === 'tour' || fernMode === 'device' || fernMode === 'devices') return;
-    const currentIndex = (availableModes as readonly string[]).indexOf(fernMode);
+        const currentIndex = (availableModes as readonly string[]).indexOf(fernMode);
     if (currentIndex === -1) return;
 
     const nextIndex = (currentIndex + direction + availableModes.length) % availableModes.length;
     const nextMode = availableModes[nextIndex];
     manualMusicRef.current = nextMode === 'music';
     setFernMode(nextMode);
+    tourSignal('panel');
   };
 
 
@@ -1725,6 +1851,7 @@ function App() {
     // set_volume unmutes for any non-zero level.
     setIsMuted(newVol === 0);
     sendVolume(newVol);
+    tourSignalRef.current('slider');
   }, [sendVolume]);
 
 
@@ -1782,6 +1909,7 @@ function App() {
   const handleBrightnessChange = useCallback((newVal: number) => {
     setCurrentBrightness(newVal);
     sendBrightness(newVal);
+    tourSignalRef.current('slider');
   }, [sendBrightness]);
 
   const openSettingsWindow = useCallback(async () => {
@@ -1803,7 +1931,9 @@ function App() {
     e.stopPropagation();
     const nextMode = dockMode === "fixed" ? "smart" : dockMode === "smart" ? "peek" : "fixed";
     setDockMode(nextMode);
+    tourSignalRef.current('mode');
     localStorage.setItem("fern-dock-mode", nextMode);
+
     invoke("save_setting", { key: "fern-dock-mode", value: nextMode }).catch(console.error);
     try {
       await invoke("change_dock_mode", { mode: nextMode });
@@ -1816,6 +1946,9 @@ function App() {
     e.stopPropagation();
     const nextMode = notchMode === "fixed" ? "smart" : notchMode === "smart" ? "peek" : "fixed";
     setNotchMode(nextMode);
+    tourSignalRef.current('mode');
+    localStorage.setItem("fern-notch-mode", nextMode);
+    invoke("save_setting", { key: "fern-notch-mode", value: nextMode }).catch(console.error);
     try {
       await invoke("set_notch_mode_for_window", { mode: nextMode });
       await invoke("change_notch_mode", { mode: nextMode });
@@ -1914,13 +2047,24 @@ function App() {
             <span className="label">{diskSpace}GB</span>
           </div>
         );
-      case "net":
+      case "net": {
+        if (netWidgetMode === "status") {
+          const online = wifiConnected || !!lanStatus?.connected;
+          const Icon = showLan ? EthernetPort : online ? Wifi : WifiOff;
+          const tipKey = showLan ? "widgets.net.ethernet" : online ? "widgets.net.wifi" : "widgets.net.offline";
+          return (
+            <div className="passive-feature" key="net" {...tip(t(tipKey))}>
+              <Icon size={12} strokeWidth={2} />
+            </div>
+          );
+        }
         return (
           <div className="passive-feature" key="net" {...tip(t("widgets.net.tip"))}>
             <ArrowUpDown size={12} strokeWidth={2} />
             <span className="label">↑{formatBytes(netUpSpeed)} ↓{formatBytes(netDownSpeed)}</span>
           </div>
         );
+      }
       default:
         return null;
     }
@@ -1943,9 +2087,13 @@ function App() {
       setIsHovered(true);
       setIsNotchHovered(true);
       setFernMode('shelf');
+      tourSignalRef.current('shelf');
     },
     onDragLeave: collapseAfterShelfDrag,
-    onDrop: () => setFernMode('shelf'),
+    onDrop: () => {
+      setFernMode('shelf');
+      tourSignalRef.current('shelf');
+    },
   });
 
   useEffect(() => {
@@ -1970,6 +2118,10 @@ function App() {
     [showDualClock, dualClockLabel, dualClockZone, dualTime]
   );
 
+  // Privacy HUD states
+  const micActive = privacyState.mic_active;
+  const camActive = privacyState.cam_active;
+
   // Calculate width dynamically based on enabled features
   const agentNeedsYou = !!agentActivity && isNotchWindow;
   const agentWings = !!agentActivity && isNotchWindow && !isHovered && (fernMode === 'status' || isMusicMode);
@@ -1982,11 +2134,11 @@ function App() {
     if (fernMode === 'agent') return 340;
     if (fernMode === 'device' && deviceAlert) return 330;
     if (fernMode === 'devices') return 350;
-    if (fernMode === 'tour') return 380;
     const hasNet = statusWidgets.left.includes("net") || statusWidgets.right.includes("net");
     const netExtra = hasNet ? 45 : 0;
     const totalWidgets = statusWidgets.left.length + statusWidgets.right.length;
-    const minStatusWidth = (totalWidgets > 0 ? Math.max(360, 200 + totalWidgets * 65 + netExtra) : 320) + dualClockExtra;
+    const privacyExtra = (isMicMuted ? 26 : 0) + ((privacyAuraEnabled && (micActive || camActive)) ? 22 : 0);
+    const minStatusWidth = (totalWidgets > 0 ? Math.max(360, 200 + totalWidgets * 65 + netExtra) : 320) + dualClockExtra + privacyExtra;
 
     if (fernMode === 'shelf') {
       const itemsWidth = 160 + Math.max(shelf.items.length, 1) * 68;
@@ -1994,12 +2146,12 @@ function App() {
     }
     if (isCalendarMode) return Math.max(settingsCalendarEnabled && showClockColumn ? 480 : settingsCalendarEnabled ? 310 : 270, 140 + dualClockExtra);
     if (fernMode === 'command-center' && isHovered) {
-      return Math.max(390, Math.min(200 + totalWidgets * 65 + netExtra, 500)) + dualClockExtra;
+      return Math.max(390, Math.min(200 + totalWidgets * 65 + netExtra, 500)) + dualClockExtra + privacyExtra;
     }
     if (fernMode === 'status' && isHovered) {
-      return Math.min(200 + totalWidgets * 65 + netExtra, 480) + dualClockExtra;
+      return Math.min(200 + totalWidgets * 65 + netExtra + privacyExtra, 500) + dualClockExtra;
     }
-    if (isMusicMode && isHovered) return mediaLayout === 'compact' ? 300 : 340;
+    if (isMusicMode && isHovered) return (mediaLayout === 'compact' ? 300 : 340) + privacyExtra;
     if ((showPowerPulse || showLowBatteryPulse || showUpdatePulse) && !isHovered) return 200;
 
     let w = 140 + dualClockExtra + (agentWings ? (isMusicMode ? 24 : 56) : 0);
@@ -2012,6 +2164,8 @@ function App() {
       }
     }
 
+    w += privacyExtra;
+
     return w;
   };
 
@@ -2022,11 +2176,11 @@ function App() {
     if (fernMode === 'agent') return agentActivity?.ask ? 184 : agentActivity?.detail ? 160 : 130;
     if (fernMode === 'device' && deviceAlert) return 76;
     if (fernMode === 'devices') return 320;
-    if (fernMode === 'tour') return 210;
     if (fernMode === 'shelf') return shelf.items.length === 0 ? 96 : 156;
     if (fernMode === 'calendar') return settingsCalendarEnabled ? (caldav.connected ? 350 : 310) : 262;
     if (fernMode === 'command-center') {
       if (!isHovered) return 36;
+      if (showConnections) return 320;
       const tileRows = Math.ceil(ccResolved.tiles.length / 2);
       const tilesH = tileRows ? tileRows * 42 + (tileRows - 1) * 10 + 14 : 0;
       const buttonsH = ccResolved.buttons.length ? 44 : 0;
@@ -2109,7 +2263,7 @@ function App() {
         }}
         onHoverStart={() => {
           setIsHovered(true);
-          if (fernMode !== 'tour' && fernMode !== 'shelf') {
+          if (!tourActive && fernMode !== 'shelf') {
             const remembered = settingsRememberMode ? rememberedModeRef.current : null;
             if (agentNeedsYou) setFernMode('agent');
             else if (remembered && availableNotchModes().includes(remembered)) setFernMode(remembered);
@@ -2117,6 +2271,7 @@ function App() {
           }
         }}
         onHoverEnd={() => {
+          if (tourActive) return;
           setIsHovered(false);
           if (fernMode === 'command-center' || fernMode === 'calendar') rememberedModeRef.current = fernMode;
           const targetMode = mediaInfo.has_media && isPlaying && settingsMusicCompactNotch ? 'music' : 'status';
@@ -2139,6 +2294,15 @@ function App() {
           default: { type: "spring", stiffness: 500, damping: 30, mass: 1 }
         }}
       >
+        {/* Privacy Aura (SVG halo tracing notch flares and bottom perimeter) */}
+        {privacyAuraEnabled && (micActive || camActive) && (
+          <PrivacyAura
+            flare={isImpacted ? 13 : 0}
+            radius={isCalendarMode ? 28 : 18}
+            type={camActive && micActive ? "both" : camActive ? "cam" : "mic"}
+          />
+        )}
+
         {widgetTip && isHovered && <div className="widget-tip">{widgetTip}</div>}
 
         {isMusicMode && isHovered && mediaSessions.length > 1 && (
@@ -2279,7 +2443,7 @@ function App() {
                           </div>
                           <div className="header-visualizer-wrap">
                             {productivityEnabled && (
-                              <button className="music-calendar-btn" onClick={toggleCalendarMode} title={t("music.openCalendar")} aria-label={t("music.openCalendar")}>
+                              <button className="music-calendar-btn" onClick={toggleCalendarMode} {...tip(t("music.openCalendar"))} aria-label={t("music.openCalendar")}>
                                 <CalendarDays size={16} strokeWidth={1.75} />
                               </button>
                             )}
@@ -2347,7 +2511,7 @@ function App() {
                         </div>
 
                         <div className="volume-slider-container" onWheel={handleVolumeWheel}>
-                          <VolumeLowIcon size={14} style={{ opacity: 0.65 }} />
+                          <button className="volume-end-btn" onClick={(e) => { e.stopPropagation(); handleVolumeChange(0); }} onPointerDown={(e) => e.stopPropagation()} aria-label={t("cc.volume")}><VolumeLowIcon size={14} style={{ opacity: 0.65 }} /></button>
                           <div className="slider-track-premium">
                             <input
                               type="range"
@@ -2362,7 +2526,7 @@ function App() {
                             />
                             <div className="slider-progress-fill" style={{ width: `${displayVolume * 100}%` }} />
                           </div>
-                          <VolumeHighIcon size={16} style={{ opacity: 0.65 }} />
+                          <button className="volume-end-btn" onClick={(e) => { e.stopPropagation(); handleVolumeChange(1); }} onPointerDown={(e) => e.stopPropagation()} aria-label={t("cc.volume")}><VolumeHighIcon size={16} style={{ opacity: 0.65 }} /></button>
                         </div>
                       </div>
 
@@ -2589,6 +2753,30 @@ function App() {
                                   {statusWidgets.right.map(renderStatusWidget)}
                                 </motion.div>
                               ) : null}
+
+                              {/* Meeting & Privacy Indicators (Privacy Dots & Mute Badge) */}
+                              {((privacyAuraEnabled && (micActive || camActive)) || isMicMuted) && (
+                                <div className="privacy-indicators-inline">
+                                  {isMicMuted && (
+                                    <button
+                                      className="privacy-mute-badge"
+                                      title={t("meeting.micHotkey") + " (Muted - Click to unmute)"}
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        invoke("toggle_microphone_mute").catch(() => {});
+                                      }}
+                                    >
+                                      <MicOff size={11} strokeWidth={2.5} color="#ef4444" />
+                                    </button>
+                                  )}
+                                  {privacyAuraEnabled && camActive && (
+                                    <div className="privacy-dot cam" title="Camera active" />
+                                  )}
+                                  {privacyAuraEnabled && micActive && (
+                                    <div className="privacy-dot mic" title="Microphone active" />
+                                  )}
+                                </div>
+                              )}
                             </div>
                           </motion.div>
                         )}
@@ -2604,6 +2792,9 @@ function App() {
                   <motion.div
                     className="command-center-content-minimal"
                     onClick={e => e.stopPropagation()}
+                    onWheel={e => {
+                      if (showConnections || ccView !== 'main') e.stopPropagation();
+                    }}
                     initial={{ opacity: 0 }}
                     animate={{ opacity: 1 }}
                     exit={{ opacity: 0, filter: "blur(4px)", transition: { duration: 0.1 } }}
@@ -2631,6 +2822,7 @@ function App() {
                       <ConnectionsView
                         kind={ccView as "wifi" | "bluetooth" | "audio"}
                         onBack={() => setCcView('main')}
+                        tip={tip}
                         onOpenWindowsSettings={() => { invoke(ccView === 'wifi' ? 'open_wifi_settings' : ccView === 'audio' ? 'open_sound_settings' : 'open_bluetooth_settings'); }}
                       />
                     )}
@@ -2653,7 +2845,7 @@ function App() {
                           <span className="cc-pill-status">{showLan ? t('connections.connected') : wifiStatus === null ? '…' : !wifiEnabled ? t('common.off') : wifiConnected ? t('connections.connected') : t('cc.notConnected')}</span>
                         </div>
                         {!settingsLegacyMode && !showLan && (
-                          <span className="cc-pill-more" title={t("cc.networks")} onClick={(e) => { e.stopPropagation(); setCcView('wifi'); }}>›</span>
+                          <span className="cc-pill-more" {...tip(t("cc.networks"))} onClick={(e) => { e.stopPropagation(); setCcView('wifi'); }}>›</span>
                         )}
                       </div>
 
@@ -2687,7 +2879,7 @@ function App() {
                           <span className="cc-pill-status">{bluetoothEnabled ? t('common.on') : t('common.off')}</span>
                         </div>
                         {!settingsLegacyMode && (
-                          <span className="cc-pill-more" title={t("cc.devices")} onClick={(e) => { e.stopPropagation(); setCcView('bluetooth'); }}>›</span>
+                          <span className="cc-pill-more" {...tip(t("cc.devices"))} onClick={(e) => { e.stopPropagation(); setCcView('bluetooth'); }}>›</span>
                         )}
                       </div>
 
@@ -2765,7 +2957,7 @@ function App() {
                       <div className="cc-classic-slider-row" style={ccStyle("sliders", "volume")} onWheel={handleVolumeWheel}>
                         <div
                           className={`cc-classic-slider-label${settingsLegacyMode ? '' : ' clickable'}`}
-                          title={settingsLegacyMode ? undefined : t('cc.outputDevice')}
+                          {...(settingsLegacyMode ? {} : tip(t('cc.outputDevice')))}
                           onClick={settingsLegacyMode ? undefined : (e) => { e.stopPropagation(); setCcView('audio'); }}
                         >
                           <VolumeLowIcon style={{ opacity: 0.5 }} />
@@ -2786,7 +2978,17 @@ function App() {
                           />
                           <div className="cc-classic-fill" style={{ width: `${displayVolume * 100}%` }} />
                         </div>
-                        <span className="cc-classic-percentage">{Math.round(displayVolume * 100)}%</span>
+                        <span
+                          className="cc-classic-percentage"
+                          style={{ cursor: "pointer" }}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleVolumeChange(displayVolume === 0 ? 1 : 0);
+                          }}
+                          {...tip(displayVolume === 0 ? "100%" : "0%")}
+                        >
+                          {Math.round(displayVolume * 100)}%
+                        </span>
                       </div>
 
                       {/* Brightness Slider */}
@@ -2885,7 +3087,7 @@ function App() {
               </AnimatePresence>
 
               <AnimatePresence>
-                {fernMode === 'tour' && (
+                {tourActive && (
                   <motion.div
                     key="tour"
                     initial={{ opacity: 0 }}
@@ -2895,11 +3097,12 @@ function App() {
                   >
                     <NotchTour
                       step={tourStep}
+                      done={tourDone.has(TOUR_STEPS[tourStep]?.key ?? '')}
+                      dockEnabled={dockEnabled}
                       onStep={setTourStep}
                       onClose={closeTour}
                       onAction={(id) => {
-                        closeTour();
-                        if (id === 'control-center') setFernMode('command-center');
+                        if (id === "control-center") setFernMode("command-center");
                         else openSettingsWindow();
                       }}
                     />

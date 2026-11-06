@@ -23,6 +23,12 @@ Edit `settings.json` with any text editor while Fern is running. Changes are app
 |-----|------|---------|-------------|
 | `fern-dock-enabled` | `"true"` / `"false"` | `"true"` | Show or hide the Fern Dock (taskbar replacement). |
 | `fern-dock-mode` | `"fixed"` / `"smart"` / `"peek"` | `"smart"` | Dock visibility behavior. **fixed** = always visible as AppBar. **smart** = auto-hide when overlapped by another window or a fullscreen app. **peek** = hidden until cursor approaches bottom edge. Smart/peek still reveal on hover and are clickable even over a fullscreen app — only a thin pre-emptive strip right at the screen edge stays click-through, so other apps' own edge-hugging UI (e.g. a Snipping Tool selection) is never intercepted. |
+| `fern-sync-windows-accent` | `"true"` / `"false"` | `"false"` | Sync Windows accent color with Fern accent color, with automatic backup and restore. |
+| `fern-notch-hotkey` | string | `""` | Global shortcut to hide/show the notch (e.g. `Ctrl+Shift+Space`). |
+| `fern-mic-mute-hotkey` | string | `"Ctrl+F1"` | System-wide global shortcut to mute/unmute microphone input across all apps. |
+| `fern-privacy-aura-enabled` | `"true"` / `"false"` | `"true"` | Show privacy ambient glow aura and dots on the notch when camera or microphone is in use. |
+| `fern-dock-preview-delay` | number string (ms) | `"300"` | Hover dwell delay before showing dock window previews. |
+| `fern-net-widget-mode` | `"speed"` / `"status"` | `"speed"` | What the net widget shows: live speed or connection status icon. |
 | `fern-dock-preview-enabled` | `"true"` / `"false"` | `"true"` | Show window thumbnail previews when hovering dock icons. |
 | `fern-dock-search-enabled` | `"true"` / `"false"` | `"true"` | Show a search icon next to Start that opens Windows Search (Win+S). |
 | `fern-dock-calendar-enabled` | `"true"` / `"false"` | `"true"` | Show a calendar icon next to the search icon that opens the Calendar window. The Calendar window is also in the dock's Fern Options menu, the tray menu, and the notch calendar's open button. |

@@ -1141,6 +1141,8 @@ function OverlayApp() {
   );
 }
 
+initTheme();
+
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <OverlayApp />

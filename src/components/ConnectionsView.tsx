@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { ChevronLeft, Lock, X, Bluetooth, Check, Speaker } from "lucide-react";
+import { ChevronLeft, Lock, X, Bluetooth, Check, Speaker, Volume2, VolumeX } from "lucide-react";
 import { useT } from "../i18n";
 
 interface WifiNetwork {
@@ -27,6 +27,7 @@ interface Props {
   kind: "wifi" | "bluetooth" | "audio";
   onBack: () => void;
   onOpenWindowsSettings: () => void;
+  tip?: (text: string | undefined) => Record<string, unknown>;
 }
 
 const REFRESH_MS = 6000;
@@ -43,7 +44,129 @@ function SignalBars({ signal }: { signal: number }) {
   );
 }
 
-export function ConnectionsView({ kind, onBack, onOpenWindowsSettings }: Props) {
+
+interface AudioSession {
+  pid: number;
+  name: string;
+  volume: number;
+  is_muted: boolean;
+}
+
+function AppVolumes({ tip }: { tip?: (text: string | undefined) => Record<string, unknown> }) {
+  const t = useT();
+  const [sessions, setSessions] = useState<AudioSession[] | null>(null);
+  const dragging = useRef(false);
+  const lastNonZeroVolRef = useRef<Map<number, number>>(new Map());
+
+  useEffect(() => {
+    const load = () => {
+      if (dragging.current) return;
+      invoke<AudioSession[]>("get_audio_sessions").then((list) => {
+        setSessions(list);
+        list.forEach((s) => {
+          if (s.volume > 0) {
+            lastNonZeroVolRef.current.set(s.pid, s.volume);
+          }
+        });
+      }).catch(() => setSessions((prev) => prev ?? []));
+    };
+    load();
+    const timer = setInterval(load, 2000);
+    return () => clearInterval(timer);
+  }, []);
+
+  const setVolume = (pid: number, volume: number) => {
+    if (volume > 0) {
+      lastNonZeroVolRef.current.set(pid, volume);
+    }
+    setSessions((prev) => prev?.map((s) => (s.pid === pid ? { ...s, volume, is_muted: volume === 0 } : s)) ?? prev);
+    invoke("set_app_volume", { pid, volume }).catch(() => {});
+  };
+
+  const toggleMute = (pid: number, currentlyMuted: boolean, vol: number) => {
+    if (currentlyMuted) {
+      const prev = lastNonZeroVolRef.current.get(pid);
+      const nextVol = prev && prev > 0 ? prev : 1.0;
+      setVolume(pid, nextVol);
+    } else {
+      if (vol > 0) {
+        lastNonZeroVolRef.current.set(pid, vol);
+      }
+      setVolume(pid, 0);
+    }
+  };
+
+  const handleSliderWheel = (e: React.WheelEvent, pid: number, vol: number) => {
+    e.stopPropagation();
+    const delta = e.deltaY < 0 ? 0.05 : -0.05;
+    const next = Math.min(1, Math.max(0, Math.round((vol + delta) * 100) / 100));
+    setVolume(pid, next);
+  };
+
+  return (
+    <div className="cv-section-group">
+      <div className="cv-section">{t("connections.audio.apps")}</div>
+      {sessions?.length === 0 && <div className="cv-hint">{t("connections.audio.emptyApps")}</div>}
+      {sessions?.map((s) => {
+        const effectiveVol = s.is_muted ? 0 : s.volume;
+        const percent = Math.round(effectiveVol * 100);
+        return (
+          <div
+            key={s.pid}
+            className="cv-row cv-app-row"
+          >
+            <button
+              type="button"
+              className="cv-app-mute-btn"
+              onClick={(e) => {
+                e.stopPropagation();
+                toggleMute(s.pid, s.is_muted || s.volume === 0, s.volume);
+              }}
+              {...(tip ? tip(effectiveVol === 0 ? t("overlay.unmute") : t("overlay.mute")) : { title: effectiveVol === 0 ? t("overlay.unmute") : t("overlay.mute") })}
+              aria-label={effectiveVol === 0 ? t("overlay.unmute") : t("overlay.mute")}
+            >
+              {effectiveVol === 0 ? <VolumeX size={13} /> : <Volume2 size={13} />}
+            </button>
+            <span className="cv-name" title={s.name}>{s.name}</span>
+            <div className="cv-slider-track" onWheel={(e) => { e.stopPropagation(); handleSliderWheel(e, s.pid, effectiveVol); }}>
+              <input
+                type="range"
+                min="0"
+                max="1"
+                step="0.01"
+                value={effectiveVol}
+                className="cv-slider-input"
+                onChange={(e) => setVolume(s.pid, parseFloat(e.target.value))}
+                onPointerDown={(e) => { e.stopPropagation(); dragging.current = true; }}
+                onPointerUp={() => { dragging.current = false; }}
+                onPointerCancel={() => { dragging.current = false; }}
+                onClick={(e) => e.stopPropagation()}
+              />
+              <div
+                className={`cv-slider-fill${effectiveVol === 0 ? " muted" : ""}`}
+                style={{ width: `${effectiveVol * 100}%` }}
+              />
+            </div>
+            <span
+              className="cv-slider-percent"
+              style={{ cursor: "pointer" }}
+              onClick={(e) => {
+                e.stopPropagation();
+                toggleMute(s.pid, effectiveVol === 0, effectiveVol);
+              }}
+              aria-label={t("cc.volume")}
+            >
+              {percent}%
+            </span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+export function ConnectionsView({ kind, onBack, onOpenWindowsSettings, tip = () => ({}) }: Props) {
+  void tip;
   const [networks, setNetworks] = useState<WifiNetwork[] | null>(null);
   const [devices, setDevices] = useState<BluetoothDeviceInfo[] | null>(null);
   const [outputs, setOutputs] = useState<OutputDevice[] | null>(null);
@@ -122,7 +245,7 @@ export function ConnectionsView({ kind, onBack, onOpenWindowsSettings }: Props) 
   const emptyText = t(kind === "wifi" ? "connections.wifi.empty" : kind === "audio" ? "connections.audio.empty" : "connections.bluetooth.empty");
 
   return (
-    <div className="cv-root" onClick={(e) => e.stopPropagation()}>
+    <div className="cv-root" onClick={(e) => e.stopPropagation()} onWheel={(e) => e.stopPropagation()}>
       <div className="cv-header">
         <button className="cv-back" onClick={onBack} aria-label={t("common.back")}>
           <ChevronLeft size={16} />
@@ -131,21 +254,29 @@ export function ConnectionsView({ kind, onBack, onOpenWindowsSettings }: Props) 
         <button className="cv-link" onClick={onOpenWindowsSettings}>{t("connections.windowsSettings")}</button>
       </div>
 
-      <div className="cv-list">
+      <div className="cv-list" onWheel={(e) => e.stopPropagation()}>
         {loading && <div className="cv-hint">{kind === "wifi" ? t("connections.scanning") : t("connections.loading")}</div>}
         {!loading && empty && !error && <div className="cv-hint">{emptyText}</div>}
 
-        {kind === "audio" && outputs?.map((o) => (
-          <div
-            key={o.id}
-            className={`cv-row${o.is_default ? " connected" : ""}${busy === o.id ? " busy" : ""}`}
-            onClick={() => { if (!o.is_default) void run(o.id, () => invoke("set_default_audio_device", { id: o.id })); }}
-          >
-            <Speaker size={13} className="cv-bt-icon" />
-            <span className="cv-name">{o.name}</span>
-            {o.is_default ? <Check size={14} /> : <span className="cv-status">{busy === o.id ? t("connections.switching") : ""}</span>}
+        {kind === "audio" && <AppVolumes tip={tip} />}
+
+        {kind === "audio" && outputs && outputs.length > 0 && (
+          <div className="cv-section-group">
+            <div className="cv-divider" />
+            <div className="cv-section">{t("connections.audio.outputs")}</div>
+            {outputs.map((o) => (
+              <div
+                key={o.id}
+                className={`cv-row${o.is_default ? " connected" : ""}${busy === o.id ? " busy" : ""}`}
+                onClick={() => { if (!o.is_default) void run(o.id, () => invoke("set_default_audio_device", { id: o.id })); }}
+              >
+                <Speaker size={13} className="cv-bt-icon" />
+                <span className="cv-name">{o.name}</span>
+                {o.is_default ? <Check size={14} /> : <span className="cv-status">{busy === o.id ? t("connections.switching") : ""}</span>}
+              </div>
+            ))}
           </div>
-        ))}
+        )}
 
         {kind === "wifi" && networks?.map((n) => (
           <div key={n.ssid}>

@@ -7,6 +7,9 @@ mod capture;
 mod attention;
 mod agent_api;
 mod services;
+mod windows_accent;
+mod hotkeys;
+mod live_preview;
 mod commands;
 mod monitors;
 mod updater;
@@ -35,6 +38,7 @@ mod bluetooth;
 mod battery;
 mod dock_extras;
 mod launchers;
+mod privacy_hud;
 
 use tauri::Manager;
 use windows::Win32::System::Console::SetConsoleCtrlHandler;
@@ -69,6 +73,12 @@ fn main() {
 
     webview_args::apply();
     diagnostics::init();
+
+    // Temporarily boost CPU priority during startup initialization for fast time-to-visible
+    unsafe {
+        use windows::Win32::System::Threading::{GetCurrentProcess, SetPriorityClass, ABOVE_NORMAL_PRIORITY_CLASS};
+        let _ = SetPriorityClass(GetCurrentProcess(), ABOVE_NORMAL_PRIORITY_CLASS);
+    }
 
     unsafe {
         let _ = SetConsoleCtrlHandler(Some(ctrl_handler), true);
@@ -121,6 +131,15 @@ fn main() {
             shelf_text_file,
             pointer_over_notch,
             open_settings_window,
+            sync_windows_accent,
+            restore_windows_accent,
+            has_windows_accent_backup,
+            windows_accent_backup_exists,
+            reload_hotkeys,
+            set_live_thumbnails,
+            clear_live_thumbnails,
+            is_dwm_composition_enabled,
+            on_demand_windows::on_demand_window_ready,
             close_settings_window,
             take_settings_page,
             open_calendar_window,
@@ -186,6 +205,10 @@ fn main() {
             dock_extras::shelf_read_text_preview,
             launchers::get_search_launchers,
             launchers::trigger_search_launcher,
+            privacy_hud::get_microphone_mute,
+            privacy_hud::set_microphone_mute,
+            privacy_hud::toggle_microphone_mute,
+            privacy_hud::get_privacy_status,
             audio_devices::get_audio_devices,
             audio_devices::set_default_audio_device,
             attention::get_attention_windows,
@@ -287,6 +310,8 @@ fn main() {
 
             crate::utils::init_settings_cache(app.handle());
             agent_api::start(app.handle().clone());
+            crate::hotkeys::start(app.handle().clone());
+            privacy_hud::start(app.handle().clone());
 
             #[cfg(not(debug_assertions))]
             std::thread::spawn(crate::uninstall_registry::heal_uninstall_registration);
@@ -442,6 +467,16 @@ fn main() {
                     })
                     .build(app)?;
             }
+
+            // Drop CPU priority back to NORMAL after initial windows and services are spun up
+            tauri::async_runtime::spawn(async {
+                tokio::time::sleep(std::time::Duration::from_secs(4)).await;
+                unsafe {
+                    use windows::Win32::System::Threading::{GetCurrentProcess, SetPriorityClass, NORMAL_PRIORITY_CLASS};
+                    let _ = SetPriorityClass(GetCurrentProcess(), NORMAL_PRIORITY_CLASS);
+                }
+            });
+
             Ok(())
         })
         .build(tauri::generate_context!())

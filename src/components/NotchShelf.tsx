@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { emit, listen } from "@tauri-apps/api/event";
 import { startDrag } from "@crabnebula/tauri-plugin-drag";
 import { useT } from "../i18n";
 import { Eye } from "lucide-react";
@@ -96,6 +96,7 @@ export function useShelf(windowLabel: string, enabled: boolean, persist: boolean
       }),
       listen<{ label: string; paths?: string[]; text?: string }>("shelf-drag-drop", (e) => {
         add(e.payload.paths, e.payload.text);
+        emit("shelf-item-added").catch(() => {});
         if (e.payload.label === windowLabel) cbRef.current.onDrop();
       }),
     ];
@@ -232,9 +233,10 @@ export function NotchShelf({ items, onRemove, onClear, onDragOutEnd }: Props) {
                 onMouseUp={() => {
                   const p = press.current;
                   press.current = null;
-                  if (p && p.id === item.id && !p.dragging) activate(item);
+                  if (p && p.id === item.id && !p.dragging && item.kind === "text") activate(item);
                 }}
                 onMouseLeave={() => { if (press.current?.id === item.id) press.current = null; }}
+                onDoubleClick={() => { if (item.kind === "file") activate(item); }}
               >
                 <div className="shelf-thumb-wrap">
                   <div className="shelf-thumb">

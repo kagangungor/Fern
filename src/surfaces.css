@@ -227,3 +227,9 @@
 .light-mode .notch-ambient-glow::after {
     background: radial-gradient(ellipse at center, transparent 25%, rgba(255, 255, 255, 0.3) 55%, var(--notch-bg, var(--fern-bg)) 88%);
 }
+
+:root:is(.style-frosted, .style-liquid) .dock:not(.dock-icon-only) .dock-icon {
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    background: rgba(255, 255, 255, 0.1);
+}

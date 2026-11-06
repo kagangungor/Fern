@@ -938,11 +938,19 @@ export function useSettings() {
   const setDockModeValue = (newMode: string) => {
     setDockMode(newMode);
     saveSetting("fern-dock-mode", newMode);
+    if (dockMonitorMode !== "all" || monitors.length <= 1) {
+      setDockModeByMonitor({});
+      saveSetting("fern-dock-mode-by-monitor", "{}");
+    }
   };
 
   const setNotchModeValue = (newMode: string) => {
     setNotchMode(newMode);
     saveSetting("fern-notch-mode", newMode);
+    if (notchMonitorMode !== "all" || monitors.length <= 1) {
+      setNotchModeByMonitor({});
+      saveSetting("fern-notch-mode-by-monitor", "{}");
+    }
   };
 
   const setDockMonitorModeValue = (mode: MonitorMode) => {

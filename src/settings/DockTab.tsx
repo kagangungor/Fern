@@ -1,6 +1,8 @@
+import { PreviewDelay } from "./PreviewDelay";
 import { useEffect, useState } from "react";
 import type { ChangeEvent, CSSProperties } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { emit } from "@tauri-apps/api/event";
 import { Monitor, Eye, EyeOff, Circle, Search, Shuffle, MonitorCheck, CalendarDays, Maximize2, Keyboard, Sparkles, RotateCcw, LayoutGrid, Trash2, HardDrive, ChevronUp, Clock, BellRing } from "lucide-react";
 import { SettingRow } from "./SettingRow";
 import { SettingSection } from "./SettingSection";
@@ -149,6 +151,23 @@ export function DockTab({
     e.target.value = "";
   };
 
+  const [hiddenApps, setHiddenApps] = useState<string[]>(() => {
+    try {
+      const raw = localStorage.getItem("fern-dock-hidden-apps");
+      return raw ? JSON.parse(raw) : [];
+    } catch {
+      return [];
+    }
+  });
+
+  const handleUnhideApp = (id: string) => {
+    const updated = hiddenApps.filter((h) => h !== id);
+    setHiddenApps(updated);
+    localStorage.setItem("fern-dock-hidden-apps", JSON.stringify(updated));
+    invoke("save_setting", { key: "fern-dock-hidden-apps", value: JSON.stringify(updated) }).catch(() => {});
+    emit("refresh-hidden-apps").catch(() => {});
+  };
+
   return (
     <>
       <SettingSection id="dock-main" title={t("dock.group")} defaultOpen>
@@ -264,6 +283,8 @@ export function DockTab({
                 <span className="slider"></span>
               </label>
             </SettingRow>
+
+            {dockPreviewEnabled && <PreviewDelay />}
 
             <SettingRow icon={Search} label={t("dock.search")} desc={t("dock.search.desc")}>
               <label className="toggle-switch">
@@ -425,6 +446,59 @@ export function DockTab({
                 style={{ display: "none" }}
                 onChange={handleStartIconUpload}
               />
+            </div>
+          </SettingSection>
+
+          <SettingSection id="dock-hidden-apps" title={t("dock.hiddenApps")}>
+            <div className="setting-item" style={{ flexDirection: "column", alignItems: "flex-start", gap: "12px", width: "100%" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "10px", width: "100%" }}>
+                <div className="setting-icon-bg">
+                  <EyeOff size={14} strokeWidth={1.5} />
+                </div>
+                <div className="setting-info">
+                  <span className="setting-label">{t("dock.hiddenApps")}</span>
+                  <span className="setting-desc">{t("dock.hiddenApps.desc")}</span>
+                </div>
+              </div>
+              {hiddenApps.length === 0 ? (
+                <div style={{ paddingLeft: "34px", color: "var(--fern-text-muted, rgba(255,255,255,0.4))", fontSize: "13px" }}>
+                  {t("dock.hiddenApps.none")}
+                </div>
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column", gap: "8px", width: "100%", paddingLeft: "34px" }}>
+                  {hiddenApps.map((appId) => (
+                    <div
+                      key={appId}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "space-between",
+                        background: "rgba(255,255,255,0.05)",
+                        padding: "8px 12px",
+                        borderRadius: "8px",
+                      }}
+                    >
+                      <span style={{ fontSize: "13px", color: "var(--fern-text, #fff)" }}>
+                        {appId.split(/[\/\\]/).pop()}
+                      </span>
+                      <button
+                        onClick={() => handleUnhideApp(appId)}
+                        style={{
+                          background: "rgba(255,255,255,0.12)",
+                          border: "none",
+                          borderRadius: "6px",
+                          color: "var(--fern-text, #fff)",
+                          padding: "4px 10px",
+                          fontSize: "12px",
+                          cursor: "pointer",
+                        }}
+                      >
+                        {t("dock.hiddenApps.unhide")}
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           </SettingSection>
         </>
