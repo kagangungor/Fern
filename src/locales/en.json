@@ -83,6 +83,8 @@
   "dock.monitor.desc": "Which display shows the dock",
   "dock.previews": "Show App Previews",
   "dock.previews.desc": "Show window thumbnails on hover",
+  "dock.consoleWindows": "Console windows",
+  "dock.consoleWindows.desc": "Show Command Prompt, PowerShell and batch script windows in the dock",
   "dock.search": "Search Icon",
   "dock.search.desc": "Show a Windows Search shortcut next to Start",
   "dock.calendar": "Calendar Icon",
@@ -616,5 +618,12 @@
   "meeting.micHotkey": "Universal mic mute shortcut",
   "meeting.micHotkey.desc": "Mute or unmute your system microphone instantly across Zoom, Teams, Meet, Discord and all apps.",
   "meeting.privacyAura": "Privacy aura & indicators",
-  "meeting.privacyAura.desc": "Show ambient glow and privacy dots on the notch when camera or microphone is in use."
+  "meeting.privacyAura.desc": "Show ambient glow and privacy dots on the notch when camera or microphone is in use.",
+  "general.weekStart": "First day of the week",
+  "general.weekStart.desc": "Where the calendar weeks start",
+  "general.weekStart.auto": "Automatic",
+  "general.weekStart.sunday": "Sunday",
+  "general.weekStart.monday": "Monday",
+  "dock.appVolumeScroll": "Per-app volume scroll",
+  "dock.appVolumeScroll.desc": "Scroll mouse wheel over running dock apps to fluidly adjust their individual volume"
 }

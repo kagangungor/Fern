@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod startup;
 mod types;
 mod state;
 mod utils;
@@ -39,6 +40,7 @@ mod battery;
 mod dock_extras;
 mod launchers;
 mod privacy_hud;
+mod app_audio;
 
 use tauri::Manager;
 use windows::Win32::System::Console::SetConsoleCtrlHandler;
@@ -74,11 +76,7 @@ fn main() {
     webview_args::apply();
     diagnostics::init();
 
-    // Temporarily boost CPU priority during startup initialization for fast time-to-visible
-    unsafe {
-        use windows::Win32::System::Threading::{GetCurrentProcess, SetPriorityClass, ABOVE_NORMAL_PRIORITY_CLASS};
-        let _ = SetPriorityClass(GetCurrentProcess(), ABOVE_NORMAL_PRIORITY_CLASS);
-    }
+    startup::begin();
 
     unsafe {
         let _ = SetConsoleCtrlHandler(Some(ctrl_handler), true);
@@ -122,6 +120,8 @@ fn main() {
             Some(vec![]),
         ))
         .invoke_handler(tauri::generate_handler![
+            startup::get_autostart,
+            startup::set_autostart,
             hide_native_osd,
             setup_shelf_drop,
             shelf_thumbnail,
@@ -138,6 +138,10 @@ fn main() {
             reload_hotkeys,
             set_live_thumbnails,
             clear_live_thumbnails,
+            get_target_app_volume,
+            set_target_app_volume,
+            adjust_target_app_volume,
+            toggle_target_app_mute,
             is_dwm_composition_enabled,
             on_demand_windows::on_demand_window_ready,
             close_settings_window,
@@ -309,6 +313,7 @@ fn main() {
             }
 
             crate::utils::init_settings_cache(app.handle());
+            startup::migrate(app.handle());
             agent_api::start(app.handle().clone());
             crate::hotkeys::start(app.handle().clone());
             privacy_hud::start(app.handle().clone());
@@ -467,15 +472,6 @@ fn main() {
                     })
                     .build(app)?;
             }
-
-            // Drop CPU priority back to NORMAL after initial windows and services are spun up
-            tauri::async_runtime::spawn(async {
-                tokio::time::sleep(std::time::Duration::from_secs(4)).await;
-                unsafe {
-                    use windows::Win32::System::Threading::{GetCurrentProcess, SetPriorityClass, NORMAL_PRIORITY_CLASS};
-                    let _ = SetPriorityClass(GetCurrentProcess(), NORMAL_PRIORITY_CLASS);
-                }
-            });
 
             Ok(())
         })

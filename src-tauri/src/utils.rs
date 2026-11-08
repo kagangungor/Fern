@@ -508,6 +508,17 @@ pub fn get_setting_str(_app: &tauri::AppHandle, key: &str) -> Option<String> {
     guard.get(key)?.as_str().map(|s| s.to_string())
 }
 
+/// Read a boolean setting directly from cache without an AppHandle.
+pub fn setting_flag(key: &str) -> bool {
+    let Some(cache) = crate::state::SETTINGS_CACHE.get() else { return false };
+    let Ok(guard) = cache.lock() else { return false };
+    match guard.get(key) {
+        Some(serde_json::Value::Bool(b)) => *b,
+        Some(serde_json::Value::String(s)) => s == "true",
+        _ => false,
+    }
+}
+
 /// Makes a window click-through or not by its WS_EX_TRANSPARENT bit alone, keeping WS_EX_LAYERED set
 /// in both states.
 ///

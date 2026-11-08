@@ -71,17 +71,15 @@ export function firstDayOfWeek(): number {
 }
 
 /** Returns the start of the week for a given date according to the active locale. */
-export function startOfWeek(d: Date): Date {
-  const startDay = firstDayOfWeek();
+export function startOfWeek(d: Date, startDay: number = firstDayOfWeek()): Date {
   const offset = (d.getDay() - startDay + 7) % 7;
   const res = new Date(d);
   res.setDate(res.getDate() - offset);
   return res;
 }
 
-/** Weekday names starting on the locale's first day of week. */
-export function weekdayNames(width: "short" | "narrow"): string[] {
-  const startDay = firstDayOfWeek();
+/** Weekday names starting on the locale's first day of week or provided start day (0 = Sunday). */
+export function weekdayNames(width: "short" | "narrow", startDay: number = firstDayOfWeek()): string[] {
   return Array.from({ length: 7 }, (_, i) =>
     new Date(2023, 0, 1 + startDay + i).toLocaleDateString(dateLocale(), { weekday: width })
   );

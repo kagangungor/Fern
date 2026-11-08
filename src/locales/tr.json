@@ -83,6 +83,8 @@
   "dock.monitor.desc": "Dock'u gösteren ekran",
   "dock.previews": "Uygulama Önizlemeleri",
   "dock.previews.desc": "Üzerine gelindiğinde pencere küçük resimlerini göster",
+  "dock.consoleWindows": "Konsol pencereleri",
+  "dock.consoleWindows.desc": "Komut İstemi, PowerShell ve toplu iş dosyası pencerelerini dock'ta göster",
   "dock.search": "Arama Simgesi",
   "dock.search.desc": "Başlat'ın yanında Windows Arama kısayolu göster",
   "dock.calendar": "Takvim Simgesi",
@@ -616,5 +618,12 @@
   "meeting.micHotkey": "Evrensel mikrofon susturma kısayolu",
   "meeting.micHotkey.desc": "Zoom, Teams, Meet, Discord ve tüm uygulamalarda sistem mikrofonunu anında susturun veya açın.",
   "meeting.privacyAura": "Gizlilik aurası ve göstergeleri",
-  "meeting.privacyAura.desc": "Kamera veya mikrofon kullanımdayken çentik üzerinde ortam ışıması ve gizlilik noktacıkları göster."
+  "meeting.privacyAura.desc": "Kamera veya mikrofon kullanımdayken çentik üzerinde ortam ışıması ve gizlilik noktacıkları göster.",
+  "general.weekStart": "Haftanın ilk günü",
+  "general.weekStart.desc": "Takvim haftalarının başladığı gün",
+  "general.weekStart.auto": "Otomatik",
+  "general.weekStart.sunday": "Pazar",
+  "general.weekStart.monday": "Pazartesi",
+  "dock.appVolumeScroll": "Uygulama başına ses mikseri",
+  "dock.appVolumeScroll.desc": "Dock simgeleri üzerinde fare tekerleğini kaydırarak uygulamanın sesini akıcı şekilde ayarlayın"
 }

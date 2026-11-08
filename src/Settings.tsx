@@ -103,6 +103,8 @@ function SettingsApp() {
           {activeTab === "general" && (
             <GeneralTab
               autostart={settings.autostart}
+              weekStart={settings.weekStart}
+              changeWeekStart={settings.changeWeekStart}
               toggleAutostart={settings.toggleAutostart}
               timeFormat24h={settings.timeFormat24h}
               toggleTimeFormat24h={settings.toggleTimeFormat24h}
@@ -229,6 +231,10 @@ function SettingsApp() {
               setDockModeValue={settings.setDockModeValue}
               dockPreviewEnabled={settings.dockPreviewEnabled}
               toggleDockPreview={settings.toggleDockPreview}
+              dockConsoleWindows={settings.dockConsoleWindows}
+              toggleDockConsoleWindows={settings.toggleDockConsoleWindows}
+              dockAppVolumeScroll={settings.dockAppVolumeScroll}
+              toggleDockAppVolumeScroll={settings.toggleDockAppVolumeScroll}
               dockSearchEnabled={settings.dockSearchEnabled}
               toggleDockSearch={settings.toggleDockSearch}
               dockSearchLauncher={settings.dockSearchLauncher}

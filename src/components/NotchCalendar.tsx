@@ -1,7 +1,8 @@
 import { useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { CaldavState, CalEvent } from "../hooks/useCaldav";
-import { dateLocale, firstDayOfWeek, startOfWeek, useT, weekdayNames } from "../i18n";
+import { dateLocale, startOfWeek, useT, weekdayNames } from "../i18n";
+import { daysSinceWeekStart, useWeekStart } from "../weekStart";
 
 type View = "day" | "week" | "month" | "agenda";
 
@@ -57,6 +58,7 @@ interface Props {
 
 export function NotchCalendar({ caldav, hour12 }: Props) {
   const t = useT();
+  const weekStart = useWeekStart();
   const connected = caldav.connected;
   const today = startOfDay(new Date());
   const [view, setViewState] = useState<View>(readView);
@@ -91,7 +93,7 @@ export function NotchCalendar({ caldav, hour12 }: Props) {
 
   let title: string;
   if (activeView === "week") {
-    const first = startOfWeek(anchor);
+    const first = startOfWeek(anchor, weekStart);
     const last = addDays(first, 6);
     const fmt = (d: Date) => d.toLocaleDateString(dateLocale(), { month: "short", day: "numeric" });
     title = `${fmt(first)} – ${first.getMonth() === last.getMonth() ? last.getDate() : fmt(last)}`;
@@ -155,14 +157,14 @@ export function NotchCalendar({ caldav, hour12 }: Props) {
 
       {activeView === "month" && (
         <>
-          <MonthGrid anchor={anchor} today={today} events={caldav.events} connected={connected} onPick={setAnchor} />
+          <MonthGrid anchor={anchor} today={today} events={caldav.events} connected={connected} onPick={setAnchor} weekStart={weekStart} />
           {connected && (
             <SelectedDay day={anchor} events={caldav.events} time={time} onOpen={() => openDay(anchor)} />
           )}
         </>
       )}
       {connected && activeView === "week" && (
-        <WeekList anchor={anchor} today={today} events={caldav.events} time={time} onOpen={openDay} />
+        <WeekList anchor={anchor} today={today} events={caldav.events} time={time} onOpen={openDay} weekStart={weekStart} />
       )}
       {connected && activeView === "day" && <DayList day={anchor} events={caldav.events} time={time} />}
       {connected && activeView === "agenda" && (
@@ -178,14 +180,15 @@ interface MonthProps {
   events: CalEvent[];
   connected: boolean;
   onPick: (day: Date) => void;
+  weekStart: number;
 }
 
-function MonthGrid({ anchor, today, events, connected, onPick }: MonthProps) {
+function MonthGrid({ anchor, today, events, connected, onPick, weekStart }: MonthProps) {
   const year = anchor.getFullYear();
   const month = anchor.getMonth();
   const totalDays = new Date(year, month + 1, 0).getDate();
   const firstOfMonth = new Date(year, month, 1);
-  const startDay = (firstOfMonth.getDay() - firstDayOfWeek() + 7) % 7;
+  const startDay = daysSinceWeekStart(firstOfMonth, weekStart);
 
   const byDay = useMemo(() => {
     if (!connected) return [];
@@ -220,7 +223,7 @@ function MonthGrid({ anchor, today, events, connected, onPick }: MonthProps) {
 
   return (
     <div className="calendar-grid">
-      {weekdayNames("narrow").map((d, i) => (
+      {weekdayNames("narrow", weekStart).map((d, i) => (
         <div key={`${d}-${i}`} className="day-name">
           {d}
         </div>
@@ -270,9 +273,9 @@ function Chip({ event, time }: TimeProps & { event: CalEvent }) {
   );
 }
 
-function WeekList({ anchor, today, events, time, onOpen }: TimeProps & { anchor: Date; today: Date; events: CalEvent[]; onOpen: (d: Date) => void }) {
+function WeekList({ anchor, today, events, time, onOpen, weekStart }: TimeProps & { anchor: Date; today: Date; events: CalEvent[]; onOpen: (d: Date) => void; weekStart: number }) {
   const t = useT();
-  const first = startOfWeek(anchor);
+  const first = startOfWeek(anchor, weekStart);
   return (
     <div className="cal-scroll">
       {Array.from({ length: 7 }, (_, i) => {

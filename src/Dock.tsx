@@ -1,3 +1,4 @@
+import { Volume2, Volume1, VolumeX } from 'lucide-react';
 import { useState, useEffect, useLayoutEffect, useMemo, useRef, memo, useCallback } from 'react';
 import { motion, AnimatePresence, Reorder } from 'framer-motion';
 import { invoke } from '@tauri-apps/api/core';
@@ -371,6 +372,22 @@ function DockPreviewTooltip({
                 invoke('bring_hwnd_to_front', { hwnd: prev.hwnd }).catch(() => {});
               }}
             >
+              <div className="preview-header">
+                <div className="preview-label">{prev.title || app.name}</div>
+                <button
+                  className="preview-close-btn"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onClosePreview(e, prev.hwnd);
+                  }}
+                  data-tooltip={t("dockmenu.closeWindow")}
+                >
+                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round">
+                    <line x1="18" y1="6" x2="6" y2="18"></line>
+                    <line x1="6" y1="6" x2="18" y2="18"></line>
+                  </svg>
+                </button>
+              </div>
               <div
                 className={`preview-surface${isLive ? ' has-live' : ''}`}
                 ref={(el) => {
@@ -389,17 +406,6 @@ function DockPreviewTooltip({
                   <div className="preview-item-icon-fallback">{renderMedia(app)}</div>
                 )}
               </div>
-              <div className="preview-label">{prev.title || app.name}</div>
-              <button
-                className="preview-close-btn"
-                onClick={(e) => onClosePreview(e, prev.hwnd)}
-                data-tooltip={t("dockmenu.closeWindow")}
-              >
-                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round">
-                  <line x1="18" y1="6" x2="6" y2="18"></line>
-                  <line x1="6" y1="6" x2="18" y2="18"></line>
-                </svg>
-              </button>
             </div>
           );
         })}
@@ -471,6 +477,132 @@ const Dock = memo(function Dock() {
     invoke("save_setting", { key: "fern-dock-hidden-apps", value: JSON.stringify(updated) }).catch(() => {});
     emit("refresh-hidden-apps").catch(() => {});
   };
+    const [dockAppVolumeScroll, setDockAppVolumeScroll] = useState(() => localStorage.getItem("fern-dock-app-volume-scroll") !== "false");
+  const [volumeHuds, setVolumeHuds] = useState<{ [appKey: string]: { currentVol: number; targetVol: number; muted: boolean; visible: boolean } }>({});
+  const [activeVolumeKey, setActiveVolumeKey] = useState<string | null>(null);
+  const volumeAnimRefs = useRef<Map<string, {
+    rafId: number;
+    currentVol: number;
+    targetVol: number;
+    muted: boolean;
+    lastNativeSend: number;
+    hideTimer: any;
+  }>>(new Map());
+
+  const handleAppWheel = useCallback((e: React.WheelEvent, app: AppInfo) => {
+    if (!dockAppVolumeScroll || !app.is_running || app.path === 'start') return;
+
+    e.preventDefault();
+    e.stopPropagation();
+
+    const key = itemKey(app);
+    const targetExe = app.executable || app.path || app.name;
+
+    // Immediately dismiss any open preview and live thumbnails
+    if (previewTimerRef.current) clearTimeout(previewTimerRef.current);
+    isPreviewHoveredRef.current = false;
+    setPreviewData(null);
+    invoke('clear_live_thumbnails').catch(() => {});
+    setActiveVolumeKey(key);
+
+    // Immediately close all other apps' volume HUDs and cancel their anim loops
+    for (const [otherKey, otherAnim] of volumeAnimRefs.current.entries()) {
+      if (otherKey !== key) {
+        if (otherAnim.rafId) {
+          cancelAnimationFrame(otherAnim.rafId);
+          otherAnim.rafId = 0;
+        }
+        if (otherAnim.hideTimer) {
+          clearTimeout(otherAnim.hideTimer);
+          otherAnim.hideTimer = null;
+        }
+      }
+    }
+
+    const delta = -Math.sign(e.deltaY) * Math.min(Math.max(Math.abs(e.deltaY) * 0.0004, 0.015), 0.08);
+
+    let anim = volumeAnimRefs.current.get(key);
+    if (!anim) {
+      const initialVol = volumeHuds[key]?.currentVol ?? 1.0;
+      anim = {
+        rafId: 0,
+        currentVol: initialVol,
+        targetVol: initialVol,
+        muted: false,
+        lastNativeSend: 0,
+        hideTimer: null,
+      };
+      volumeAnimRefs.current.set(key, anim);
+
+      invoke<{ volume: number; muted: boolean } | null>('get_target_app_volume', { target: targetExe })
+        .then((res) => {
+          if (res && anim) {
+            anim.currentVol = res.volume;
+            anim.targetVol = res.volume;
+            anim.muted = res.muted;
+          }
+        })
+        .catch(() => {});
+    }
+
+    anim.targetVol = Math.max(0, Math.min(1, anim.targetVol + delta));
+    if (anim.targetVol > 0) anim.muted = false;
+    else if (anim.targetVol === 0) anim.muted = true;
+
+    if (anim.hideTimer) clearTimeout(anim.hideTimer);
+
+    if (!anim.rafId) {
+      const loop = () => {
+        const a = volumeAnimRefs.current.get(key);
+        if (!a) return;
+
+        const diff = a.targetVol - a.currentVol;
+        if (Math.abs(diff) > 0.001) {
+          a.currentVol += diff * 0.22;
+          const now = performance.now();
+          if (now - a.lastNativeSend >= 20) {
+            a.lastNativeSend = now;
+            invoke('set_target_app_volume', { target: targetExe, volume: a.currentVol }).catch(() => {});
+          }
+          setVolumeHuds((prev) => {
+            const next: typeof prev = {};
+            next[key] = { currentVol: a.currentVol, targetVol: a.targetVol, muted: a.muted, visible: true };
+            for (const k of Object.keys(prev)) {
+              if (k !== key && prev[k]?.visible) {
+                next[k] = { ...prev[k], visible: false };
+              }
+            }
+            return next;
+          });
+          a.rafId = requestAnimationFrame(loop);
+        } else {
+          a.currentVol = a.targetVol;
+          a.rafId = 0;
+          invoke('set_target_app_volume', { target: targetExe, volume: a.currentVol }).catch(() => {});
+          setVolumeHuds((prev) => {
+            const next: typeof prev = {};
+            next[key] = { currentVol: a.currentVol, targetVol: a.targetVol, muted: a.muted, visible: true };
+            for (const k of Object.keys(prev)) {
+              if (k !== key && prev[k]?.visible) {
+                next[k] = { ...prev[k], visible: false };
+              }
+            }
+            return next;
+          });
+        }
+      };
+      anim.rafId = requestAnimationFrame(loop);
+    }
+
+    anim.hideTimer = setTimeout(() => {
+      setActiveVolumeKey((current) => (current === key ? null : current));
+      setVolumeHuds((prev) => {
+        if (!prev[key]) return prev;
+        return { ...prev, [key]: { ...prev[key], visible: false } };
+      });
+    }, 1200);
+  }, [dockAppVolumeScroll, volumeHuds]);
+
   const [dockAdaptive, setDockAdaptive] = useState(() => localStorage.getItem("fern-dock-adaptive") === "true");
   const [dockAttentionEnabled, setDockAttentionEnabled] = useState(() => localStorage.getItem("fern-dock-attention-enabled") !== "false");
   const [dockHideDelay, setDockHideDelay] = useState(() => parseInt(localStorage.getItem("fern-dock-hide-delay") || "800", 10));
@@ -802,6 +934,7 @@ const Dock = memo(function Dock() {
       "fern-dock-monitor-mode": refreshDockMode,
       "fern-dock-monitor-id": refreshDockMode,
       "fern-dock-preview-enabled": setDockPreviewEnabled,
+      "fern-dock-app-volume-scroll": (v) => setDockAppVolumeScroll(v !== false && v !== "false"),
       "fern-dock-preview-delay": (v) => setPreviewDelay(Number(v) || 0),
       "fern-dock-search-enabled": setDockSearchEnabled,
       "fern-dock-calendar-enabled": setDockCalendarEnabled,
@@ -1375,6 +1508,10 @@ const Dock = memo(function Dock() {
     }
 
     if (hoveredApp && !isDragging) {
+      if (activeVolumeKey) {
+        setPreviewData(null);
+        return;
+      }
       const app = dockItems.find(a => itemKey(a) === hoveredApp);
       if (app && app.is_running) {
         const hwndsToCapture = app.all_hwnds || (app.hwnd ? [[app.hwnd, app.name]] : []);
@@ -1830,6 +1967,7 @@ const Dock = memo(function Dock() {
                     onContextMenu={(e) => handleContextMenu(e, app)}
                     onMouseDown={(e) => { if (e.button === 1) e.preventDefault(); }}
                     onAuxClick={(e) => handleMiddleClick(e, app)}
+                    onWheel={(e) => handleAppWheel(e, app)}
                     onClick={(e) => {
                       e.stopPropagation();
                       if (!isDragging) handleAppClick(app);
@@ -1844,8 +1982,40 @@ const Dock = memo(function Dock() {
                       onMouseEnter={() => { if (!contextMenu) setHoveredApp(itemKey(app)); }}
                       onMouseLeave={() => { if (!isPreviewHoveredRef.current) { setHoveredApp(null); setPressedApp(null); } }}
                     >
+                
                 <AnimatePresence>
-                  {dockPreviewEnabled && !contextMenu && previewData && previewData.id === itemKey(app) && hoveredApp === itemKey(app) && (
+                  {volumeHuds[itemKey(app)]?.visible && (
+                    <motion.div
+                      className="dock-app-volume-hud"
+                      initial={{ opacity: 0, y: 6, scale: 0.92 }}
+                      animate={{ opacity: 1, y: 0, scale: 1 }}
+                      exit={{ opacity: 0, y: 3, scale: 0.95, transition: { duration: 0.1 } }}
+                      transition={{ duration: 0.15, ease: [0.16, 1, 0.3, 1] }}
+                    >
+                      <div className="dock-app-volume-hud-header">
+                        {volumeHuds[itemKey(app)].muted || volumeHuds[itemKey(app)].currentVol === 0 ? (
+                          <VolumeX size={12} className="dock-app-volume-hud-icon muted" />
+                        ) : volumeHuds[itemKey(app)].currentVol < 0.5 ? (
+                          <Volume1 size={12} className="dock-app-volume-hud-icon" />
+                        ) : (
+                          <Volume2 size={12} className="dock-app-volume-hud-icon" />
+                        )}
+                        <span className="dock-app-volume-hud-pct">
+                          {Math.round(volumeHuds[itemKey(app)].currentVol * 100)}%
+                        </span>
+                      </div>
+                      <div className="dock-app-volume-hud-track">
+                        <div
+                          className={`dock-app-volume-hud-fill ${volumeHuds[itemKey(app)].muted ? 'muted' : ''}`}
+                          style={{ width: `${Math.round(volumeHuds[itemKey(app)].currentVol * 100)}%` }}
+                        />
+                      </div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+
+                <AnimatePresence>
+                  {!activeVolumeKey && dockPreviewEnabled && !contextMenu && previewData && previewData.id === itemKey(app) && hoveredApp === itemKey(app) && (
                     <DockPreviewTooltip
                       app={app}
                       previews={previewData.previews}
@@ -1859,7 +2029,7 @@ const Dock = memo(function Dock() {
                 </AnimatePresence>
                 
                 {/* Fallback to text tooltip if previews are disabled, app isn't running, or preview failed to load */}
-                {!contextMenu && (!dockPreviewEnabled || (dockPreviewEnabled && hoveredApp === itemKey(app) && !previewData)) && (
+                {!contextMenu && (!dockPreviewEnabled || (dockPreviewEnabled && hoveredApp === itemKey(app) && !previewData)) && !volumeHuds[itemKey(app)]?.visible && (
                   <div className="tooltip">{app.name}</div>
                 )}
                 <motion.div 
@@ -1910,6 +2080,7 @@ const Dock = memo(function Dock() {
                     onContextMenu={(e) => handleContextMenu(e, app)}
                     onMouseDown={(e) => { if (e.button === 1) e.preventDefault(); }}
                     onAuxClick={(e) => handleMiddleClick(e, app)}
+                    onWheel={(e) => handleAppWheel(e, app)}
                     onClick={(e) => {
                       e.stopPropagation();
                       if (!isDragging) handleAppClick(app);
@@ -1924,8 +2095,40 @@ const Dock = memo(function Dock() {
                       onMouseEnter={() => { if (!contextMenu) setHoveredApp(itemKey(app)); }}
                       onMouseLeave={() => { if (!isPreviewHoveredRef.current) { setHoveredApp(null); setPressedApp(null); } }}
                     >
-                      <AnimatePresence>
-                        {dockPreviewEnabled && !contextMenu && previewData && previewData.id === itemKey(app) && hoveredApp === itemKey(app) && (
+                      
+                <AnimatePresence>
+                  {volumeHuds[itemKey(app)]?.visible && (
+                    <motion.div
+                      className="dock-app-volume-hud"
+                      initial={{ opacity: 0, y: 6, scale: 0.92 }}
+                      animate={{ opacity: 1, y: 0, scale: 1 }}
+                      exit={{ opacity: 0, y: 3, scale: 0.95, transition: { duration: 0.1 } }}
+                      transition={{ duration: 0.15, ease: [0.16, 1, 0.3, 1] }}
+                    >
+                      <div className="dock-app-volume-hud-header">
+                        {volumeHuds[itemKey(app)].muted || volumeHuds[itemKey(app)].currentVol === 0 ? (
+                          <VolumeX size={12} className="dock-app-volume-hud-icon muted" />
+                        ) : volumeHuds[itemKey(app)].currentVol < 0.5 ? (
+                          <Volume1 size={12} className="dock-app-volume-hud-icon" />
+                        ) : (
+                          <Volume2 size={12} className="dock-app-volume-hud-icon" />
+                        )}
+                        <span className="dock-app-volume-hud-pct">
+                          {Math.round(volumeHuds[itemKey(app)].currentVol * 100)}%
+                        </span>
+                      </div>
+                      <div className="dock-app-volume-hud-track">
+                        <div
+                          className={`dock-app-volume-hud-fill ${volumeHuds[itemKey(app)].muted ? 'muted' : ''}`}
+                          style={{ width: `${Math.round(volumeHuds[itemKey(app)].currentVol * 100)}%` }}
+                        />
+                      </div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+
+                <AnimatePresence>
+                  {!activeVolumeKey && dockPreviewEnabled && !contextMenu && previewData && previewData.id === itemKey(app) && hoveredApp === itemKey(app) && (
                           <DockPreviewTooltip
                       app={app}
                       previews={previewData.previews}
@@ -1937,7 +2140,7 @@ const Dock = memo(function Dock() {
                     />
                         )}
                       </AnimatePresence>
-                      {!contextMenu && (!dockPreviewEnabled || (dockPreviewEnabled && hoveredApp === itemKey(app) && !previewData)) && (
+                      {!contextMenu && (!dockPreviewEnabled || (dockPreviewEnabled && hoveredApp === itemKey(app) && !previewData)) && !volumeHuds[itemKey(app)]?.visible && (
                         <div className="tooltip">{app.name}</div>
                       )}
                       <motion.div
@@ -1985,6 +2188,7 @@ const Dock = memo(function Dock() {
                     onContextMenu={(e) => handleContextMenu(e, app)}
                     onMouseDown={(e) => { if (e.button === 1) e.preventDefault(); }}
                     onAuxClick={(e) => handleMiddleClick(e, app)}
+                    onWheel={(e) => handleAppWheel(e, app)}
                     onClick={(e) => {
                       e.stopPropagation();
                       if (!isDragging) handleAppClick(app);
@@ -1999,8 +2203,40 @@ const Dock = memo(function Dock() {
                       onMouseEnter={() => { if (!contextMenu) setHoveredApp(itemKey(app)); }}
                       onMouseLeave={() => { if (!isPreviewHoveredRef.current) { setHoveredApp(null); setPressedApp(null); } }}
                     >
-                      <AnimatePresence>
-                        {dockPreviewEnabled && !contextMenu && previewData && previewData.id === itemKey(app) && hoveredApp === itemKey(app) && (
+                      
+                <AnimatePresence>
+                  {volumeHuds[itemKey(app)]?.visible && (
+                    <motion.div
+                      className="dock-app-volume-hud"
+                      initial={{ opacity: 0, y: 6, scale: 0.92 }}
+                      animate={{ opacity: 1, y: 0, scale: 1 }}
+                      exit={{ opacity: 0, y: 3, scale: 0.95, transition: { duration: 0.1 } }}
+                      transition={{ duration: 0.15, ease: [0.16, 1, 0.3, 1] }}
+                    >
+                      <div className="dock-app-volume-hud-header">
+                        {volumeHuds[itemKey(app)].muted || volumeHuds[itemKey(app)].currentVol === 0 ? (
+                          <VolumeX size={12} className="dock-app-volume-hud-icon muted" />
+                        ) : volumeHuds[itemKey(app)].currentVol < 0.5 ? (
+                          <Volume1 size={12} className="dock-app-volume-hud-icon" />
+                        ) : (
+                          <Volume2 size={12} className="dock-app-volume-hud-icon" />
+                        )}
+                        <span className="dock-app-volume-hud-pct">
+                          {Math.round(volumeHuds[itemKey(app)].currentVol * 100)}%
+                        </span>
+                      </div>
+                      <div className="dock-app-volume-hud-track">
+                        <div
+                          className={`dock-app-volume-hud-fill ${volumeHuds[itemKey(app)].muted ? 'muted' : ''}`}
+                          style={{ width: `${Math.round(volumeHuds[itemKey(app)].currentVol * 100)}%` }}
+                        />
+                      </div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+
+                <AnimatePresence>
+                  {!activeVolumeKey && dockPreviewEnabled && !contextMenu && previewData && previewData.id === itemKey(app) && hoveredApp === itemKey(app) && (
                           <DockPreviewTooltip
                       app={app}
                       previews={previewData.previews}
@@ -2013,7 +2249,7 @@ const Dock = memo(function Dock() {
                         )}
                       </AnimatePresence>
 
-                      {!contextMenu && (!dockPreviewEnabled || (dockPreviewEnabled && hoveredApp === itemKey(app) && !previewData)) && (
+                      {!contextMenu && (!dockPreviewEnabled || (dockPreviewEnabled && hoveredApp === itemKey(app) && !previewData)) && !volumeHuds[itemKey(app)]?.visible && (
                         <div className="tooltip">{app.name}</div>
                       )}
                       <motion.div

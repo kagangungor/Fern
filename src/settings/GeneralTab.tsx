@@ -1,4 +1,4 @@
-import { Power, Download, Clock, BatteryWarning, RefreshCw, LogOut, Languages, MemoryStick } from "lucide-react";
+import { Power, Download, Clock, CalendarDays, BatteryWarning, RefreshCw, LogOut, Languages, MemoryStick } from "lucide-react";
 import { SettingRow } from "./SettingRow";
 import { SettingSection } from "./SettingSection";
 import { Dropdown } from "./Dropdown";
@@ -6,6 +6,8 @@ import { LANGUAGES, getLanguagePreference, setLanguagePreference, useT } from ".
 
 interface GeneralTabProps {
   autostart: boolean;
+  weekStart: "auto" | "sunday" | "monday";
+  changeWeekStart: (val: "auto" | "sunday" | "monday") => void;
   toggleAutostart: () => void;
   timeFormat24h: boolean;
   toggleTimeFormat24h: () => void;
@@ -22,6 +24,8 @@ interface GeneralTabProps {
 
 export function GeneralTab({
   autostart,
+  weekStart,
+  changeWeekStart,
   toggleAutostart,
   timeFormat24h,
   toggleTimeFormat24h,
@@ -59,6 +63,19 @@ export function GeneralTab({
 
         <SettingRow icon={Languages} label={t("general.language")} desc={t("general.language.desc")}>
           <Dropdown value={getLanguagePreference()} options={languageOptions} onChange={setLanguagePreference} />
+        </SettingRow>
+
+        
+        <SettingRow icon={CalendarDays} label={t("general.weekStart")} desc={t("general.weekStart.desc")}>
+          <Dropdown
+            value={weekStart}
+            options={[
+              { value: "auto", label: t("general.weekStart.auto") },
+              { value: "sunday", label: t("general.weekStart.sunday") },
+              { value: "monday", label: t("general.weekStart.monday") },
+            ]}
+            onChange={(val) => changeWeekStart(val as "auto" | "sunday" | "monday")}
+          />
         </SettingRow>
 
         <SettingRow icon={Clock} label={t("general.time24h")} desc={t("general.time24h.desc")}>

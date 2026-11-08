@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import { parseCcLayout, parsePanelOrder, type CcLayout, type PanelId } from "../panelOrder";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, emit } from "@tauri-apps/api/event";
-import { enable, disable, isEnabled } from "@tauri-apps/plugin-autostart";
+
 import { getVersion } from "@tauri-apps/api/app";
 import type { UpdateCheckResult } from "../updater";
 import { useSettingsSync } from "../hooks/useSettingsSync";
@@ -110,6 +110,7 @@ export function useSettings() {
   const [showUpdateIndicator, setShowUpdateIndicator] = useState(
     () => localStorage.getItem("fern-show-update-indicator") !== "false"
   );
+  const [weekStart, setWeekStart] = useState<"auto" | "sunday" | "monday">(() => (localStorage.getItem("fern-week-start") as "auto" | "sunday" | "monday") || "auto");
   const [timeFormat24h, setTimeFormat24h] = useState(
     () => localStorage.getItem("fern-time-format-24h") === "true"
   );
@@ -129,6 +130,8 @@ export function useSettings() {
   });
   const [dockEnabled, setDockEnabled] = useState(true);
   const [dockPreviewEnabled, setDockPreviewEnabled] = useState(true);
+  const [dockConsoleWindows, setDockConsoleWindows] = useState(() => localStorage.getItem("fern-dock-console-windows") === "true");
+  const [dockAppVolumeScroll, setDockAppVolumeScroll] = useState(() => localStorage.getItem("fern-dock-app-volume-scroll") !== "false");
   const [dockSearchEnabled, setDockSearchEnabled] = useState(true);
   const [dockSearchLauncher, setDockSearchLauncher] = useState(
     () => localStorage.getItem("fern-search-launcher") || "windows"
@@ -288,6 +291,9 @@ export function useSettings() {
       apply(getVal("fern-glass-wallpaper"), setGlassWallpaperEnabled, (v) => v !== "false");
       apply(getVal("fern-dock-enabled"), setDockEnabled, readBool);
       apply(getVal("fern-dock-preview-enabled"), setDockPreviewEnabled, readBool);
+      apply(getVal("fern-dock-console-windows"), setDockConsoleWindows, readBool);
+      apply(getVal("fern-dock-app-volume-scroll"), setDockAppVolumeScroll, (v) => v !== "false");
+      apply(getVal("fern-week-start"), setWeekStart, (v) => (v as "auto" | "sunday" | "monday") || "auto");
       apply(getVal("fern-dock-search-enabled"), setDockSearchEnabled, readBool);
       apply(getVal("fern-search-launcher"), setDockSearchLauncher, (v) => String(v));
       apply(getVal("fern-dock-calendar-enabled"), setDockCalendarEnabled, readBool);
@@ -358,7 +364,7 @@ export function useSettings() {
   useEffect(() => {
     loadAllSettings();
 
-    isEnabled()
+    invoke<boolean>("get_autostart")
       .then(setAutostart)
       .catch(() => {});
 
@@ -410,6 +416,8 @@ export function useSettings() {
     "fern-dock-adaptive": setDockAdaptive,
     "fern-dock-win-number-enabled": setDockWinNumberEnabled,
     "fern-dock-preview-enabled": setDockPreviewEnabled,
+    "fern-dock-console-windows": (v: any) => setDockConsoleWindows(v === true || v === "true"),
+    "fern-dock-app-volume-scroll": (v: any) => setDockAppVolumeScroll(v !== false && v !== "false"),
     "fern-dock-search-enabled": setDockSearchEnabled,
     "fern-search-launcher": setDockSearchLauncher,
     "fern-dock-calendar-enabled": setDockCalendarEnabled,
@@ -436,6 +444,7 @@ export function useSettings() {
     "fern-corners-enabled": setCornersEnabled,
     "fern-show-update-indicator": setShowUpdateIndicator,
     "fern-time-format-24h": setTimeFormat24h,
+    "fern-week-start": (v: string) => setWeekStart((v as "auto" | "sunday" | "monday") || "auto"),
     "fern-memory-saver": setMemorySaver,
     "fern-low-battery-threshold": setLowBatteryThreshold,
     "fern-scale": setScale,
@@ -572,12 +581,12 @@ export function useSettings() {
   // ── Autostart ──
   const toggleAutostart = async () => {
     try {
-      const currentlyEnabled = await isEnabled();
+      const currentlyEnabled = await invoke<boolean>("get_autostart");
       if (currentlyEnabled) {
-        await disable();
+        await invoke("set_autostart", { enabled: false });
         setAutostart(false);
       } else {
-        await enable();
+        await invoke("set_autostart", { enabled: true });
         setAutostart(true);
       }
     } catch (err) {}
@@ -779,6 +788,11 @@ export function useSettings() {
     saveSetting("fern-show-update-indicator", String(next));
   };
 
+  const changeWeekStart = (val: "auto" | "sunday" | "monday") => {
+    setWeekStart(val);
+    saveSetting("fern-week-start", val);
+  };
+
   const toggleTimeFormat24h = () => {
     const next = !timeFormat24h;
     setTimeFormat24h(next);
@@ -801,6 +815,18 @@ export function useSettings() {
     const next = !dockEnabled;
     setDockEnabled(next);
     saveSetting("fern-dock-enabled", String(next));
+  };
+
+  const toggleDockConsoleWindows = () => {
+    const next = !dockConsoleWindows;
+    setDockConsoleWindows(next);
+    saveSetting("fern-dock-console-windows", String(next));
+  };
+
+  const toggleDockAppVolumeScroll = () => {
+    const next = !dockAppVolumeScroll;
+    setDockAppVolumeScroll(next);
+    saveSetting("fern-dock-app-volume-scroll", String(next));
   };
 
   const toggleDockPreview = () => {
@@ -1197,6 +1223,8 @@ export function useSettings() {
     handleThresholdChange,
     timeFormat24h,
     toggleTimeFormat24h,
+    weekStart,
+    changeWeekStart,
     memorySaver,
     toggleMemorySaver,
     showUpdateIndicator,
@@ -1293,6 +1321,10 @@ export function useSettings() {
     setDockModeValue,
     dockPreviewEnabled,
     toggleDockPreview,
+    dockConsoleWindows,
+    toggleDockConsoleWindows,
+    dockAppVolumeScroll,
+    toggleDockAppVolumeScroll,
     dockSearchEnabled,
     toggleDockSearch,
     dockSearchLauncher,

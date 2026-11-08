@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import type { ChangeEvent, CSSProperties } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { emit } from "@tauri-apps/api/event";
-import { Monitor, Eye, EyeOff, Circle, Search, Shuffle, MonitorCheck, CalendarDays, Maximize2, Keyboard, Sparkles, RotateCcw, LayoutGrid, Trash2, HardDrive, ChevronUp, Clock, BellRing } from "lucide-react";
+import { Monitor, Eye, Terminal, Volume2, EyeOff, Circle, Search, Shuffle, MonitorCheck, CalendarDays, Maximize2, Keyboard, Sparkles, RotateCcw, LayoutGrid, Trash2, HardDrive, ChevronUp, Clock, BellRing } from "lucide-react";
 import { SettingRow } from "./SettingRow";
 import { SettingSection } from "./SettingSection";
 import { Dropdown } from "./Dropdown";
@@ -44,6 +44,10 @@ interface DockTabProps {
   setDockModeValue: (mode: string) => void;
   dockPreviewEnabled: boolean;
   toggleDockPreview: () => void;
+  dockConsoleWindows: boolean;
+  toggleDockConsoleWindows: () => void;
+  dockAppVolumeScroll: boolean;
+  toggleDockAppVolumeScroll: () => void;
   dockSearchEnabled: boolean;
   toggleDockSearch: () => void;
   dockSearchLauncher: string;
@@ -91,6 +95,10 @@ export function DockTab({
   setDockModeValue,
   dockPreviewEnabled,
   toggleDockPreview,
+  dockConsoleWindows,
+  toggleDockConsoleWindows,
+  dockAppVolumeScroll,
+  toggleDockAppVolumeScroll,
   dockSearchEnabled,
   toggleDockSearch,
   dockSearchLauncher,
@@ -280,6 +288,20 @@ export function DockTab({
             <SettingRow icon={Eye} label={t("dock.previews")} desc={t("dock.previews.desc")}>
               <label className="toggle-switch">
                 <input type="checkbox" checked={dockPreviewEnabled} onChange={toggleDockPreview} />
+                <span className="slider"></span>
+              </label>
+            </SettingRow>
+
+            <SettingRow icon={Terminal} label={t("dock.consoleWindows")} desc={t("dock.consoleWindows.desc")}>
+              <label className="toggle-switch">
+                <input type="checkbox" checked={dockConsoleWindows} onChange={toggleDockConsoleWindows} />
+                <span className="slider"></span>
+              </label>
+            </SettingRow>
+
+            <SettingRow icon={Volume2} label={t("dock.appVolumeScroll")} desc={t("dock.appVolumeScroll.desc")}>
+              <label className="toggle-switch">
+                <input type="checkbox" checked={dockAppVolumeScroll} onChange={toggleDockAppVolumeScroll} />
                 <span className="slider"></span>
               </label>
             </SettingRow>

@@ -118,12 +118,15 @@ pub async fn init_dock(app: AppHandle, mode: String) {
             let _ = dock_win.hide();
             crate::state::set_flag(crate::state::dock_appbar_registered(), "dock", false);
         }
+        crate::startup::settle("dock disabled");
         return;
     }
 
     if let Some(dock_win) = app.get_webview_window("dock") {
         init_dock_window(&app, dock_win, &mode).await;
     }
+    crate::startup::mark("dock shown");
+    crate::startup::settle("dock shown");
 }
 
 pub async fn init_dock_window(app: &AppHandle, dock_win: tauri::WebviewWindow, mode: &str) {
@@ -4377,3 +4380,25 @@ pub fn clear_live_thumbnails() -> Result<(), String> {
 pub fn is_dwm_composition_enabled() -> Result<bool, String> {
     Ok(crate::live_preview::is_composition_enabled())
 }
+
+// Per-App Audio Scroll Mixer
+#[tauri::command]
+pub fn get_target_app_volume(target: String, pids: Option<Vec<u32>>) -> Result<Option<crate::app_audio::AppVolumeState>, String> {
+    crate::app_audio::get_app_volume(&target, pids.as_deref())
+}
+
+#[tauri::command]
+pub fn set_target_app_volume(target: String, volume: f32, pids: Option<Vec<u32>>) -> Result<crate::app_audio::AppVolumeState, String> {
+    crate::app_audio::set_app_volume(&target, pids.as_deref(), volume)
+}
+
+#[tauri::command]
+pub fn adjust_target_app_volume(target: String, delta: f32, pids: Option<Vec<u32>>) -> Result<crate::app_audio::AppVolumeState, String> {
+    crate::app_audio::adjust_app_volume(&target, pids.as_deref(), delta)
+}
+
+#[tauri::command]
+pub fn toggle_target_app_mute(target: String, pids: Option<Vec<u32>>) -> Result<crate::app_audio::AppVolumeState, String> {
+    crate::app_audio::toggle_app_mute(&target, pids.as_deref())
+}
+
