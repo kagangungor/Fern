@@ -163,16 +163,6 @@ bun run tauri dev
 
 > **Vision:** Fern is not a cosmetic macOS clone — it is the missing productivity, media, and hardware control layer built to give Windows users real desktop superpowers.
 
-### Completed
-- [x] **Universal Meeting & Privacy HUD:**
-  - [x] **System-Wide Universal Mic Mute:** Instant microphone mute toggle via island click or configurable global shortcut (default `Ctrl+F1`) operating at Windows Core Audio level across Zoom, Microsoft Teams, Google Meet, Discord, and all apps.
-  - [x] **Privacy Aura & Indicators:** Silhouette-matching dynamic glow and camera/microphone usage indicator dots on the island whenever recording hardware is active.
-- [x] **Desktop Shell & Notch Stability Fixes:**
-  - [x] **Fixed Notch Mode Persistence:** Resolved per-monitor state conflicts that prevented the notch from staying fixed, ensuring reliable visibility across window states.
-  - [x] **Widget & Island Flow:** Eliminated overlap collisions between privacy indicators and right status widgets (RAM, CPU, Battery) with adaptive flex layout and dynamic width expansion.
-  - [x] **Dock DWM Live Previews & Focus:** Resolved tooltip and context menu collisions; added `AttachThreadInput` foreground activation for background windows.
-  - [x] **Settings Reorganization:** Consolidated 11 scattered sections in the Notch settings tab into 7 clean, logical groups.
-
 ### Upcoming Milestones
 
 #### 💻 Developer & Terminal Ambient HUD (Dev HUD)
@@ -180,9 +170,8 @@ bun run tauri dev
 - [ ] **Active Git Context:** Compact branch name and uncommitted changes count when IDE or terminal is focused
 - [ ] **Streaming AI Agent Actions:** Real-time micro-log and status streaming in the expanded island
 
-#### 🎚️ Per-App Audio Scroll Mixer & Live Synchronized Lyrics
-- [ ] **Per-App Scroll Wheel Volume:** Adjust individual application volumes (Spotify, Discord, browser) directly by scrolling the mouse wheel over their dock or notch icons
-- [ ] **Synchronized Live Lyrics (Karaoke Mode):** Real-time synced lyric lines streaming smoothly inside the music notch
+#### 🎵 Live Synchronized Lyrics (Karaoke Mode)
+- [ ] **Synchronized Live Lyrics:** Real-time synced lyric lines streaming smoothly inside the music notch
 
 #### 📋 Pro Clipboard & Smart Developer Inspector
 - [ ] **Fast Island Clipboard:** Lightweight, accessible recent clipboard history integrated right into the island
