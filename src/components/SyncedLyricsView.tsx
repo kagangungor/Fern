@@ -105,7 +105,7 @@ export const SyncedLyricsView: React.FC<SyncedLyricsViewProps> = ({
   // Fallback for unsynced plain lyrics
   if (!lyrics.synced && lyrics.plain) {
     return (
-      <div className="synced-lyrics-wrap">
+      <div className="synced-lyrics-wrap" onClick={(e) => e.stopPropagation()}>
         <div className="synced-lyrics-container" onWheel={handleWheel}>
           <div className="synced-lyrics-plain">{lyrics.plain}</div>
         </div>
@@ -125,7 +125,6 @@ export const SyncedLyricsView: React.FC<SyncedLyricsViewProps> = ({
               ref={isActive ? activeLineRef : null}
               className={`synced-lyric-line${isActive ? ' active' : ''}`}
               onClick={(e) => handleLineClick(e, line.time_ms)}
-              title={canSeek ? `${Math.floor(line.time_ms / 1000)}s` : undefined}
             >
               {line.text}
             </div>

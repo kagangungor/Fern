@@ -27,6 +27,7 @@ struct LrcLibItem {
     pub track_name: Option<String>,
     #[serde(rename = "artistName")]
     pub artist_name: Option<String>,
+    pub duration: Option<f64>,
     #[serde(rename = "plainLyrics")]
     pub plain_lyrics: Option<String>,
     #[serde(rename = "syncedLyrics")]
@@ -34,9 +35,9 @@ struct LrcLibItem {
     pub instrumental: Option<bool>,
 }
 
-static LYRICS_CACHE: OnceLock<Mutex<HashMap<String, Option<LyricsPayload>>>> = OnceLock::new();
+static LYRICS_CACHE: OnceLock<Mutex<HashMap<String, LyricsPayload>>> = OnceLock::new();
 
-fn get_cache() -> &'static Mutex<HashMap<String, Option<LyricsPayload>>> {
+fn get_cache() -> &'static Mutex<HashMap<String, LyricsPayload>> {
     LYRICS_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
@@ -123,62 +124,209 @@ fn parse_timestamp(tag: &str) -> Option<u64> {
     Some(minutes * 60_000 + seconds * 1_000 + millis)
 }
 
+fn is_noise_tag(inside: &str) -> bool {
+    let lower = inside.to_lowercase();
+    lower.starts_with("feat")
+        || lower.starts_with("ft.")
+        || lower.starts_with("ft ")
+        || lower.starts_with("with ")
+        || lower.starts_with("prod")
+        || lower.contains("remaster")
+        || lower.contains("live")
+        || lower.contains("version")
+        || lower.contains("deluxe")
+        || lower.contains("edition")
+        || lower.contains("official")
+        || lower.contains("audio")
+        || lower.contains("video")
+        || lower.contains("lyric")
+        || lower.contains("sped up")
+        || lower.contains("slowed")
+        || lower.contains("acoustic")
+        || lower.contains("explicit")
+        || lower.contains("bonus")
+        || lower.contains("radio edit")
+}
+
 fn clean_track_title(title: &str) -> String {
     let mut t = title.trim().to_string();
 
-    // Strip common trailing suffixes separated by " - "
-    if let Some(idx) = t.find(" - ") {
-        let suffix = t[idx + 3..].to_lowercase();
-        if suffix.contains("remaster")
-            || suffix.contains("live")
-            || suffix.contains("radio")
-            || suffix.contains("edit")
-            || suffix.contains("version")
-            || suffix.contains("mix")
-            || suffix.contains("bonus")
-            || suffix.contains("deluxe")
-            || suffix.contains("mono")
-            || suffix.contains("lyric")
-            || suffix.contains("çizik")
-        {
-            t = t[..idx].trim().to_string();
-        }
-    }
+    loop {
+        let prev = t.clone();
 
-    // Strip parentheses containing noise
-    if let Some(start) = t.rfind('(') {
-        if let Some(end) = t.rfind(')') {
-            if end > start {
-                let inside = t[start + 1..end].to_lowercase();
-                if inside.starts_with("feat")
-                    || inside.starts_with("ft.")
-                    || inside.starts_with("with")
-                    || inside.contains("remaster")
-                    || inside.contains("live")
-                    || inside.contains("version")
-                    || inside.contains("deluxe")
-                    || inside.contains("edition")
-                    || inside.contains("official")
-                    || inside.contains("audio")
-                    || inside.contains("video")
-                    || inside.contains("lyric")
-                {
-                    t = format!("{}{}", &t[..start], &t[end + 1..]).trim().to_string();
+        // Strip trailing brackets [...]
+        if let Some(start) = t.rfind('[') {
+            if let Some(end) = t.rfind(']') {
+                if end > start && end == t.len() - 1 {
+                    t = t[..start].trim().to_string();
                 }
             }
         }
-    }
 
-    // Strip brackets [Official Video], [Remastered]
-    if let Some(start) = t.rfind('[') {
-        if let Some(end) = t.rfind(']') {
-            if end > start {
-                t = format!("{}{}", &t[..start], &t[end + 1..]).trim().to_string();
+        // Strip trailing parentheses containing noise
+        if let Some(start) = t.rfind('(') {
+            if let Some(end) = t.rfind(')') {
+                if end > start && end == t.len() - 1 {
+                    let inside = &t[start + 1..end];
+                    if is_noise_tag(inside) {
+                        t = t[..start].trim().to_string();
+                    }
+                }
             }
+        }
+
+        // Strip common trailing suffixes separated by " - "
+        if let Some(idx) = t.rfind(" - ") {
+            let suffix = &t[idx + 3..];
+            if is_noise_tag(suffix)
+                || suffix.to_lowercase().contains("mix")
+                || suffix.to_lowercase().contains("edit")
+                || suffix.to_lowercase().contains("mono")
+                || suffix.to_lowercase().contains("çizik")
+            {
+                t = t[..idx].trim().to_string();
+            }
+        }
+
+        if t == prev {
+            break;
         }
     }
 
     t.trim().to_string()
+}
+
+fn clean_primary_artist(artist: &str) -> String {
+    let trimmed = artist.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+
+    let mut result = trimmed;
+    for sep in [
+        ", ", " & ", " feat.", " feat ", " Feat.", " Feat ", " FEAT.", " ft.", " ft ", " Ft.",
+        " Ft ", " x ", " X ",
+    ] {
+        if let Some(idx) = result.find(sep) {
+            if idx > 0 {
+                result = result[..idx].trim();
+            }
+        }
+    }
+
+    result.to_string()
+}
+
+fn has_usable_lyrics(item: &LrcLibItem) -> bool {
+    let has_synced = item.synced_lyrics.as_ref().is_some_and(|s| !s.trim().is_empty());
+    let has_plain = item.plain_lyrics.as_ref().is_some_and(|s| !s.trim().is_empty());
+    has_synced || has_plain
+}
+
+async fn try_get_lrclib(
+    client: &reqwest::Client,
+    track: &str,
+    artist: &str,
+    dur_secs: Option<u64>,
+) -> Option<LrcLibItem> {
+    if track.trim().is_empty() {
+        return None;
+    }
+
+    let mut url = format!(
+        "https://lrclib.net/api/get?track_name={}&artist_name={}",
+        urlencoding::encode(track),
+        urlencoding::encode(artist)
+    );
+    if let Some(d) = dur_secs {
+        url.push_str(&format!("&duration={}", d));
+    }
+
+    let resp = client.get(&url).send().await.ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    let text = resp.text().await.ok()?;
+    let item = serde_json::from_str::<LrcLibItem>(&text).ok()?;
+    if has_usable_lyrics(&item) {
+        Some(item)
+    } else {
+        None
+    }
+}
+
+fn pick_best_search_item(
+    items: Vec<LrcLibItem>,
+    target_title: &str,
+    target_artist: &str,
+    dur_secs: Option<u64>,
+) -> Option<LrcLibItem> {
+    let norm_title = clean_track_title(target_title).to_lowercase();
+    let norm_artist = clean_primary_artist(target_artist).to_lowercase();
+
+    items
+        .into_iter()
+        .filter(has_usable_lyrics)
+        .max_by_key(|item| {
+            let mut score: i64 = 0;
+
+            if item.synced_lyrics.as_ref().is_some_and(|s| !s.trim().is_empty()) {
+                score += 1000;
+            }
+
+            if let Some(ref item_title) = item.track_name {
+                let it = clean_track_title(item_title).to_lowercase();
+                if !norm_title.is_empty() {
+                    if it == norm_title {
+                        score += 200;
+                    } else if it.contains(&norm_title) || norm_title.contains(&it) {
+                        score += 80;
+                    }
+                }
+            }
+
+            if let Some(ref item_artist) = item.artist_name {
+                let ia = item_artist.trim().to_lowercase();
+                if !norm_artist.is_empty() {
+                    if ia == norm_artist {
+                        score += 200;
+                    } else if ia.contains(&norm_artist) || norm_artist.contains(&ia) {
+                        score += 100;
+                    }
+                }
+            }
+
+            if let (Some(target_dur), Some(item_dur)) = (dur_secs, item.duration) {
+                let diff = (target_dur as f64 - item_dur).abs();
+                if diff <= 2.0 {
+                    score += 120;
+                } else if diff <= 6.0 {
+                    score += 70;
+                } else if diff <= 15.0 {
+                    score += 30;
+                } else {
+                    score -= ((diff - 15.0) as i64).min(120);
+                }
+            }
+
+            score
+        })
+}
+
+async fn try_search_lrclib(
+    client: &reqwest::Client,
+    url: &str,
+    target_title: &str,
+    target_artist: &str,
+    dur_secs: Option<u64>,
+) -> Option<LrcLibItem> {
+    let resp = client.get(url).send().await.ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    let text = resp.text().await.ok()?;
+    let items = serde_json::from_str::<Vec<LrcLibItem>>(&text).ok()?;
+    pick_best_search_item(items, target_title, target_artist, dur_secs)
 }
 
 pub async fn fetch_lyrics(
@@ -199,7 +347,7 @@ pub async fn fetch_lyrics(
     // 1. Check in-memory cache
     if let Ok(cache) = get_cache().lock() {
         if let Some(cached) = cache.get(&key) {
-            return Ok(cached.clone());
+            return Ok(Some(cached.clone()));
         }
     }
 
@@ -210,7 +358,7 @@ pub async fn fetch_lyrics(
             if let Ok(content) = fs::read_to_string(&file_path) {
                 if let Ok(payload) = serde_json::from_str::<LyricsPayload>(&content) {
                     if let Ok(mut cache) = get_cache().lock() {
-                        cache.insert(key.clone(), Some(payload.clone()));
+                        cache.insert(key.clone(), payload.clone());
                     }
                     return Ok(Some(payload));
                 }
@@ -226,85 +374,59 @@ pub async fn fetch_lyrics(
         .map_err(|e| e.to_string())?;
 
     let cleaned_title = clean_track_title(title);
-    let dur_secs = duration_ms.map(|d| d / 1000);
+    let primary_artist = clean_primary_artist(artist);
+    let dur_secs = duration_ms.filter(|&d| d > 0).map(|d| d / 1000);
 
-    // Attempt 1: Direct exact match
-    let mut item_opt: Option<LrcLibItem> = None;
+    // Attempt 1: Exact match with duration
+    let mut item_opt = try_get_lrclib(&client, title, artist, dur_secs).await;
 
-    let mut get_url = format!(
-        "https://lrclib.net/api/get?track_name={}&artist_name={}",
-        urlencoding::encode(title),
-        urlencoding::encode(artist)
-    );
-    if let Some(d) = dur_secs {
-        get_url.push_str(&format!("&duration={}", d));
+    // Attempt 2: Exact match without duration (handles ±2s+ differences between Spotify and LRCLIB)
+    if item_opt.is_none() && dur_secs.is_some() {
+        item_opt = try_get_lrclib(&client, title, artist, None).await;
     }
 
-    if let Ok(resp) = client.get(&get_url).send().await {
-        if resp.status().is_success() {
-            if let Ok(text) = resp.text().await {
-                if let Ok(item) = serde_json::from_str::<LrcLibItem>(&text) {
-                    item_opt = Some(item);
-                }
-            }
-        }
+    // Attempt 3: Cleaned title and primary artist without duration
+    if item_opt.is_none() && (cleaned_title != title || primary_artist != artist) {
+        item_opt = try_get_lrclib(&client, &cleaned_title, &primary_artist, None).await;
     }
 
-    // Attempt 2: If cleaned title is different, try direct get with cleaned title
-    if item_opt.is_none() && cleaned_title != title {
-        let mut get_clean_url = format!(
-            "https://lrclib.net/api/get?track_name={}&artist_name={}",
+    // Attempt 4: Structured search with track_name and artist_name
+    if item_opt.is_none() && !primary_artist.is_empty() {
+        let search_url = format!(
+            "https://lrclib.net/api/search?track_name={}&artist_name={}",
             urlencoding::encode(&cleaned_title),
-            urlencoding::encode(artist)
+            urlencoding::encode(&primary_artist)
         );
-        if let Some(d) = dur_secs {
-            get_clean_url.push_str(&format!("&duration={}", d));
-        }
-
-        if let Ok(resp) = client.get(&get_clean_url).send().await {
-            if resp.status().is_success() {
-                if let Ok(text) = resp.text().await {
-                    if let Ok(item) = serde_json::from_str::<LrcLibItem>(&text) {
-                        item_opt = Some(item);
-                    }
-                }
-            }
-        }
+        item_opt = try_search_lrclib(&client, &search_url, title, artist, dur_secs).await;
     }
 
-    // Attempt 3: Search fallback
+    // Attempt 5: Free-text search fallback (now supports both synced and plain lyrics)
     if item_opt.is_none() {
-        let search_query = format!("{} {}", artist, cleaned_title);
+        let search_query = if primary_artist.is_empty() {
+            cleaned_title.clone()
+        } else {
+            format!("{} {}", primary_artist, cleaned_title)
+        };
         let search_url = format!(
             "https://lrclib.net/api/search?q={}",
             urlencoding::encode(&search_query)
         );
-
-        if let Ok(resp) = client.get(&search_url).send().await {
-            if resp.status().is_success() {
-                if let Ok(text) = resp.text().await {
-                    if let Ok(items) = serde_json::from_str::<Vec<LrcLibItem>>(&text) {
-                        // Prefer the first item that has synced lyrics
-                        item_opt = items.into_iter().find(|i| {
-                            i.synced_lyrics.as_ref().map(|s| !s.trim().is_empty()).unwrap_or(false)
-                        });
-                    }
-                }
-            }
-        }
+        item_opt = try_search_lrclib(&client, &search_url, title, artist, dur_secs).await;
     }
 
     let payload = if let Some(item) = item_opt {
-        if let Some(synced) = item.synced_lyrics {
-            if !synced.trim().is_empty() {
-                let lines = parse_lrc(&synced);
+        let plain_non_empty = item.plain_lyrics.filter(|p| !p.trim().is_empty());
+
+        if let Some(synced) = item.synced_lyrics.filter(|s| !s.trim().is_empty()) {
+            let lines = parse_lrc(&synced);
+            if !lines.is_empty() {
                 Some(LyricsPayload {
                     synced: true,
                     lines,
-                    plain: item.plain_lyrics,
+                    plain: plain_non_empty,
                     source: "LRCLIB".to_string(),
                 })
-            } else if let Some(plain) = item.plain_lyrics {
+            } else if let Some(plain) = plain_non_empty {
                 Some(LyricsPayload {
                     synced: false,
                     lines: Vec::new(),
@@ -314,7 +436,7 @@ pub async fn fetch_lyrics(
             } else {
                 None
             }
-        } else if let Some(plain) = item.plain_lyrics {
+        } else if let Some(plain) = plain_non_empty {
             Some(LyricsPayload {
                 synced: false,
                 lines: Vec::new(),
@@ -328,13 +450,11 @@ pub async fn fetch_lyrics(
         None
     };
 
-    // Update in-memory cache
-    if let Ok(mut cache) = get_cache().lock() {
-        cache.insert(key.clone(), payload.clone());
-    }
-
-    // Save to disk if found
+    // Cache only successful results in memory and on disk so transient failures can retry
     if let Some(ref p) = payload {
+        if let Ok(mut cache) = get_cache().lock() {
+            cache.insert(key.clone(), p.clone());
+        }
         if let Some(cache_dir) = lyrics_cache_dir(app) {
             let file_path = cache_dir.join(format!("{}.json", sanitize_filename(&key)));
             if let Ok(json) = serde_json::to_string(p) {
@@ -362,5 +482,71 @@ mod urlencoding {
             }
         }
         encoded
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_item(
+        track: &str,
+        artist: &str,
+        duration: Option<f64>,
+        synced: Option<&str>,
+        plain: Option<&str>,
+    ) -> LrcLibItem {
+        LrcLibItem {
+            track_name: Some(track.to_string()),
+            artist_name: Some(artist.to_string()),
+            duration,
+            synced_lyrics: synced.map(|s| s.to_string()),
+            plain_lyrics: plain.map(|s| s.to_string()),
+            instrumental: Some(false),
+        }
+    }
+
+    #[test]
+    fn cleans_titles_and_unicode_artists_without_panicking() {
+        assert_eq!(clean_track_title("Yağsın Dünya Üstüme"), "Yağsın Dünya Üstüme");
+        assert_eq!(clean_track_title("Lanet (feat. Khontkar) [Official Audio]"), "Lanet");
+        assert_eq!(clean_track_title("Düşler Sokağı - Remastered 2021"), "Düşler Sokağı");
+
+        assert_eq!(clean_primary_artist("İbrahim Tatlıses, Müslüm Gürses"), "İbrahim Tatlıses");
+        assert_eq!(clean_primary_artist("Keişan & Ben Fero"), "Keişan");
+        assert_eq!(clean_primary_artist("Wegh"), "Wegh");
+    }
+
+    #[test]
+    fn search_picker_falls_back_to_plain_lyrics_when_synced_missing() {
+        let items = vec![
+            make_item("Yağsın Dünya Üstüme", "Wegh", Some(154.0), None, Some("sözler uzak")),
+            make_item("Yağsın Dünya Üstüme", "Wegh", Some(137.0), None, Some("sözler yakın")),
+        ];
+        let picked = pick_best_search_item(items, "Yağsın Dünya Üstüme", "Wegh", Some(132))
+            .expect("should pick plain lyrics item when synced is missing");
+        assert_eq!(picked.duration, Some(137.0));
+        assert_eq!(picked.plain_lyrics.as_deref(), Some("sözler yakın"));
+    }
+
+    #[test]
+    fn search_picker_prefers_synced_over_plain() {
+        let items = vec![
+            make_item("Lanet", "Keişan", Some(267.0), None, Some("plain only")),
+            make_item("Lanet", "Keişan", Some(267.0), Some("[00:26.87] Üstümüzde kara bulutlar"), Some("plain")),
+        ];
+        let picked = pick_best_search_item(items, "Lanet", "Keişan", Some(267))
+            .expect("should pick synced lyrics item");
+        assert!(picked.synced_lyrics.is_some());
+    }
+
+    #[test]
+    fn parses_lrc_lines_and_sorts() {
+        let lines = parse_lrc("[00:20.50]Second\n[00:10.00]First");
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0].time_ms, 10_000);
+        assert_eq!(lines[0].text, "First");
+        assert_eq!(lines[1].time_ms, 20_500);
+        assert_eq!(lines[1].text, "Second");
     }
 }

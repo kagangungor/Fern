@@ -1,12 +1,12 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence, useAnimation } from 'framer-motion';
 import { invoke } from '@tauri-apps/api/core';
 import { Visualizer } from './App';
 import { useT } from './i18n';
-import { MediaSourceButton, type MediaSession } from './components/MediaSourceButton';
 import { PlayIcon, PauseIcon, SkipBackIcon, SkipForwardIcon, MusicNoteIcon, SpeakerIcon, AudioOutputIcon, VolumeLowIcon, VolumeHighIcon } from './icons';
-import { CalendarDays, Mic2 } from 'lucide-react';
+import { Mic2 } from 'lucide-react';
 import { SyncedLyricsView, type LyricsPayload } from './components/SyncedLyricsView';
+import { useMediaPosition } from './hooks/useMediaPosition';
 
 interface MediaInfo {
   title: string;
@@ -24,7 +24,6 @@ interface CompactMediaPlayerProps {
   mediaInfo: MediaInfo;
   albumArtUrl: string | null;
   albumArtKey: number;
-  sessions?: MediaSession[];
   isPlaying: boolean;
   volume: number;
   volumeExpanded: boolean;
@@ -38,7 +37,9 @@ interface CompactMediaPlayerProps {
   onAnimatePrev: () => void;
   onAnimateNext: () => void;
   onLayoutChange: (layout: 'classic' | 'compact') => void;
-  onOpenCalendar?: (e: React.MouseEvent) => void;
+  lyrics: LyricsPayload | null;
+  lyricsLoading: boolean;
+  lyricsEnabled?: boolean;
   isLyricsOpen?: boolean;
   onLyricsToggle?: (open: boolean) => void;
   canSeekLyrics?: boolean;
@@ -110,7 +111,6 @@ export function CompactMediaPlayer({
   mediaInfo,
   albumArtUrl,
   albumArtKey,
-  sessions = [],
   isPlaying,
   volume,
   volumeExpanded,
@@ -124,41 +124,14 @@ export function CompactMediaPlayer({
   onAnimatePrev,
   onAnimateNext,
   onLayoutChange,
-  onOpenCalendar,
+  lyrics,
+  lyricsLoading,
+  lyricsEnabled = true,
   isLyricsOpen = false,
   onLyricsToggle,
   canSeekLyrics = true,
 }: CompactMediaPlayerProps) {
   const t = useT();
-
-  const lyricsSettingEnabled = localStorage.getItem("fern-lyrics-enabled") !== "false";
-  const [lyrics, setLyrics] = useState<LyricsPayload | null>(null);
-  const [lyricsLoading, setLyricsLoading] = useState(false);
-  const lastTrackKeyRef = useRef<string>("");
-
-  useEffect(() => {
-    if (!isLyricsOpen || !mediaInfo.title) return;
-    const key = `${mediaInfo.artist}|${mediaInfo.title}`;
-    if (lastTrackKeyRef.current === key) return;
-    lastTrackKeyRef.current = key;
-
-    setLyricsLoading(true);
-    invoke<LyricsPayload | null>('get_lyrics', {
-      title: mediaInfo.title,
-      artist: mediaInfo.artist || null,
-      durationMs: mediaInfo.duration_ms ? Math.round(mediaInfo.duration_ms) : null,
-    })
-      .then((res) => {
-        setLyrics(res);
-      })
-      .catch((err) => {
-        console.warn('[lyrics] fetch failed:', err);
-        setLyrics(null);
-      })
-      .finally(() => {
-        setLyricsLoading(false);
-      });
-  }, [isLyricsOpen, mediaInfo.title, mediaInfo.artist, mediaInfo.duration_ms]);
 
   const scrollVolume = (e: React.WheelEvent) => {
     if (localStorage.getItem("fern-notch-scroll-volume") !== "true") return;
@@ -168,68 +141,15 @@ export function CompactMediaPlayer({
   };
   const seekRef = useRef<HTMLInputElement>(null);
 
-  const positionMs = mediaInfo.position_ms ?? 0;
   const durationMs = mediaInfo.duration_ms ?? 0;
   const seekEnabled = mediaInfo.seek_enabled ?? false;
-  const positionUpdatedAt = mediaInfo.position_updated_at ?? 0;
-
-  // Single source of truth: last known backend position + when it was received
-  const backendPosRef = useRef(positionMs);
-  const backendTimeRef = useRef(positionUpdatedAt || Date.now());
-  const isSeekingRef = useRef(false);
-
-  // Update refs when backend sends new position (ignore during seek)
-  useEffect(() => {
-    if (!isSeekingRef.current) {
-      backendPosRef.current = positionMs;
-      backendTimeRef.current = positionUpdatedAt || Date.now();
-    }
-  }, [positionMs, positionUpdatedAt]);
-
-  // displayPosition is the live, extrapolated position
-  const [displayPosition, setDisplayPosition] = useState(() => {
-    const elapsed = Date.now() - (positionUpdatedAt || Date.now());
-    return Math.min(positionMs + (isPlaying ? elapsed : 0), durationMs || Infinity);
-  });
-
-  // Tick: extrapolate position every 250ms
-  useEffect(() => {
-    const tick = () => {
-      if (isSeekingRef.current) return; // don't update during seek
-      const elapsed = isPlaying ? Date.now() - backendTimeRef.current : 0;
-      const pos = Math.min(backendPosRef.current + elapsed, durationMs || Infinity);
-      setDisplayPosition(pos);
-    };
-    tick();
-    if (!isPlaying) return;
-    const interval = setInterval(tick, 250);
-    return () => clearInterval(interval);
-  }, [isPlaying, durationMs]);
-
-  // Seek handlers
-  const handleSeekStart = useCallback(() => {
-    isSeekingRef.current = true;
-  }, []);
-
-  const handleSeekChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    setDisplayPosition(Number(e.target.value));
-  }, []);
-
-  const handleSeekEnd = useCallback(() => {
-    const seekPos = displayPosition;
-    isSeekingRef.current = false;
-    // Update backend refs to the seek position so extrapolation continues from there
-    backendPosRef.current = seekPos;
-    backendTimeRef.current = Date.now();
-    invoke('media_seek', { positionMs: seekPos }).catch(() => {});
-  }, [displayPosition]);
-
-  const handleSeekToMs = useCallback((seekPos: number) => {
-    setDisplayPosition(seekPos);
-    backendPosRef.current = seekPos;
-    backendTimeRef.current = Date.now();
-    invoke('media_seek', { positionMs: seekPos }).catch(() => {});
-  }, []);
+  const {
+    displayPosition,
+    handleSeekStart,
+    handleSeekChange,
+    handleSeekEnd,
+    handleSeekToMs,
+  } = useMediaPosition(mediaInfo, isPlaying);
 
   const progressPercent = durationMs > 0 ? (displayPosition / durationMs) * 100 : 0;
 
@@ -268,13 +188,7 @@ export function CompactMediaPlayer({
           <TitleMarquee title={mediaInfo.title} />
           <span className="cmp-artist">{mediaInfo.artist}</span>
         </div>
-        <MediaSourceButton sessions={sessions} />
-        {onOpenCalendar && (
-          <button className="music-calendar-btn" onClick={onOpenCalendar} title={t("music.openCalendar")} aria-label={t("music.openCalendar")}>
-            <CalendarDays size={16} strokeWidth={1.75} />
-          </button>
-        )}
-        {lyricsSettingEnabled && onLyricsToggle && (
+        {lyricsEnabled && onLyricsToggle && (
           <button
             className={`music-calendar-btn music-lyrics-btn${isLyricsOpen ? ' active' : ''}`}
             onClick={(e) => {

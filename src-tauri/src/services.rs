@@ -837,6 +837,7 @@ pub fn setup_system_worker(app_handle: AppHandle) -> Sender<SystemCommand> {
 
             let mut manager = GlobalSystemMediaTransportControlsSessionManager::RequestAsync().and_then(|op| op.get()).ok();
             let mut last_processed_media = std::time::Instant::now();
+            let mut media_burst_until: Option<std::time::Instant> = None;
             let mut last_device_check = std::time::Instant::now();
             #[allow(clippy::type_complexity)]
             let mut last_emitted_info: Option<(String, String, bool, bool, Option<String>, i64, i64)> = None;
@@ -897,14 +898,16 @@ pub fn setup_system_worker(app_handle: AppHandle) -> Sender<SystemCommand> {
                                     hide_osd("fern-volume-overlay-enabled");
                                 }
                             }
-                            SystemCommand::MediaPlayPause => { if let Some(ref mgr) = manager { if let Ok(session) = media_control_session(mgr) { let _ = session.TryTogglePlayPauseAsync(); } } }
-                            SystemCommand::MediaNext => { if let Some(ref mgr) = manager { if let Ok(session) = media_control_session(mgr) { let _ = session.TrySkipNextAsync(); } } }
-                            SystemCommand::MediaPrevious => { if let Some(ref mgr) = manager { if let Ok(session) = media_control_session(mgr) { let _ = session.TrySkipPreviousAsync(); } } }
+                            SystemCommand::MediaPlayPause => { if let Some(ref mgr) = manager { if let Ok(session) = media_control_session(mgr) { let _ = session.TryTogglePlayPauseAsync(); MEDIA_REFRESH.store(true, Ordering::Relaxed); media_burst_until = Some(std::time::Instant::now() + std::time::Duration::from_millis(1500)); } } }
+                            SystemCommand::MediaNext => { if let Some(ref mgr) = manager { if let Ok(session) = media_control_session(mgr) { let _ = session.TrySkipNextAsync(); MEDIA_REFRESH.store(true, Ordering::Relaxed); media_burst_until = Some(std::time::Instant::now() + std::time::Duration::from_millis(1500)); } } }
+                            SystemCommand::MediaPrevious => { if let Some(ref mgr) = manager { if let Ok(session) = media_control_session(mgr) { let _ = session.TrySkipPreviousAsync(); MEDIA_REFRESH.store(true, Ordering::Relaxed); media_burst_until = Some(std::time::Instant::now() + std::time::Duration::from_millis(1500)); } } }
                             SystemCommand::MediaSeek(position_ms) => {
                                 if let Some(ref mgr) = manager {
                                     if let Ok(session) = media_control_session(mgr) {
                                         let ticks = position_ms * 10_000;
                                         let _ = session.TryChangePlaybackPositionAsync(ticks);
+                                        MEDIA_REFRESH.store(true, Ordering::Relaxed);
+                                        media_burst_until = Some(std::time::Instant::now() + std::time::Duration::from_millis(1500));
                                     }
                                 }
                             }
@@ -943,7 +946,8 @@ pub fn setup_system_worker(app_handle: AppHandle) -> Sender<SystemCommand> {
                         }
                     }
                 }
-                if last_processed_media.elapsed().as_millis() >= 2000 || MEDIA_REFRESH.swap(false, Ordering::Relaxed) {
+                let media_poll_ms = if media_burst_until.is_some_and(|t| t > std::time::Instant::now()) { 100 } else { 400 };
+                if last_processed_media.elapsed().as_millis() >= media_poll_ms || MEDIA_REFRESH.swap(false, Ordering::Relaxed) {
                     last_processed_media = std::time::Instant::now();
                     let mut best_info: Option<MediaInfo> = None;
                     if let Some(ref mgr) = manager {
@@ -964,9 +968,11 @@ pub fn setup_system_worker(app_handle: AppHandle) -> Sender<SystemCommand> {
                                 }
                             }
                             let selected = SELECTED_MEDIA_SOURCE.lock().ok().and_then(|g| g.clone());
+                            let prev_active = ACTIVE_MEDIA_SOURCE.lock().ok().map(|g| g.clone()).unwrap_or_default();
                             let chosen_i = selected
                                 .and_then(|id| entries.iter().find(|e| e.1 == id).map(|e| e.0))
                                 .or_else(|| entries.iter().find(|e| e.3).map(|e| e.0))
+                                .or_else(|| entries.iter().find(|e| !prev_active.is_empty() && e.1 == prev_active).map(|e| e.0))
                                 .or_else(|| entries.first().map(|e| e.0));
                             let active_id = entries.iter().find(|e| Some(e.0) == chosen_i).map(|e| e.1.clone()).unwrap_or_default();
                             if let Ok(mut g) = ACTIVE_MEDIA_SOURCE.lock() { *g = active_id.clone(); }
@@ -1061,8 +1067,8 @@ pub fn setup_system_worker(app_handle: AppHandle) -> Sender<SystemCommand> {
                     }
                     let current = best_info.unwrap_or(MediaInfo { title: "".into(), artist: "".into(), is_playing: false, has_media: false, artwork: None, position_ms: 0, duration_ms: 0, seek_enabled: false, position_updated_at: 0, source_id: String::new() });
                     let art_str = current.artwork.as_ref().and_then(|a| a.first()).cloned();
-                    if last_emitted_info.as_ref().is_none_or(|(t, a, p, h, art, pos, _dur)| {
-                        t != &current.title || a != &current.artist || p != &current.is_playing || h != &current.has_media || art != &art_str ||
+                    if last_emitted_info.as_ref().is_none_or(|(t, a, p, h, art, pos, dur)| {
+                        t != &current.title || a != &current.artist || p != &current.is_playing || h != &current.has_media || art != &art_str || dur != &current.duration_ms ||
                         // For position: emit if >1s difference (avoid spamming on every poll)
                         (*pos - current.position_ms).abs() > 1000
                     }) {

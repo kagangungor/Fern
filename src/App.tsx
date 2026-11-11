@@ -24,6 +24,9 @@ import { playAgentSound } from "./agentSounds";
 import { AgentLeft, AgentDot, AgentPanel, type AgentActivity } from "./components/AgentStatus";
 import { PlayIcon, PauseIcon, SkipBackIcon, SkipForwardIcon, VolumeLowIcon, VolumeHighIcon, MusicNoteIcon } from "./icons";
 import { CompactMediaPlayer } from "./CompactMediaPlayer";
+import { SyncedLyricsView } from "./components/SyncedLyricsView";
+import { useLyrics } from "./hooks/useLyrics";
+import { useMediaPosition } from "./hooks/useMediaPosition";
 import { useWeather } from "./hooks/useWeather";
 import { useSettingsSync } from "./hooks/useSettingsSync";
 import { useTrailingThrottle } from "./hooks/useTrailingThrottle";
@@ -48,7 +51,7 @@ import {
   zoneOffsetLabel,
 } from "./dualClock";
 import {
-  CalendarDays,
+  Mic2,
   Cpu,
   MemoryStick,
   HardDrive,
@@ -963,6 +966,19 @@ function App() {
   // Weather hook
   const { temperature, weatherCondition, weatherIcon: WeatherIcon, cityName, tempUnit } = useWeather(settingsWeatherEnabled);
 
+  // Lyrics and live playback timing hooks (shared across compact and classic layouts)
+  const { lyrics, lyricsLoading } = useLyrics(
+    mediaInfo.title,
+    mediaInfo.artist,
+    mediaInfo.duration_ms,
+    isLyricsOpen && mediaInfo.has_media && settingsMusicModeEnabled && fernMode === 'music',
+    settingsLyricsEnabled
+  );
+  const {
+    displayPosition: classicDisplayPosition,
+    handleSeekToMs: handleClassicLyricsSeek,
+  } = useMediaPosition(mediaInfo, isPlaying);
+
   const refreshNotchMode = () => {
     invoke<string>('get_notch_mode_for_window').then(setNotchMode).catch(() => {});
   };
@@ -1734,12 +1750,6 @@ function App() {
     return () => { unlisten.then(fn => fn()); };
   }, []);
 
-  const [mediaSessions, setMediaSessions] = useState<{ id: string; name: string; title: string; is_playing: boolean; active: boolean }[]>([]);
-  useEffect(() => {
-    const unlisten = listen<typeof mediaSessions>("media-sessions", (event) => setMediaSessions(event.payload ?? []));
-    return () => { unlisten.then(fn => fn()); };
-  }, []);
-
   useEffect(() => {
     let clear: ReturnType<typeof setTimeout> | undefined;
     const unlisten = listen<AgentActivity | null>("agent-activity", (event) => {
@@ -1759,46 +1769,45 @@ function App() {
     };
   }, []);
 
+  const mediaInfoRef = useRef(mediaInfo);
+  mediaInfoRef.current = mediaInfo;
+
   // Native Windows Media Controls - Listen for updates from background worker
   useEffect(() => {
     const unlisten = listen<MediaInfo>("media-update", (event) => {
       const info = event.payload;
       if (!info) return;
 
-      setMediaInfo(prev => {
-        // Find if artwork changed by checking the first element
-        const prevArt = prev.artwork?.[0];
-        const nextArt = info.artwork?.[0];
-        const artChanged = prevArt !== nextArt;
+      const prev = mediaInfoRef.current;
+      const prevArt = prev.artwork?.[0];
+      const nextArt = info.artwork?.[0];
+      const artChanged = prevArt !== nextArt;
 
-        if (prev.title === info.title &&
-          prev.artist === info.artist &&
-          prev.is_playing === info.is_playing &&
-          prev.has_media === info.has_media &&
-          !artChanged &&
-          prev.position_ms === info.position_ms &&
-          prev.duration_ms === info.duration_ms) {
-          return prev;
+      if (
+        prev.title === info.title &&
+        prev.artist === info.artist &&
+        prev.is_playing === info.is_playing &&
+        prev.has_media === info.has_media &&
+        !artChanged &&
+        prev.position_ms === info.position_ms &&
+        prev.duration_ms === info.duration_ms
+      ) {
+        return;
+      }
+
+      mediaInfoRef.current = info;
+      setMediaInfo(info);
+      setIsPlaying(info.is_playing);
+
+      if (info.artwork && info.artwork.length > 0) {
+        const newArt = info.artwork[0];
+        if (prevArt !== newArt) {
+          setAlbumArtKey(k => k + 1);
+          setAlbumArtUrl(newArt);
         }
-
-        // Update playing state separately for the hook triggers
-        setIsPlaying(info.is_playing);
-
-        if (info.artwork && info.artwork.length > 0) {
-          const newArt = info.artwork[0];
-          setAlbumArtUrl(prev => {
-            if (prev !== newArt) {
-              setAlbumArtKey(k => k + 1);
-              return newArt;
-            }
-            return prev;
-          });
-        } else {
-          setAlbumArtUrl(null);
-        }
-
-        return info;
-      });
+      } else {
+        setAlbumArtUrl(null);
+      }
     });
 
     return () => {
@@ -2166,7 +2175,9 @@ function App() {
       return Math.min(200 + totalWidgets * 65 + netExtra + privacyExtra, 500) + dualClockExtra;
     }
     if (isMusicMode && isHovered) {
-      const baseW = mediaLayout === 'compact' ? (isLyricsOpen && settingsLyricsEnabled ? 380 : 300) : 340;
+      const baseW = mediaLayout === 'compact'
+        ? (isLyricsOpen && settingsLyricsEnabled ? 380 : 300)
+        : (isLyricsOpen && settingsLyricsEnabled ? 380 : 340);
       return baseW + privacyExtra;
     }
     if ((showPowerPulse || showLowBatteryPulse || showUpdatePulse) && !isHovered) return 200;
@@ -2208,11 +2219,13 @@ function App() {
     if (isMusicMode && isHovered) {
       const hasProgressBar = (mediaInfo.duration_ms ?? 0) > 0;
       let h = mediaLayout === 'compact' ? (hasProgressBar ? 132 : 116) : 120;
-      if (mediaLayout === 'compact') {
-        if (compactVolumeExpanded) h += 36;
-        if (isLyricsOpen && settingsLyricsEnabled) h += 122;
+      if (mediaLayout === 'compact' && compactVolumeExpanded) {
+        h += 36;
       }
-      return h + (mediaSessions.length > 1 ? 26 : 0);
+      if (isLyricsOpen && settingsLyricsEnabled) {
+        h += 122;
+      }
+      return h;
     }
     return 36;
   };
@@ -2323,23 +2336,6 @@ function App() {
 
         {widgetTip && isHovered && <div className="widget-tip">{widgetTip}</div>}
 
-        {isMusicMode && isHovered && mediaSessions.length > 1 && (
-          <div className="media-session-strip" onClick={(e) => e.stopPropagation()}>
-            {mediaSessions.map((s) => (
-              <button
-                key={s.id}
-                className={`media-session-chip${s.active ? ' active' : ''}`}
-                title={s.title}
-                onClick={() => invoke('select_media_session', { id: s.id }).catch(() => { })}
-              >
-                {s.is_playing && <span className="media-session-dot" />}
-                {s.name}
-              </button>
-            ))}
-          </div>
-        )}
-
-
         <AnimatePresence>
           {isMusicMode && settingsAmbienceEnabled && albumArtUrl && isHovered && !isCalendarMode && (
             <motion.div
@@ -2387,7 +2383,6 @@ function App() {
                   >
                     {mediaLayout === 'compact' ? (
                       <CompactMediaPlayer
-                        sessions={mediaSessions}
                         mediaInfo={mediaInfo}
                         albumArtUrl={albumArtUrl}
                         albumArtKey={albumArtKey}
@@ -2403,7 +2398,9 @@ function App() {
                         nextBack={nextBack}
                         onAnimatePrev={animatePrev}
                         onAnimateNext={animateNext}
-                        onOpenCalendar={productivityEnabled ? toggleCalendarMode : undefined}
+                        lyrics={lyrics}
+                        lyricsLoading={lyricsLoading}
+                        lyricsEnabled={settingsLyricsEnabled}
                         isLyricsOpen={isLyricsOpen && settingsLyricsEnabled}
                         onLyricsToggle={(open) => {
                           setIsLyricsOpen(open);
@@ -2417,143 +2414,174 @@ function App() {
                         }}
                       />
                     ) : (
-                    <div className="compact-premium-layout">
-                      <div className="album-art-section">
-                        <motion.div
-                          className="premium-album-art"
-                          whileHover={{ scale: 1.05 }}
-                          whileTap={{ scale: 0.95 }}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setMediaLayout('compact');
-                            localStorage.setItem("fern-media-layout", "compact");
-                            window.dispatchEvent(new CustomEvent("settings-changed", { detail: { key: "media-layout", value: "compact" } }));
-                          }}
-                          style={{ cursor: 'pointer' }}
-                        >
-                          <AnimatePresence mode="wait" initial={false}>
-                            {albumArtUrl ? (
-                              <motion.img
-                                key={`art-${albumArtKey}`}
-                                src={albumArtUrl}
-                                alt={t("media.art")}
-                                initial={{ rotateY: 90, opacity: 0 }}
-                                animate={{ rotateY: 0, opacity: 1 }}
-                                exit={{ rotateY: -90, opacity: 0 }}
-                                transition={{ duration: 0.3, ease: "easeInOut" }}
-                                style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-                              />
-                            ) : (
-                              <motion.div
-                                key="placeholder"
-                                className="art-placeholder-mini"
-                                initial={{ rotateY: 90, opacity: 0 }}
-                                animate={{ rotateY: 0, opacity: 1 }}
-                                exit={{ rotateY: -90, opacity: 0 }}
-                                transition={{ duration: 0.3, ease: "easeInOut" }}
-                              >
-                                <MusicNoteIcon size={32} className="music-placeholder-svg" />
-                              </motion.div>
-                            )}
-                          </AnimatePresence>
-                        </motion.div>
-                      </div>
-
-                      <div className="metadata-controls-section-middle">
-                        <div className="track-header-row">
-                          <div className="track-info-middle">
-                            <TitleMarquee title={mediaInfo.title} />
-                            <span className="premium-artist">{mediaInfo.artist}</span>
-                          </div>
-                          <div className="header-visualizer-wrap">
-                            {productivityEnabled && (
-                              <button className="music-calendar-btn" onClick={toggleCalendarMode} {...tip(t("music.openCalendar"))} aria-label={t("music.openCalendar")}>
-                                <CalendarDays size={16} strokeWidth={1.75} />
-                              </button>
-                            )}
-                            <div className="header-visualizer">
-                              <Visualizer isPlaying={isPlaying} bars={5} height={18} />
-                            </div>
-                          </div>
-                        </div>
-
-                        <div className="controls-row-sleek">
-                          <motion.button
-                            className="sleek-btn previous-btn"
-                            onClick={(e) => { e.stopPropagation(); animatePrev(); }}
-                            whileHover={{ scale: 1.2 }}
-                            whileTap={{ scale: 0.9 }}
-                            transition={{ type: "spring", stiffness: 400, damping: 25 }}
-                          >
-                            <div style={{ position: 'relative', width: 32, height: 16, overflow: 'hidden' }}>
-                              <motion.div animate={prevBack} style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                                <SkipBackIcon size={32} />
-                              </motion.div>
-                              <motion.div animate={prevFront} style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                                <SkipBackIcon size={32} />
-                              </motion.div>
-                            </div>
-                          </motion.button>
-
-                          <motion.button
-                            className="sleek-btn play-pause-btn-floating"
-                            onClick={(e) => { e.stopPropagation(); togglePlayPause(); }}
-                            whileHover={{ scale: 1.2 }}
+                    <div className="classic-player-wrap">
+                      <div className="compact-premium-layout">
+                        <div className="album-art-section">
+                          <motion.div
+                            className="premium-album-art"
+                            whileHover={{ scale: 1.05 }}
                             whileTap={{ scale: 0.95 }}
-                            transition={{ type: "spring", stiffness: 400, damping: 25 }}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setMediaLayout('compact');
+                              localStorage.setItem("fern-media-layout", "compact");
+                              window.dispatchEvent(new CustomEvent("settings-changed", { detail: { key: "media-layout", value: "compact" } }));
+                            }}
+                            style={{ cursor: 'pointer' }}
                           >
                             <AnimatePresence mode="wait" initial={false}>
-                              <motion.div
-                                key={isPlaying ? "pause" : "play"}
-                                initial={{ opacity: 0, scale: 0.8 }}
-                                animate={{ opacity: 1, scale: 1 }}
-                                exit={{ opacity: 0, scale: 0.8 }}
-                                transition={{ duration: 0.15 }}
-                                style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-                              >
-                                {isPlaying ? <PauseIcon size={26} /> : <PlayIcon size={26} />}
-                              </motion.div>
+                              {albumArtUrl ? (
+                                <motion.img
+                                  key={`art-${albumArtKey}`}
+                                  src={albumArtUrl}
+                                  alt={t("media.art")}
+                                  initial={{ rotateY: 90, opacity: 0 }}
+                                  animate={{ rotateY: 0, opacity: 1 }}
+                                  exit={{ rotateY: -90, opacity: 0 }}
+                                  transition={{ duration: 0.3, ease: "easeInOut" }}
+                                  style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                                />
+                              ) : (
+                                <motion.div
+                                  key="placeholder"
+                                  className="art-placeholder-mini"
+                                  initial={{ rotateY: 90, opacity: 0 }}
+                                  animate={{ rotateY: 0, opacity: 1 }}
+                                  exit={{ rotateY: -90, opacity: 0 }}
+                                  transition={{ duration: 0.3, ease: "easeInOut" }}
+                                >
+                                  <MusicNoteIcon size={32} className="music-placeholder-svg" />
+                                </motion.div>
+                              )}
                             </AnimatePresence>
-                          </motion.button>
-
-                          <motion.button
-                            className="sleek-btn next-btn"
-                            onClick={(e) => { e.stopPropagation(); animateNext(); }}
-                            whileHover={{ scale: 1.2 }}
-                            whileTap={{ scale: 0.9 }}
-                            transition={{ type: "spring", stiffness: 400, damping: 25 }}
-                          >
-                            <div style={{ position: 'relative', width: 32, height: 16, overflow: 'hidden' }}>
-                              <motion.div animate={nextBack} style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                                <SkipForwardIcon size={32} />
-                              </motion.div>
-                              <motion.div animate={nextFront} style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                                <SkipForwardIcon size={32} />
-                              </motion.div>
-                            </div>
-                          </motion.button>
+                          </motion.div>
                         </div>
 
-                        <div className="volume-slider-container" onWheel={handleVolumeWheel}>
-                          <button className="volume-end-btn" onClick={(e) => { e.stopPropagation(); handleVolumeChange(0); }} onPointerDown={(e) => e.stopPropagation()} aria-label={t("cc.volume")}><VolumeLowIcon size={14} style={{ opacity: 0.65 }} /></button>
-                          <div className="slider-track-premium">
-                            <input
-                              type="range"
-                              min="0"
-                              max="1"
-                              step="0.01"
-                              value={displayVolume}
-                              onChange={(e) => handleVolumeChange(parseFloat(e.target.value))}
-                              onPointerDown={(e) => e.stopPropagation()}
-                              onClick={(e) => e.stopPropagation()}
-                              className="premium-slider"
-                            />
-                            <div className="slider-progress-fill" style={{ width: `${displayVolume * 100}%` }} />
+                        <div className="metadata-controls-section-middle">
+                          <div className="track-header-row">
+                            <div className="track-info-middle">
+                              <TitleMarquee title={mediaInfo.title} />
+                              <span className="premium-artist">{mediaInfo.artist}</span>
+                            </div>
+                            <div className="header-visualizer-wrap">
+                              {settingsLyricsEnabled && (
+                                <button
+                                  className={`music-calendar-btn music-lyrics-btn${isLyricsOpen ? ' active' : ''}`}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    const next = !isLyricsOpen;
+                                    setIsLyricsOpen(next);
+                                    localStorage.setItem("fern-notch-lyrics-open", String(next));
+                                  }}
+                                  title={t("media.lyrics")}
+                                  aria-label={t("media.lyrics")}
+                                >
+                                  <Mic2 size={15} strokeWidth={1.8} />
+                                </button>
+                              )}
+                              <div className="header-visualizer">
+                                <Visualizer isPlaying={isPlaying} bars={5} height={18} />
+                              </div>
+                            </div>
                           </div>
-                          <button className="volume-end-btn" onClick={(e) => { e.stopPropagation(); handleVolumeChange(1); }} onPointerDown={(e) => e.stopPropagation()} aria-label={t("cc.volume")}><VolumeHighIcon size={16} style={{ opacity: 0.65 }} /></button>
+
+                          <div className="controls-row-sleek">
+                            <motion.button
+                              className="sleek-btn previous-btn"
+                              onClick={(e) => { e.stopPropagation(); animatePrev(); }}
+                              whileHover={{ scale: 1.2 }}
+                              whileTap={{ scale: 0.9 }}
+                              transition={{ type: "spring", stiffness: 400, damping: 25 }}
+                            >
+                              <div style={{ position: 'relative', width: 32, height: 16, overflow: 'hidden' }}>
+                                <motion.div animate={prevBack} style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                  <SkipBackIcon size={32} />
+                                </motion.div>
+                                <motion.div animate={prevFront} style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                  <SkipBackIcon size={32} />
+                                </motion.div>
+                              </div>
+                            </motion.button>
+
+                            <motion.button
+                              className="sleek-btn play-pause-btn-floating"
+                              onClick={(e) => { e.stopPropagation(); togglePlayPause(); }}
+                              whileHover={{ scale: 1.2 }}
+                              whileTap={{ scale: 0.95 }}
+                              transition={{ type: "spring", stiffness: 400, damping: 25 }}
+                            >
+                              <AnimatePresence mode="wait" initial={false}>
+                                <motion.div
+                                  key={isPlaying ? "pause" : "play"}
+                                  initial={{ opacity: 0, scale: 0.8 }}
+                                  animate={{ opacity: 1, scale: 1 }}
+                                  exit={{ opacity: 0, scale: 0.8 }}
+                                  transition={{ duration: 0.15 }}
+                                  style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                                >
+                                  {isPlaying ? <PauseIcon size={26} /> : <PlayIcon size={26} />}
+                                </motion.div>
+                              </AnimatePresence>
+                            </motion.button>
+
+                            <motion.button
+                              className="sleek-btn next-btn"
+                              onClick={(e) => { e.stopPropagation(); animateNext(); }}
+                              whileHover={{ scale: 1.2 }}
+                              whileTap={{ scale: 0.9 }}
+                              transition={{ type: "spring", stiffness: 400, damping: 25 }}
+                            >
+                              <div style={{ position: 'relative', width: 32, height: 16, overflow: 'hidden' }}>
+                                <motion.div animate={nextBack} style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                  <SkipForwardIcon size={32} />
+                                </motion.div>
+                                <motion.div animate={nextFront} style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                  <SkipForwardIcon size={32} />
+                                </motion.div>
+                              </div>
+                            </motion.button>
+                          </div>
+
+                          <div className="volume-slider-container" onWheel={handleVolumeWheel}>
+                            <button className="volume-end-btn" onClick={(e) => { e.stopPropagation(); handleVolumeChange(0); }} onPointerDown={(e) => e.stopPropagation()} aria-label={t("cc.volume")}><VolumeLowIcon size={14} style={{ opacity: 0.65 }} /></button>
+                            <div className="slider-track-premium">
+                              <input
+                                type="range"
+                                min="0"
+                                max="1"
+                                step="0.01"
+                                value={displayVolume}
+                                onChange={(e) => handleVolumeChange(parseFloat(e.target.value))}
+                                onPointerDown={(e) => e.stopPropagation()}
+                                onClick={(e) => e.stopPropagation()}
+                                className="premium-slider"
+                              />
+                              <div className="slider-progress-fill" style={{ width: `${displayVolume * 100}%` }} />
+                            </div>
+                            <button className="volume-end-btn" onClick={(e) => { e.stopPropagation(); handleVolumeChange(1); }} onPointerDown={(e) => e.stopPropagation()} aria-label={t("cc.volume")}><VolumeHighIcon size={16} style={{ opacity: 0.65 }} /></button>
+                          </div>
                         </div>
                       </div>
 
+                      <AnimatePresence>
+                        {isLyricsOpen && settingsLyricsEnabled && (
+                          <motion.div
+                            className="cmp-lyrics-drawer"
+                            initial={{ height: 0, opacity: 0 }}
+                            animate={{ height: 118, opacity: 1 }}
+                            exit={{ height: 0, opacity: 0 }}
+                            transition={{ type: "spring", stiffness: 450, damping: 30 }}
+                          >
+                            <SyncedLyricsView
+                              lyrics={lyrics}
+                              loading={lyricsLoading}
+                              currentTimeMs={classicDisplayPosition}
+                              onSeek={handleClassicLyricsSeek}
+                              canSeek={settingsLyricsSeekEnabled}
+                            />
+                          </motion.div>
+                        )}
+                      </AnimatePresence>
                     </div>
                     )}
                   </motion.div>

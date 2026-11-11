@@ -1,6 +1,6 @@
 [package]
 name = "fern-installer"
-version = "1.4.0"
+version = "1.4.1"
 description = "Fern installer"
 authors = ["Kağan Güngör"]
 edition = "2021"
