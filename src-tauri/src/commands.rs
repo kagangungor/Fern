@@ -879,17 +879,19 @@ pub async fn get_active_windows() -> Vec<AppInfo> {
             };
 
             if let Some(existing) = grouped.get_mut(&key) {
+                let items_to_add = app.all_hwnds.unwrap_or_else(|| vec![(app.hwnd.unwrap_or(0), app.name.clone())]);
                 if let Some(ref mut hwnds) = existing.all_hwnds {
-                    hwnds.push((app.hwnd.unwrap_or(0), app.name.clone()));
+                    hwnds.extend(items_to_add);
                 } else {
-                    existing.all_hwnds = Some(vec![
-                        (existing.hwnd.unwrap_or(0), existing.name.clone()),
-                        (app.hwnd.unwrap_or(0), app.name.clone())
-                    ]);
+                    let mut list = vec![(existing.hwnd.unwrap_or(0), existing.name.clone())];
+                    list.extend(items_to_add);
+                    existing.all_hwnds = Some(list);
                 }
             } else {
                 let mut new_app = app.clone();
-                new_app.all_hwnds = Some(vec![(app.hwnd.unwrap_or(0), app.name.clone())]);
+                if new_app.all_hwnds.is_none() {
+                    new_app.all_hwnds = Some(vec![(app.hwnd.unwrap_or(0), app.name.clone())]);
+                }
                 grouped.insert(key, new_app);
             }
         }
@@ -1592,6 +1594,27 @@ pub async fn get_app_icon(app: AppHandle, path: String, name: Option<String>, hw
             use base64::Engine;
             let b64 = base64::engine::general_purpose::STANDARD.encode(&data);
             return Ok(Some(format!("data:image/png;base64,{}", b64)));
+        }
+    }
+
+    // Java programs share one javaw.exe, so the exe icon is the same for all of them. Use the window's own icon.
+    if let Some(h) = hwnd {
+        let path_lc = path.to_lowercase();
+        if path_lc.ends_with("\\javaw.exe") || path_lc.ends_with("\\java.exe") {
+            let icon = tauri::async_runtime::spawn_blocking(move || unsafe {
+                use windows::Win32::UI::WindowsAndMessaging::{GetClassLongPtrW, GCLP_HICON, WM_GETICON, ICON_BIG, SendMessageTimeoutW, SMTO_ABORTIFHUNG};
+                let h_hwnd = HWND(h as *mut _);
+                let mut res = 0usize;
+                let _ = SendMessageTimeoutW(h_hwnd, WM_GETICON, windows::Win32::Foundation::WPARAM(ICON_BIG as usize), windows::Win32::Foundation::LPARAM(0), SMTO_ABORTIFHUNG, 250, Some(&mut res));
+                let mut h_icon = windows::Win32::UI::WindowsAndMessaging::HICON(res as *mut _);
+                if h_icon.is_invalid() {
+                    h_icon = windows::Win32::UI::WindowsAndMessaging::HICON(GetClassLongPtrW(h_hwnd, GCLP_HICON) as *mut _);
+                }
+                if h_icon.is_invalid() { None } else { icon_to_base64(h_icon) }
+            }).await.unwrap_or(None);
+            if let Some(icon) = icon {
+                return Ok(Some(icon));
+            }
         }
     }
 
@@ -3390,6 +3413,9 @@ pub fn set_brightness(app: AppHandle, brightness: u32) {
     let val = brightness.min(100);
     crate::state::CURRENT_BRIGHTNESS.store(val, Ordering::Relaxed);
     crate::state::LAST_BRIGHTNESS_CHANGE.store(crate::utils::get_now_ms(), Ordering::Relaxed);
+    if let Ok(dir) = app.path().app_config_dir() {
+        let _ = std::fs::write(dir.join("last_brightness.txt"), val.to_string());
+    }
     let _ = app.emit("brightness-change", BrightnessChangeEvent { brightness: val });
     if let Some(tx) = crate::state::BRIGHTNESS_SENDER.get() {
         let _ = tx.send(val);
@@ -4336,12 +4362,16 @@ pub async fn agent_sound_custom() -> Vec<String> {
 // Windows Accent
 #[tauri::command]
 pub async fn sync_windows_accent(app: tauri::AppHandle, hex: String) -> Result<(), String> {
-    crate::windows_accent::sync(&app, &hex)
+    tauri::async_runtime::spawn_blocking(move || crate::windows_accent::sync(&app, &hex))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
 pub async fn restore_windows_accent(app: tauri::AppHandle) -> Result<(), String> {
-    crate::windows_accent::restore(&app)
+    tauri::async_runtime::spawn_blocking(move || crate::windows_accent::restore(&app))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -4377,8 +4407,44 @@ pub fn clear_live_thumbnails() -> Result<(), String> {
 }
 
 #[tauri::command]
+pub fn set_live_thumbnails_opacity(opacity: u8) -> Result<(), String> {
+    crate::live_preview::set_opacity(opacity)
+}
+
+#[tauri::command]
 pub fn is_dwm_composition_enabled() -> Result<bool, String> {
     Ok(crate::live_preview::is_composition_enabled())
+}
+
+#[tauri::command]
+pub async fn pick_program(app: AppHandle) -> Result<Option<(String, String)>, String> {
+    let Some(path) = app
+        .dialog()
+        .file()
+        .set_title("Choose a program")
+        .add_filter("Programs", &["exe", "lnk", "bat", "cmd", "url"])
+        .blocking_pick_file()
+    else {
+        return Ok(None);
+    };
+    let path = path.into_path().map_err(|e| e.to_string())?;
+    let name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("App").to_string();
+    Ok(Some((name, path.to_string_lossy().into_owned())))
+}
+
+#[tauri::command]
+pub async fn close_app(hwnd: isize, all_hwnds: Option<Vec<isize>>) {
+    use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_CLOSE};
+    tauri::async_runtime::spawn_blocking(move || unsafe {
+        let mut handles = vec![hwnd];
+        handles.extend(all_hwnds.unwrap_or_default());
+        for h in handles {
+            let win = HWND(h as *mut _);
+            if windows::Win32::UI::WindowsAndMessaging::IsWindow(Some(win)).as_bool() {
+                let _ = PostMessageW(Some(win), WM_CLOSE, windows::Win32::Foundation::WPARAM(0), windows::Win32::Foundation::LPARAM(0));
+            }
+        }
+    }).await.unwrap_or(());
 }
 
 // Per-App Audio Scroll Mixer
@@ -4401,4 +4467,15 @@ pub fn adjust_target_app_volume(target: String, delta: f32, pids: Option<Vec<u32
 pub fn toggle_target_app_mute(target: String, pids: Option<Vec<u32>>) -> Result<crate::app_audio::AppVolumeState, String> {
     crate::app_audio::toggle_app_mute(&target, pids.as_deref())
 }
+
+#[tauri::command]
+pub async fn get_lyrics(
+    app: AppHandle,
+    title: String,
+    artist: String,
+    duration_ms: Option<u64>,
+) -> Result<Option<crate::lyrics::LyricsPayload>, String> {
+    crate::lyrics::fetch_lyrics(&app, &title, &artist, duration_ms).await
+}
+
 

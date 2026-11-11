@@ -144,8 +144,7 @@ body {
   gap: 12px;
   width: 100%;
   box-sizing: border-box;
-  padding: 6px 8px 2px;
-  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  padding: 4px 8px 2px;
 }
 
 .preview-media-info {
@@ -345,6 +344,7 @@ body {
   align-items: center;
   gap: 12px;
   overflow: visible;
+  flex-shrink: 0;
 }
 
 .dock-reorder-group {
@@ -352,6 +352,7 @@ body {
   flex-direction: row;
   align-items: center;
   gap: 12px;
+  flex-shrink: 0;
 }
 
 .dock-group-divider {
@@ -401,6 +402,7 @@ body {
   align-items: center;
   cursor: pointer;
   -webkit-app-region: no-drag;
+  flex-shrink: 0;
 }
 
 .dock-icon {
@@ -474,6 +476,28 @@ body {
   bottom: -4px;
   display: flex;
   gap: 3px;
+}
+
+
+.window-dots.dots {
+  gap: 3px;
+}
+
+
+.window-bar {
+  width: 14px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--fern-highlight, white);
+  box-shadow: 0 0 4px var(--fern-highlight, rgba(255, 255, 255, 0.6));
+}
+
+.window-dot {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--fern-highlight, white);
+  box-shadow: 0 0 4px var(--fern-highlight, rgba(255, 255, 255, 0.6));
 }
 
 .window-dots .active-indicator {
@@ -931,7 +955,7 @@ body {
   position: fixed;
   bottom: 80px;
   left: 50%;
-  transform: translateX(-50%);
+  transform: translateX(-50%) !important;
   background: rgba(40, 40, 40, 0.95);
   backdrop-filter: blur(20px);
   border: 1px solid rgba(255, 255, 255, 0.1);
@@ -1083,7 +1107,7 @@ body {
   position: absolute;
   bottom: calc(100% + 12px);
   left: 50%;
-  transform: translateX(-50%) !important;
+  transform: translateX(calc(-50% + var(--pv-shift, 0px))) !important;
   background: rgba(18, 18, 22, 0.88);
   backdrop-filter: blur(24px) saturate(1.4);
   -webkit-backdrop-filter: blur(24px) saturate(1.4);
@@ -1143,4 +1167,20 @@ body {
 
 .dock-app-volume-hud-fill.muted {
   background: rgba(239, 68, 68, 0.85);
+}
+
+
+.popup-browse-row {
+  padding: 10px 14px;
+  text-align: center;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  color: var(--fern-text-muted, rgba(255, 255, 255, 0.55));
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.popup-browse-row:hover {
+  color: var(--fern-text, #fff);
+  background: rgba(255, 255, 255, 0.06);
 }

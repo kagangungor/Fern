@@ -1537,9 +1537,24 @@ img {
     transition: opacity 0.15s ease, background 0.15s ease;
 }
 
-.music-calendar-btn:hover {
+.music-calendar-btn:hover,
+.music-lyrics-btn:hover {
     opacity: 1;
     background: rgba(255, 255, 255, 0.15);
+}
+
+.music-calendar-btn.active,
+.music-lyrics-btn.active {
+    opacity: 1;
+    background: rgba(255, 255, 255, 0.22);
+    color: var(--fern-highlight, #ffffff);
+}
+
+.cmp-lyrics-drawer {
+    width: 100%;
+    overflow: hidden;
+    margin-top: 4px;
+    margin-bottom: 2px;
 }
 
 .calendar-timer-content {

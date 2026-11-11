@@ -5,7 +5,8 @@ import { Visualizer } from './App';
 import { useT } from './i18n';
 import { MediaSourceButton, type MediaSession } from './components/MediaSourceButton';
 import { PlayIcon, PauseIcon, SkipBackIcon, SkipForwardIcon, MusicNoteIcon, SpeakerIcon, AudioOutputIcon, VolumeLowIcon, VolumeHighIcon } from './icons';
-import { CalendarDays } from 'lucide-react';
+import { CalendarDays, Mic2 } from 'lucide-react';
+import { SyncedLyricsView, type LyricsPayload } from './components/SyncedLyricsView';
 
 interface MediaInfo {
   title: string;
@@ -38,6 +39,9 @@ interface CompactMediaPlayerProps {
   onAnimateNext: () => void;
   onLayoutChange: (layout: 'classic' | 'compact') => void;
   onOpenCalendar?: (e: React.MouseEvent) => void;
+  isLyricsOpen?: boolean;
+  onLyricsToggle?: (open: boolean) => void;
+  canSeekLyrics?: boolean;
 }
 
 const MARQUEE_SPEED = 30;
@@ -121,8 +125,40 @@ export function CompactMediaPlayer({
   onAnimateNext,
   onLayoutChange,
   onOpenCalendar,
+  isLyricsOpen = false,
+  onLyricsToggle,
+  canSeekLyrics = true,
 }: CompactMediaPlayerProps) {
   const t = useT();
+
+  const lyricsSettingEnabled = localStorage.getItem("fern-lyrics-enabled") !== "false";
+  const [lyrics, setLyrics] = useState<LyricsPayload | null>(null);
+  const [lyricsLoading, setLyricsLoading] = useState(false);
+  const lastTrackKeyRef = useRef<string>("");
+
+  useEffect(() => {
+    if (!isLyricsOpen || !mediaInfo.title) return;
+    const key = `${mediaInfo.artist}|${mediaInfo.title}`;
+    if (lastTrackKeyRef.current === key) return;
+    lastTrackKeyRef.current = key;
+
+    setLyricsLoading(true);
+    invoke<LyricsPayload | null>('get_lyrics', {
+      title: mediaInfo.title,
+      artist: mediaInfo.artist || null,
+      durationMs: mediaInfo.duration_ms ? Math.round(mediaInfo.duration_ms) : null,
+    })
+      .then((res) => {
+        setLyrics(res);
+      })
+      .catch((err) => {
+        console.warn('[lyrics] fetch failed:', err);
+        setLyrics(null);
+      })
+      .finally(() => {
+        setLyricsLoading(false);
+      });
+  }, [isLyricsOpen, mediaInfo.title, mediaInfo.artist, mediaInfo.duration_ms]);
 
   const scrollVolume = (e: React.WheelEvent) => {
     if (localStorage.getItem("fern-notch-scroll-volume") !== "true") return;
@@ -188,6 +224,13 @@ export function CompactMediaPlayer({
     invoke('media_seek', { positionMs: seekPos }).catch(() => {});
   }, [displayPosition]);
 
+  const handleSeekToMs = useCallback((seekPos: number) => {
+    setDisplayPosition(seekPos);
+    backendPosRef.current = seekPos;
+    backendTimeRef.current = Date.now();
+    invoke('media_seek', { positionMs: seekPos }).catch(() => {});
+  }, []);
+
   const progressPercent = durationMs > 0 ? (displayPosition / durationMs) * 100 : 0;
 
   return (
@@ -231,10 +274,44 @@ export function CompactMediaPlayer({
             <CalendarDays size={16} strokeWidth={1.75} />
           </button>
         )}
+        {lyricsSettingEnabled && onLyricsToggle && (
+          <button
+            className={`music-calendar-btn music-lyrics-btn${isLyricsOpen ? ' active' : ''}`}
+            onClick={(e) => {
+              e.stopPropagation();
+              onLyricsToggle(!isLyricsOpen);
+            }}
+            title={t("media.lyrics")}
+            aria-label={t("media.lyrics")}
+          >
+            <Mic2 size={15} strokeWidth={1.8} />
+          </button>
+        )}
         <div className="cmp-visualizer">
           <Visualizer isPlaying={isPlaying} bars={5} height={16} />
         </div>
       </div>
+
+      {/* Synced Lyrics Drawer */}
+      <AnimatePresence>
+        {isLyricsOpen && (
+          <motion.div
+            className="cmp-lyrics-drawer"
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 118, opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ type: "spring", stiffness: 450, damping: 30 }}
+          >
+            <SyncedLyricsView
+              lyrics={lyrics}
+              loading={lyricsLoading}
+              currentTimeMs={displayPosition}
+              onSeek={handleSeekToMs}
+              canSeek={canSeekLyrics}
+            />
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Row 2: Progress bar */}
       {durationMs > 0 && (

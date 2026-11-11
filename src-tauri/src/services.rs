@@ -280,6 +280,7 @@ pub fn setup_window_change_hook(app_handle: AppHandle) {
 
         // Store hooks to prevent them from being dropped
         Box::leak(Box::new(_create_hook));
+        Box::leak(Box::new(_destroy_hook));
     }
 }
 
@@ -294,42 +295,49 @@ unsafe extern "system" fn window_change_event_proc(
 ) {
     if hwnd.0.is_null() { return; }
 
+    // Only process window-level events (OBJID_WINDOW = 0, CHILDID_SELF = 0).
+    // Child controls, carets, scrollbars and menus must NOT trigger dock rescans.
+    if id_object != 0 || id_child != 0 { return; }
+
     // A top-level window appeared/disappeared (or focus moved): capture UI
     // state may have changed. Cheap flag; the worker thread does the scan.
     {
         use windows::Win32::UI::WindowsAndMessaging::{EVENT_OBJECT_SHOW, EVENT_OBJECT_HIDE, EVENT_OBJECT_DESTROY};
-        if id_object == 0 && id_child == 0
-            && (event == EVENT_OBJECT_SHOW || event == EVENT_OBJECT_HIDE || event == EVENT_OBJECT_DESTROY)
-        {
+        if event == EVENT_OBJECT_SHOW || event == EVENT_OBJECT_HIDE || event == EVENT_OBJECT_DESTROY {
             CAPTURE_RECHECK.store(true, Ordering::Relaxed);
         }
     }
 
     use windows::Win32::UI::WindowsAndMessaging::{
         IsWindow, GetWindowLongW, GWL_EXSTYLE, WS_EX_TOOLWINDOW,
-        GetWindowThreadProcessId,
+        GetWindowThreadProcessId, EVENT_OBJECT_DESTROY,
     };
 
-    if !IsWindow(Some(hwnd)).as_bool() { return; }
+    // For non-destroy events, verify the window is valid and not a tool window or our own process.
+    // When event == EVENT_OBJECT_DESTROY, the window is already destroyed so IsWindow returns false;
+    // we must not drop the destroy event.
+    if event != EVENT_OBJECT_DESTROY {
+        if !IsWindow(Some(hwnd)).as_bool() { return; }
 
-    // Skip tool windows (docks, trays, etc.)
-    let ex_style = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
-    if (ex_style & WS_EX_TOOLWINDOW.0) != 0 { return; }
+        // Skip tool windows (docks, trays, etc.)
+        let ex_style = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
+        if (ex_style & WS_EX_TOOLWINDOW.0) != 0 { return; }
 
-    // Skip our own process
-    let my_pid = std::process::id();
-    let mut pid = 0u32;
-    GetWindowThreadProcessId(hwnd, Some(&mut pid));
-    if pid == my_pid { return; }
+        // Skip our own process
+        let my_pid = std::process::id();
+        let mut pid = 0u32;
+        GetWindowThreadProcessId(hwnd, Some(&mut pid));
+        if pid == my_pid { return; }
+    }
 
-    // Debounce: closing a window (UWP especially) fires several events within ms.
-    // Only the newest scheduled emit runs, so the final state is always what gets sent.
+    // Debounce: 50ms groups rapid bursts (e.g. window creations/closing) while
+    // feeling instant to the user.
     let now = crate::utils::get_now_ms();
     LAST_WINDOW_CHANGE_MS.store(now, Ordering::Relaxed);
 
     if let Some(app_handle) = WINDOW_CHANGE_APP_HANDLE.get().cloned() {
         tauri::async_runtime::spawn(async move {
-            tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+            tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
             if LAST_WINDOW_CHANGE_MS.load(Ordering::Relaxed) == now {
                 let _ = app_handle.emit("windows-changed", ());
             }
@@ -1072,7 +1080,16 @@ pub fn setup_system_worker(app_handle: AppHandle) -> Sender<SystemCommand> {
     std::thread::spawn(move || {
         let com_lib = match COMLibrary::new() { Ok(lib) => lib, Err(_) => return };
         let wmi_con = match WMIConnection::with_namespace_path("root\\WMI", com_lib) { Ok(con) => con, Err(_) => return };
-        let mut last_brightness = match wmi_con.query::<WmiMonitorBrightness>() { Ok(res) => res.first().map(|b| b.current_brightness as u32).unwrap_or(50), Err(_) => 50 };
+        let first = wmi_con.query::<WmiMonitorBrightness>();
+        let supported = first.as_ref().map(|r| !r.is_empty()).unwrap_or(false);
+        let poll = if supported { 1500 } else { 30_000 };
+        let saved_brightness = if supported { None } else {
+            handle_brightness.path().app_config_dir().ok()
+                .and_then(|d| std::fs::read_to_string(d.join("last_brightness.txt")).ok())
+                .and_then(|t| t.trim().parse::<u32>().ok())
+                .map(|v| v.min(100))
+        };
+        let mut last_brightness = match first.ok().and_then(|res| res.first().map(|b| b.current_brightness as u32)) { Some(v) => v, None => saved_brightness.unwrap_or(50) };
         CURRENT_BRIGHTNESS.store(last_brightness, Ordering::Relaxed);
         loop {
             if get_now_ms() - LAST_BRIGHTNESS_CHANGE.load(Ordering::Relaxed) < 2000 { std::thread::sleep(std::time::Duration::from_millis(500)); continue; }
@@ -1082,7 +1099,7 @@ pub fn setup_system_worker(app_handle: AppHandle) -> Sender<SystemCommand> {
                     if brightness != last_brightness { last_brightness = brightness; CURRENT_BRIGHTNESS.store(brightness, Ordering::Relaxed); let _ = handle_brightness.emit("brightness-change", BrightnessChangeEvent { brightness }); }
                 }
             }
-            std::thread::sleep(crate::memory_saver::poll_interval(std::time::Duration::from_millis(1500)));
+            std::thread::sleep(crate::memory_saver::poll_interval(std::time::Duration::from_millis(poll)));
         }
     });
 
@@ -1776,9 +1793,17 @@ pub fn now_ms() -> i64 {
 /// the way even if the capture window isn't recognised as fullscreen.
 unsafe extern "system" fn capture_ui_enum_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
     use windows::Win32::UI::WindowsAndMessaging::IsIconic;
+    use windows::Win32::UI::WindowsAndMessaging::GetWindowRect;
     let found = &mut *(lparam.0 as *mut bool);
     if *found { return BOOL(0); }
     if !IsWindowVisible(hwnd).as_bool() || IsIconic(hwnd).as_bool() { return BOOL(1); }
+
+    let mut rect = windows::Win32::Foundation::RECT::default();
+    let covers_monitor = GetWindowRect(hwnd, &mut rect).is_ok()
+        && monitor_rect_for_hwnd(hwnd).is_some_and(|(_, _, mw, mh)| {
+            (rect.right - rect.left) * 10 >= mw * 9 && (rect.bottom - rect.top) * 10 >= mh * 9
+        });
+    if !covers_monitor { return BOOL(1); }
 
     let mut pid = 0u32;
     GetWindowThreadProcessId(hwnd, Some(&mut pid));
@@ -3247,7 +3272,12 @@ unsafe fn dialog_has_tab_control(hwnd: HWND) -> bool {
 // "Fern" is an ordinary word, so a window is only ours if our process owns it. Other apps' windows
 // with the same title, or a program of the same name, stay in the dock.
 fn hides_own_window(window_pid: u32, own_pid: u32, title: &str) -> bool {
-    window_pid == own_pid && title != "Settings"
+    if window_pid != own_pid {
+        return false;
+    }
+    let lower = title.to_lowercase();
+    let is_settings = lower.contains("settings") || lower.contains("ayarlar") || title == "Settings";
+    !is_settings
 }
 
 pub unsafe extern "system" fn enum_windows_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
@@ -3363,6 +3393,8 @@ pub unsafe extern "system" fn enum_windows_proc(hwnd: HWND, lparam: LPARAM) -> B
 
                     let final_name = if name.eq_ignore_ascii_case("conhost") && !title.is_empty() {
                         title.clone()
+                    } else if (name.eq_ignore_ascii_case("javaw") || name.eq_ignore_ascii_case("java")) && !title.is_empty() {
+                        title.clone()
                     } else if ((is_browser_host && (is_browser_pwa || window_aumid.is_none()))
                         || name == "ApplicationFrameHost"
                         || name == "SystemSettings")
@@ -3398,6 +3430,19 @@ pub unsafe extern "system" fn enum_windows_proc(hwnd: HWND, lparam: LPARAM) -> B
                         } else {
                             path
                         };
+                        let is_control_panel = window_class == "CabinetWClass"
+                            && lowercase_path.ends_with("\\explorer.exe")
+                            && crate::utils::get_window_app_user_model_id(hwnd)
+                                .map_or(false, |id| id.eq_ignore_ascii_case("Microsoft.Windows.ControlPanel"));
+                        let (final_name, path, exe_name) = if process_id == std::process::id() {
+                            ("Settings".to_string(), "fern-settings".to_string(), None)
+                        } else if is_control_panel {
+                            let control = format!(r"{}\System32\control.exe", std::env::var("WINDIR").unwrap_or_else(|_| r"C:\Windows".into()));
+                            ("Control Panel".to_string(), control, Some("control.exe".to_string()))
+                        } else {
+                            (final_name, path, exe_name)
+                        };
+                        let window_title = if title.trim().is_empty() { final_name.clone() } else { title.clone() };
                         apps.push(AppInfo {
                             name: final_name,
                             path,
@@ -3405,7 +3450,7 @@ pub unsafe extern "system" fn enum_windows_proc(hwnd: HWND, lparam: LPARAM) -> B
                             is_running: true,
                             hwnd: Some(hwnd.0 as isize),
                             executable: exe_name,
-                            all_hwnds: None,
+                            all_hwnds: Some(vec![(hwnd.0 as isize, window_title)]),
                             args: None,
                         });
                     }
@@ -3920,6 +3965,8 @@ mod tests {
         assert!(hides_own_window(10, 10, "fern"));
         assert!(hides_own_window(10, 10, "Fern Dock"));
         assert!(!hides_own_window(10, 10, "Settings"), "our Settings window shows in the dock");
+        assert!(!hides_own_window(10, 10, "Fern Settings"), "Fern Settings shows in the dock");
+        assert!(!hides_own_window(10, 10, "Ayarlar"), "Ayarlar shows in the dock");
         assert!(!hides_own_window(20, 10, "fern"), "another app's window with that title stays");
         assert!(!hides_own_window(20, 10, "Fern Dock"));
     }

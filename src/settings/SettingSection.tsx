@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useState, useEffect, type ReactNode } from "react";
 import { ChevronDown } from "lucide-react";
 
 type Props = {
@@ -20,6 +20,16 @@ export function SettingSection({ id, title, defaultOpen = false, children }: Pro
     }
   });
 
+  useEffect(() => {
+    const handleExpand = (e: CustomEvent<string>) => {
+      if (e.detail === id) {
+        setOpen(true);
+      }
+    };
+    window.addEventListener("fern-expand-section" as any, handleExpand);
+    return () => window.removeEventListener("fern-expand-section" as any, handleExpand);
+  }, [id]);
+
   const toggle = () => {
     setOpen((prev) => {
       try { localStorage.setItem(KEY + id, prev ? "0" : "1"); } catch { /* storage unavailable */ }
@@ -28,7 +38,7 @@ export function SettingSection({ id, title, defaultOpen = false, children }: Pro
   };
 
   return (
-    <div className={`setting-section${open ? "" : " collapsed"}`}>
+    <div id={id} className={`setting-section${open ? "" : " collapsed"}`}>
       <button className="setting-group-label setting-section-header" onClick={toggle} aria-expanded={open}>
         <span>{title}</span>
         <ChevronDown size={14} strokeWidth={1.75} className="setting-section-chevron" />

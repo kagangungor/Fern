@@ -164,7 +164,14 @@
     background-position: 0 0, 0 0, 0 0, var(--backdrop-x) var(--backdrop-y);
 }
 
-:root.has-backdrop.style-frosted :is(.fern, .dock) > .surface-fill {
+:root.has-backdrop.style-frosted .fern > .surface-fill {
+    background-image:
+        var(--surface-grain),
+        linear-gradient(var(--glass-tint), var(--glass-tint)),
+        var(--backdrop-image);
+}
+
+:root.has-backdrop.style-frosted .dock > .surface-fill {
     background-image:
         var(--surface-grain),
         linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.03)),

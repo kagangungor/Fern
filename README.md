@@ -171,7 +171,7 @@ bun run tauri dev
 - [ ] **Streaming AI Agent Actions:** Real-time micro-log and status streaming in the expanded island
 
 #### 🎵 Live Synchronized Lyrics (Karaoke Mode)
-- [ ] **Synchronized Live Lyrics:** Real-time synced lyric lines streaming smoothly inside the music notch
+- [x] **Synchronized Live Lyrics:** Real-time synced lyric lines streaming smoothly inside the music notch
 
 #### 📋 Pro Clipboard & Smart Developer Inspector
 - [ ] **Fast Island Clipboard:** Lightweight, accessible recent clipboard history integrated right into the island

@@ -1,6 +1,6 @@
 import { Volume2, Volume1, VolumeX } from 'lucide-react';
 import { useState, useEffect, useLayoutEffect, useMemo, useRef, memo, useCallback } from 'react';
-import { motion, AnimatePresence, Reorder } from 'framer-motion';
+import { motion, AnimatePresence, Reorder, useIsPresent } from 'framer-motion';
 import { invoke } from '@tauri-apps/api/core';
 import { emit, listen } from '@tauri-apps/api/event';
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
@@ -9,7 +9,7 @@ import './surfaces.css';
 import { SurfaceShape } from './components/SurfaceShape';
 import { initTheme } from './theme';
 import { useSettingsSync } from './hooks/useSettingsSync';
-import { useT } from './i18n';
+import { useT, localizeAppName } from './i18n';
 import { PlayIcon, PauseIcon, SkipBackIcon, SkipForwardIcon } from './icons';
 import { createRegionSender, dockBand, fullWindow } from './windowRegion';
 import { restingInterval } from './restingInterval';
@@ -147,13 +147,14 @@ function resolveStartIcon(startIcon: string): string {
 
 // Stable module-level constants so object references never change between renders,
 // preventing Framer Motion from re-triggering animations on every re-render.
+const DOCK_SPRING = { type: 'spring' as const, stiffness: 350, damping: 30 };
 const ITEM_ENTRY_TRANSITION = {
-  opacity: { duration: 0.15, delay: 0.15 },
-  scale: { type: 'spring' as const, stiffness: 400, damping: 25, delay: 0.15 }
+  opacity: { duration: 0.15 },
+  scale: DOCK_SPRING
 };
-const ITEM_INITIAL = { opacity: 0, scale: 0 };
+const ITEM_INITIAL = { opacity: 0, scale: 0.8 };
 const ITEM_ANIMATE = { opacity: 1, scale: 1 };
-const ITEM_EXIT = { opacity: 0, scale: 0 };
+const ITEM_EXIT = { opacity: 0, scale: 0.8, transition: { duration: 0.15 } };
 
 function SearchIcon() {
   return (
@@ -248,12 +249,37 @@ function sessionForApp(app: AppInfo, sessions: AppMediaSession[]): AppMediaSessi
   return sessions.find((s) => s.app_id.toLowerCase().replace(/\.exe$/, "").includes(exe));
 }
 
-function WindowDots({ count }: { count: number }) {
+const FERN_MENU_IDS = ["calendar", "settings", "taskmgr", "restart", "clearicons", "quit"];
+
+function parseMenuItems(val: unknown): string[] {
+  try {
+    const parsed = typeof val === "string" ? JSON.parse(val) : val;
+    return Array.isArray(parsed) ? parsed.filter((id): id is string => FERN_MENU_IDS.includes(id)) : FERN_MENU_IDS;
+  } catch {
+    return FERN_MENU_IDS;
+  }
+}
+
+function WindowDots({ count, mode }: { count: number; mode: string }) {
+  if (mode === "dots") {
+    return (
+      <div className="window-dots dots">
+        {Array.from({ length: Math.min(Math.max(count, 1), 4) }, (_, i) => (
+          <div key={i} className="window-dot" />
+        ))}
+      </div>
+    );
+  }
+  if (mode === "bar") {
+    return (
+      <div className="window-dots bar">
+        <div className="window-bar" />
+      </div>
+    );
+  }
   return (
-    <div className="window-dots">
-      {Array.from({ length: Math.min(Math.max(count, 1), 3) }, (_, i) => (
-        <div key={i} className="active-indicator" />
-      ))}
+    <div className="window-dots dot">
+      <div className="active-indicator" />
     </div>
   );
 }
@@ -290,7 +316,16 @@ function DockPreviewTooltip({
   onMouseLeave,
 }: DockPreviewTooltipProps) {
   const t = useT();
+  const isPresent = useIsPresent();
   const [liveHwnds, setLiveHwnds] = useState<Set<number>>(() => new Set());
+
+  useEffect(() => {
+    if (isPresent) {
+      invoke('set_live_thumbnails_opacity', { opacity: 255 }).catch(() => {});
+    } else {
+      invoke('set_live_thumbnails_opacity', { opacity: 0 }).catch(() => {});
+    }
+  }, [isPresent]);
   const surfaceRefs = useRef<Map<number, HTMLDivElement>>(new Map());
 
   useLayoutEffect(() => {
@@ -373,7 +408,7 @@ function DockPreviewTooltip({
               }}
             >
               <div className="preview-header">
-                <div className="preview-label">{prev.title || app.name}</div>
+                <div className="preview-label">{localizeAppName(prev.title || app.name)}</div>
                 <button
                   className="preview-close-btn"
                   onClick={(e) => {
@@ -610,6 +645,10 @@ const Dock = memo(function Dock() {
   const [startIcon, setStartIcon] = useState(() => localStorage.getItem("fern-start-icon") || "default");
   const [isMaximized, setIsMaximized] = useState(false);
   const [dockMixedReorder, setDockMixedReorder] = useState(() => localStorage.getItem("fern-dock-mixed-reorder") === "true");
+  const [windowIndicator, setWindowIndicator] = useState(() => localStorage.getItem("fern-dock-indicator") ?? "dot");
+  const [showEndTask, setShowEndTask] = useState(() => localStorage.getItem("fern-dock-show-end-task") !== "false");
+  const [menuItems, setMenuItems] = useState<string[]>(() => parseMenuItems(localStorage.getItem("fern-dock-menu-items")));
+  const isPickingProgramRef = useRef(false);
   const [mixedOrder, setMixedOrder] = useState<string[]>([]);
   const [previewData, setPreviewData] = useState<{ id: string, previews: { hwnd: number, title: string, image: string }[] } | null>(null);
   const [isDockHovered, setIsDockHovered] = useState(false);
@@ -696,7 +735,7 @@ const Dock = memo(function Dock() {
   useEffect(() => {
     if (showAddPopup) {
       const h = dockRef.current?.getBoundingClientRect().height ?? 0;
-      if (h > 0) setPopupBottom(h / (scale || 1) - 14);
+      if (h > 0) setPopupBottom((h / (scale || 1)) + 12);
     }
   }, [showAddPopup, scale]);
 
@@ -859,6 +898,15 @@ const Dock = memo(function Dock() {
       const mixedReorder = getVal("fern-dock-mixed-reorder", "false");
       setDockMixedReorder(mixedReorder === "true");
 
+      const indicator = getVal("fern-dock-indicator", "dot");
+      setWindowIndicator(indicator || "dot");
+
+      const endTaskVal = getVal("fern-dock-show-end-task", "true");
+      setShowEndTask(endTaskVal !== "false");
+
+      const menuItemsVal = getVal("fern-dock-menu-items");
+      setMenuItems(parseMenuItems(menuItemsVal));
+
       const scaleVal = getVal("fern-scale");
       if (scaleVal !== null) setScale(parseFloat(scaleVal));
 
@@ -949,6 +997,9 @@ const Dock = memo(function Dock() {
       "fern-dock-hide-delay": (v: string) => setDockHideDelay(parseInt(v || "800", 10)),
       "fern-start-icon": setStartIcon,
       "fern-dock-mixed-reorder": setDockMixedReorder,
+      "fern-dock-indicator": (v) => setWindowIndicator(v || "dot"),
+      "fern-dock-show-end-task": (v) => setShowEndTask(v !== false && v !== "false"),
+      "fern-dock-menu-items": (v) => setMenuItems(parseMenuItems(v)),
       "fern-scale": setScale,
     }
   );
@@ -1193,6 +1244,40 @@ const Dock = memo(function Dock() {
     setActiveSubmenu(null);
     invoke('set_menu_open', { open: false, rect: null }).catch(() => {});
   };
+
+  const fernOptionsMenu = () => (
+    <div 
+      className="menu-item has-submenu"
+      onMouseEnter={() => setActiveSubmenu('fern')}
+      onMouseLeave={() => setActiveSubmenu(null)}
+    >
+      {t("dockmenu.options")}
+      <span className="submenu-arrow">▶</span>
+      <div className="submenu">
+        {menuItems.includes("calendar") && (
+          <div className="menu-item" onClick={() => { invoke('open_calendar_window'); closeMenu(); }}>{t("dockmenu.openCalendar")}</div>
+        )}
+        {menuItems.includes("settings") && (
+          <div className="menu-item" onClick={() => { invoke('open_settings_window'); closeMenu(); }}>{t("dockmenu.openSettings")}</div>
+        )}
+        {menuItems.includes("taskmgr") && (
+          <div className="menu-item" onClick={() => { invoke('open_app', { appName: 'taskmgr' }); closeMenu(); }}>{t("dockmenu.taskManager")}</div>
+        )}
+        {menuItems.includes("restart") && (
+          <div className="menu-item" onClick={() => invoke('restart_fern')}>{t("general.restart")}</div>
+        )}
+        {menuItems.includes("clearicons") && (
+          <div className="menu-item" onClick={() => { handleClearIconCache(); closeMenu(); }}>{t("dockmenu.clearIconCache")}</div>
+        )}
+        {menuItems.includes("quit") && (
+          <>
+            <div className="menu-divider" />
+            <div className="menu-item quit" onClick={() => invoke('quit_fern')}>{t("general.quit")}</div>
+          </>
+        )}
+      </div>
+    </div>
+  );
 
   const closePopup = () => {
     setShowAddPopup(false);
@@ -1589,7 +1674,7 @@ const Dock = memo(function Dock() {
     const icon = customIcons[cacheKey] || (allowPathFallback && customIcons[app.path]) || iconsRef.current[cacheKey] || (allowPathFallback && iconsRef.current[app.path]) || app.icon;
     const isFernOrSettings = isFernWindow(app);
     return (icon || isFernOrSettings) ? (
-      <DockAppIcon src={isFernOrSettings ? "/fern.png" : (icon ?? undefined)} alt={app.name} fern={isFernOrSettings} />
+      <DockAppIcon src={isFernOrSettings ? "/fern.png" : (icon ?? undefined)} alt={localizeAppName(app.name)} fern={isFernOrSettings} />
     ) : (
       <div className="fallback-icon">{app.name[0]}</div>
     );
@@ -1631,9 +1716,14 @@ const Dock = memo(function Dock() {
     return (
       <motion.div
         key={id}
-        initial={{ opacity: 0, scale: 0 }}
+        layout="position"
+        initial={{ opacity: 0, scale: 0.8 }}
         animate={{ opacity: 1, scale: 1 }}
-        transition={{ opacity: { duration: 0.15, delay }, scale: { type: "spring", stiffness: 400, damping: 25, delay } }}
+        transition={{
+          opacity: { duration: 0.15, delay },
+          scale: { type: "spring", stiffness: 400, damping: 25, delay },
+          layout: isDragging ? { duration: 0 } : DOCK_SPRING
+        }}
         className={`dock-icon-wrapper ${hideTooltip ? 'shortcut-active' : ''}`}
         onContextMenu={onContextMenu}
         onMouseEnter={() => { if (!contextMenu) setHoveredApp(id); }}
@@ -1721,7 +1811,7 @@ const Dock = memo(function Dock() {
         <motion.div
           ref={dockRef}
           layout
-          className={`dock ${isExpanded && !isHidden ? 'dock-expanded' : ''} ${isImpacted && !isExpanded && !isHidden ? 'dock-impacted' : ''} ${dockIconOnly ? 'dock-icon-only' : ''} ${isAdaptive ? 'dock-adaptive' : ''}`}
+          className={`dock ${isExpanded ? 'dock-expanded' : ''} ${(isImpacted || isExpanded) ? 'dock-impacted' : ''} ${dockIconOnly ? 'dock-icon-only' : ''} ${isAdaptive ? 'dock-adaptive' : ''}`}
           onMouseEnter={() => setIsDockHovered(true)}
           // The backend may have ended the hover without the DOM knowing, then no new mouseenter comes.
           onMouseMove={() => { if (!isDockHovered) setIsDockHovered(true); }}
@@ -1746,20 +1836,20 @@ const Dock = memo(function Dock() {
         initial={{ y: -800, opacity: 1, width: 34, height: 34, borderTopLeftRadius: 17, borderTopRightRadius: 17, borderBottomLeftRadius: 17, borderBottomRightRadius: 17 }}
         animate={{
           y: !isReady ? -800 : (isHidden ? 100 : 0),
-          width: isExpanded && !isHidden ? (isAdaptive ? adaptiveWidth : 'auto') : 34,
-          height: isExpanded && !isHidden ? 'auto' : 34,
-          borderTopLeftRadius: (isImpacted || isExpanded) && !isHidden ? 18 : 17,
-          borderTopRightRadius: (isImpacted || isExpanded) && !isHidden ? 18 : 17,
-          borderBottomLeftRadius: (isImpacted || isExpanded) && !isHidden ? 0 : 17,
-          borderBottomRightRadius: (isImpacted || isExpanded) && !isHidden ? 0 : 17,
+          width: isExpanded ? (isAdaptive ? adaptiveWidth : 'auto') : 34,
+          height: isExpanded ? 'auto' : 34,
+          borderTopLeftRadius: (isImpacted || isExpanded) ? 18 : 17,
+          borderTopRightRadius: (isImpacted || isExpanded) ? 18 : 17,
+          borderBottomLeftRadius: (isImpacted || isExpanded) ? 0 : 17,
+          borderBottomRightRadius: (isImpacted || isExpanded) ? 0 : 17,
           opacity: 1,
           scale: scale,
         }}
         transition={{
           y: { type: "spring", stiffness: 400, damping: 35, mass: 0.8 },
-          width: { type: "spring", stiffness: 250, damping: 22, mass: 0.8 },
-          height: { type: "spring", stiffness: 250, damping: 22, mass: 0.8 },
-          layout: isDragging ? { duration: 0 } : { type: "spring", stiffness: 300, damping: 25 },
+          width: { type: "spring", stiffness: 350, damping: 30 },
+          height: { type: "spring", stiffness: 350, damping: 30 },
+          layout: isDragging ? { duration: 0 } : DOCK_SPRING,
           borderTopLeftRadius: { type: "spring", stiffness: 500, damping: 30 },
           borderTopRightRadius: { type: "spring", stiffness: 500, damping: 30 },
           borderBottomLeftRadius: { type: "spring", stiffness: 500, damping: 30 },
@@ -1773,24 +1863,26 @@ const Dock = memo(function Dock() {
         <SurfaceShape
           edge="bottom"
           flare={isExpanded && !isHidden ? 13 : 0}
-          radius={(isImpacted || isExpanded) && !isHidden ? 18 : 17}
-          edgeRadius={(isImpacted || isExpanded) && !isHidden ? 0 : 17}
+          radius={(isImpacted || isExpanded) ? 18 : 17}
+          edgeRadius={(isImpacted || isExpanded) ? 0 : 17}
         />
         <AnimatePresence>
           {isExpanded && (
             <motion.div
               key="dock-content"
+              layout
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              transition={{ duration: 0.15 }}
+              transition={isDragging ? { duration: 0 } : DOCK_SPRING}
               className="dock-reorder-container"
             >
               {startItem && (
                 <motion.div
-                  initial={{ opacity: 0, scale: 0 }}
+                  layout="position"
+                  initial={{ opacity: 0, scale: 0.8 }}
                   animate={{ opacity: 1, scale: 1 }}
-                  transition={{ opacity: { duration: 0.15, delay: 0.15 }, scale: { type: "spring", stiffness: 400, damping: 25, delay: 0.15 } }}
+                  transition={{ opacity: { duration: 0.15, delay: 0.15 }, scale: { type: "spring", stiffness: 400, damping: 25, delay: 0.15 }, layout: isDragging ? { duration: 0 } : DOCK_SPRING }}
                   className="dock-icon-wrapper"
                   onContextMenu={(e) => handleContextMenu(e, startItem)}
                   onMouseEnter={() => { if (!contextMenu) setHoveredApp(itemKey(startItem)); }}
@@ -1818,9 +1910,10 @@ const Dock = memo(function Dock() {
               
               {dockSearchEnabled && (
                 <motion.div
-                  initial={{ opacity: 0, scale: 0 }}
+                  layout="position"
+                  initial={{ opacity: 0, scale: 0.8 }}
                   animate={{ opacity: 1, scale: 1 }}
-                  transition={{ opacity: { duration: 0.15, delay: 0.18 }, scale: { type: "spring", stiffness: 400, damping: 25, delay: 0.18 } }}
+                  transition={{ opacity: { duration: 0.15, delay: 0.18 }, scale: { type: "spring", stiffness: 400, damping: 25, delay: 0.18 }, layout: isDragging ? { duration: 0 } : DOCK_SPRING }}
                   className="dock-icon-wrapper"
                   onMouseEnter={() => { if (!contextMenu) setHoveredApp('search'); }}
                   onMouseLeave={() => { setHoveredApp(null); setPressedApp(null); }}
@@ -1847,9 +1940,10 @@ const Dock = memo(function Dock() {
 
               {dockCalendarEnabled && (
                 <motion.div
-                  initial={{ opacity: 0, scale: 0 }}
+                  layout="position"
+                  initial={{ opacity: 0, scale: 0.8 }}
                   animate={{ opacity: 1, scale: 1 }}
-                  transition={{ opacity: { duration: 0.15, delay: 0.2 }, scale: { type: "spring", stiffness: 400, damping: 25, delay: 0.2 } }}
+                  transition={{ opacity: { duration: 0.15, delay: 0.2 }, scale: { type: "spring", stiffness: 400, damping: 25, delay: 0.2 }, layout: isDragging ? { duration: 0 } : DOCK_SPRING }}
                   className="dock-icon-wrapper"
                   onMouseEnter={() => { if (!contextMenu) setHoveredApp('calendar'); }}
                   onMouseLeave={() => { setHoveredApp(null); setPressedApp(null); }}
@@ -1949,6 +2043,7 @@ const Dock = memo(function Dock() {
               <Reorder.Group
                 as="div"
                 axis="x"
+                layout
                 values={pinnedItems.map(itemKey)}
                 onReorder={handleReorder}
                 className="dock-reorder-group"
@@ -1958,7 +2053,9 @@ const Dock = memo(function Dock() {
                     as="div"
                     key={itemKey(app)}
                     value={itemKey(app)}
-                    style={{ position: 'relative' }}
+                    layout="position"
+                    transition={isDragging ? { duration: 0 } : DOCK_SPRING}
+                    style={{ position: 'relative', flexShrink: 0 }}
                     onDragStart={() => { setIsDragging(true); setHoveredApp(null); setPressedApp(null); }}
                     onDragEnd={handleDragEnd}
                     onDragOver={(e) => handleAppDragOver(e, app)}
@@ -2030,7 +2127,7 @@ const Dock = memo(function Dock() {
                 
                 {/* Fallback to text tooltip if previews are disabled, app isn't running, or preview failed to load */}
                 {!contextMenu && (!dockPreviewEnabled || (dockPreviewEnabled && hoveredApp === itemKey(app) && !previewData)) && !volumeHuds[itemKey(app)]?.visible && (
-                  <div className="tooltip">{app.name}</div>
+                  <div className="tooltip">{localizeAppName(app.name)}</div>
                 )}
                 <motion.div 
                   className="dock-icon"
@@ -2049,19 +2146,24 @@ const Dock = memo(function Dock() {
                     />
                   )}
                 </motion.div>
-                  {app.is_running && <WindowDots count={app.all_hwnds?.length ?? 1} />}
+                  {app.is_running && <WindowDots count={app.all_hwnds?.length ?? 1} mode={windowIndicator} />}
                     </motion.div>
                   </Reorder.Item>
                 ))}
               </Reorder.Group>
 
               {pinnedItems.length > 0 && unpinnedItems.length > 0 && (
-                <div className="dock-group-divider" />
+                <motion.div
+                  layout="position"
+                  transition={isDragging ? { duration: 0 } : DOCK_SPRING}
+                  className="dock-group-divider"
+                />
               )}
 
               <Reorder.Group
                 as="div"
                 axis="x"
+                layout
                 values={unpinnedItems.map(itemKey)}
                 onReorder={handleUnpinnedReorder}
                 className="dock-reorder-group"
@@ -2071,105 +2173,108 @@ const Dock = memo(function Dock() {
                     as="div"
                     key={itemKey(app)}
                     value={itemKey(app)}
-                    style={{ position: 'relative' }}
-                    onDragStart={() => { setIsDragging(true); setHoveredApp(null); setPressedApp(null); }}
-                    onDragEnd={handleUnpinnedDragEnd}
-                    onDragOver={(e) => handleAppDragOver(e, app)}
-                    onDragLeave={(e) => handleAppDragLeave(e, app)}
-                    onDrop={handleAppDrop}
-                    onContextMenu={(e) => handleContextMenu(e, app)}
-                    onMouseDown={(e) => { if (e.button === 1) e.preventDefault(); }}
-                    onAuxClick={(e) => handleMiddleClick(e, app)}
-                    onWheel={(e) => handleAppWheel(e, app)}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      if (!isDragging) handleAppClick(app);
-                    }}
-                  >
-                    <motion.div
-                      className={`dock-icon-wrapper ${dragHoveringApp === itemKey(app) ? 'dock-icon-drag-hover' : ''}`}
-                      initial={{ opacity: 0, scale: 0 }}
-                      animate={{ opacity: 1, scale: 1 }}
-                      exit={{ opacity: 0, scale: 0, transition: { duration: 0.12 } }}
-                      transition={ITEM_ENTRY_TRANSITION}
-                      onMouseEnter={() => { if (!contextMenu) setHoveredApp(itemKey(app)); }}
-                      onMouseLeave={() => { if (!isPreviewHoveredRef.current) { setHoveredApp(null); setPressedApp(null); } }}
+                    layout="position"
+                    transition={isDragging ? { duration: 0 } : DOCK_SPRING}
+                    style={{ position: 'relative', flexShrink: 0 }}
+                      onDragStart={() => { setIsDragging(true); setHoveredApp(null); setPressedApp(null); }}
+                      onDragEnd={handleUnpinnedDragEnd}
+                      onDragOver={(e) => handleAppDragOver(e, app)}
+                      onDragLeave={(e) => handleAppDragLeave(e, app)}
+                      onDrop={handleAppDrop}
+                      onContextMenu={(e) => handleContextMenu(e, app)}
+                      onMouseDown={(e) => { if (e.button === 1) e.preventDefault(); }}
+                      onAuxClick={(e) => handleMiddleClick(e, app)}
+                      onWheel={(e) => handleAppWheel(e, app)}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (!isDragging) handleAppClick(app);
+                      }}
                     >
-                      
-                <AnimatePresence>
-                  {volumeHuds[itemKey(app)]?.visible && (
-                    <motion.div
-                      className="dock-app-volume-hud"
-                      initial={{ opacity: 0, y: 6, scale: 0.92 }}
-                      animate={{ opacity: 1, y: 0, scale: 1 }}
-                      exit={{ opacity: 0, y: 3, scale: 0.95, transition: { duration: 0.1 } }}
-                      transition={{ duration: 0.15, ease: [0.16, 1, 0.3, 1] }}
-                    >
-                      <div className="dock-app-volume-hud-header">
-                        {volumeHuds[itemKey(app)].muted || volumeHuds[itemKey(app)].currentVol === 0 ? (
-                          <VolumeX size={12} className="dock-app-volume-hud-icon muted" />
-                        ) : volumeHuds[itemKey(app)].currentVol < 0.5 ? (
-                          <Volume1 size={12} className="dock-app-volume-hud-icon" />
-                        ) : (
-                          <Volume2 size={12} className="dock-app-volume-hud-icon" />
-                        )}
-                        <span className="dock-app-volume-hud-pct">
-                          {Math.round(volumeHuds[itemKey(app)].currentVol * 100)}%
-                        </span>
-                      </div>
-                      <div className="dock-app-volume-hud-track">
-                        <div
-                          className={`dock-app-volume-hud-fill ${volumeHuds[itemKey(app)].muted ? 'muted' : ''}`}
-                          style={{ width: `${Math.round(volumeHuds[itemKey(app)].currentVol * 100)}%` }}
-                        />
-                      </div>
-                    </motion.div>
-                  )}
-                </AnimatePresence>
-
-                <AnimatePresence>
-                  {!activeVolumeKey && dockPreviewEnabled && !contextMenu && previewData && previewData.id === itemKey(app) && hoveredApp === itemKey(app) && (
-                          <DockPreviewTooltip
-                      app={app}
-                      previews={previewData.previews}
-                      onClosePreview={handleClosePreview}
-                      renderMedia={renderAppIcon}
-                      renderPreviewMedia={renderPreviewMedia}
-                      onMouseEnter={() => { isPreviewHoveredRef.current = true; }}
-                      onMouseLeave={() => { isPreviewHoveredRef.current = false; setHoveredApp(null); setPressedApp(null); }}
-                    />
-                        )}
-                      </AnimatePresence>
-                      {!contextMenu && (!dockPreviewEnabled || (dockPreviewEnabled && hoveredApp === itemKey(app) && !previewData)) && !volumeHuds[itemKey(app)]?.visible && (
-                        <div className="tooltip">{app.name}</div>
-                      )}
                       <motion.div
-                        className="dock-icon"
-                        variants={iconVariants}
-                        animate={pressedApp === itemKey(app) ? "tap" : (isDragging && app.is_pinned ? "idle" : (hoveredApp === itemKey(app) && !isDragging ? "hover" : "idle"))}
-                        whileDrag="drag"
-                        onPointerDown={() => setPressedApp(itemKey(app))}
-                        onPointerUp={() => setPressedApp(null)}
-                        onPointerCancel={() => setPressedApp(null)}
+                        className={`dock-icon-wrapper ${dragHoveringApp === itemKey(app) ? 'dock-icon-drag-hover' : ''}`}
+                        initial={ITEM_INITIAL}
+                        animate={ITEM_ANIMATE}
+                        exit={ITEM_EXIT}
+                        transition={ITEM_ENTRY_TRANSITION}
+                        onMouseEnter={() => { if (!contextMenu) setHoveredApp(itemKey(app)); }}
+                        onMouseLeave={() => { if (!isPreviewHoveredRef.current) { setHoveredApp(null); setPressedApp(null); } }}
                       >
-                        {renderAppIcon(app)}
-                        {dockAttentionEnabled && (
-                          <AttentionBadge
-                            count={appUnreadCount(app)}
-                            isFlashing={appAttention(app, attentionHwnds)}
+                        
+                  <AnimatePresence>
+                    {volumeHuds[itemKey(app)]?.visible && (
+                      <motion.div
+                        className="dock-app-volume-hud"
+                        initial={{ opacity: 0, y: 6, scale: 0.92 }}
+                        animate={{ opacity: 1, y: 0, scale: 1 }}
+                        exit={{ opacity: 0, y: 3, scale: 0.95, transition: { duration: 0.1 } }}
+                        transition={{ duration: 0.15, ease: [0.16, 1, 0.3, 1] }}
+                      >
+                        <div className="dock-app-volume-hud-header">
+                          {volumeHuds[itemKey(app)].muted || volumeHuds[itemKey(app)].currentVol === 0 ? (
+                            <VolumeX size={12} className="dock-app-volume-hud-icon muted" />
+                          ) : volumeHuds[itemKey(app)].currentVol < 0.5 ? (
+                            <Volume1 size={12} className="dock-app-volume-hud-icon" />
+                          ) : (
+                            <Volume2 size={12} className="dock-app-volume-hud-icon" />
+                          )}
+                          <span className="dock-app-volume-hud-pct">
+                            {Math.round(volumeHuds[itemKey(app)].currentVol * 100)}%
+                          </span>
+                        </div>
+                        <div className="dock-app-volume-hud-track">
+                          <div
+                            className={`dock-app-volume-hud-fill ${volumeHuds[itemKey(app)].muted ? 'muted' : ''}`}
+                            style={{ width: `${Math.round(volumeHuds[itemKey(app)].currentVol * 100)}%` }}
                           />
-                        )}
+                        </div>
                       </motion.div>
-                      {app.is_running && <WindowDots count={app.all_hwnds?.length ?? 1} />}
-                    </motion.div>
-                  </Reorder.Item>
-                ))}
+                    )}
+                  </AnimatePresence>
+
+                  <AnimatePresence>
+                    {!activeVolumeKey && dockPreviewEnabled && !contextMenu && previewData && previewData.id === itemKey(app) && hoveredApp === itemKey(app) && (
+                            <DockPreviewTooltip
+                        app={app}
+                        previews={previewData.previews}
+                        onClosePreview={handleClosePreview}
+                        renderMedia={renderAppIcon}
+                        renderPreviewMedia={renderPreviewMedia}
+                        onMouseEnter={() => { isPreviewHoveredRef.current = true; }}
+                        onMouseLeave={() => { isPreviewHoveredRef.current = false; setHoveredApp(null); setPressedApp(null); }}
+                      />
+                          )}
+                        </AnimatePresence>
+                        {!contextMenu && (!dockPreviewEnabled || (dockPreviewEnabled && hoveredApp === itemKey(app) && !previewData)) && !volumeHuds[itemKey(app)]?.visible && (
+                          <div className="tooltip">{localizeAppName(app.name)}</div>
+                        )}
+                        <motion.div
+                          className="dock-icon"
+                          variants={iconVariants}
+                          animate={pressedApp === itemKey(app) ? "tap" : (isDragging && app.is_pinned ? "idle" : (hoveredApp === itemKey(app) && !isDragging ? "hover" : "idle"))}
+                          whileDrag="drag"
+                          onPointerDown={() => setPressedApp(itemKey(app))}
+                          onPointerUp={() => setPressedApp(null)}
+                          onPointerCancel={() => setPressedApp(null)}
+                        >
+                          {renderAppIcon(app)}
+                          {dockAttentionEnabled && (
+                            <AttentionBadge
+                              count={appUnreadCount(app)}
+                              isFlashing={appAttention(app, attentionHwnds)}
+                            />
+                          )}
+                        </motion.div>
+                        {app.is_running && <WindowDots count={app.all_hwnds?.length ?? 1} mode={windowIndicator} />}
+                      </motion.div>
+                    </Reorder.Item>
+                  ))}
               </Reorder.Group>
               </>
               ) : (
               <Reorder.Group
                 as="div"
                 axis="x"
+                layout
                 values={mixedItems.map(itemKey)}
                 onReorder={handleMixedReorder}
                 className="dock-reorder-group"
@@ -2179,7 +2284,9 @@ const Dock = memo(function Dock() {
                     as="div"
                     key={itemKey(app)}
                     value={itemKey(app)}
-                    style={{ position: 'relative' }}
+                    layout="position"
+                    transition={isDragging ? { duration: 0 } : DOCK_SPRING}
+                    style={{ position: 'relative', flexShrink: 0 }}
                     onDragStart={() => { setIsDragging(true); setHoveredApp(null); setPressedApp(null); }}
                     onDragEnd={() => handleMixedDragEnd(app)}
                     onDragOver={(e) => handleAppDragOver(e, app)}
@@ -2250,7 +2357,7 @@ const Dock = memo(function Dock() {
                       </AnimatePresence>
 
                       {!contextMenu && (!dockPreviewEnabled || (dockPreviewEnabled && hoveredApp === itemKey(app) && !previewData)) && !volumeHuds[itemKey(app)]?.visible && (
-                        <div className="tooltip">{app.name}</div>
+                        <div className="tooltip">{localizeAppName(app.name)}</div>
                       )}
                       <motion.div
                         className="dock-icon"
@@ -2269,7 +2376,7 @@ const Dock = memo(function Dock() {
                           />
                         )}
                       </motion.div>
-                      {app.is_running && <WindowDots count={app.all_hwnds?.length ?? 1} />}
+                      {app.is_running && <WindowDots count={app.all_hwnds?.length ?? 1} mode={windowIndicator} />}
                     </motion.div>
                   </Reorder.Item>
                 ))}
@@ -2408,37 +2515,34 @@ const Dock = memo(function Dock() {
               <div className="menu-item" onClick={() => { setShowAddPopup(true); closeMenu(); }}>
                 {t("dockmenu.addApp")}
               </div>
-              <div 
-                className="menu-item has-submenu"
-                onMouseEnter={() => setActiveSubmenu('fern')}
-                onMouseLeave={() => setActiveSubmenu(null)}
-              >
-                {t("dockmenu.options")}
-                <span className="submenu-arrow">▶</span>
-                <div className="submenu">
-                  <div className="menu-item" onClick={() => { invoke('open_calendar_window'); closeMenu(); }}>{t("dockmenu.openCalendar")}</div>
-                  <div className="menu-item" onClick={() => { invoke('open_settings_window'); closeMenu(); }}>{t("dockmenu.openSettings")}</div>
-                  <div className="menu-item" onClick={() => { invoke('open_app', { appName: 'taskmgr' }); closeMenu(); }}>{t("dockmenu.taskManager")}</div>
-                  <div className="menu-item" onClick={() => invoke('restart_fern')}>{t("general.restart")}</div>
-                  <div className="menu-item" onClick={() => { handleClearIconCache(); closeMenu(); }}>{t("dockmenu.clearIconCache")}</div>
-                  <div className="menu-divider" />
-                  <div className="menu-item quit" onClick={() => invoke('quit_fern')}>{t("general.quit")}</div>
-                </div>
-              </div>
+              {fernOptionsMenu()}
               {contextMenu.app.is_running && (
                 <>
                   <div className="menu-divider" />
-                  <div className="menu-item quit" onClick={async () => {
+                  <div className="menu-item" onClick={async () => {
                     if (contextMenu.app?.hwnd) {
-                      await invoke('end_task', {
+                      await invoke('close_app', {
                         hwnd: contextMenu.app.hwnd,
                         allHwnds: contextMenu.app.all_hwnds?.map(([h]) => h) ?? null,
                       });
                       closeMenu();
                     }
                   }}>
-                    {t("dockmenu.quitApp", { name: contextMenu.app.name })}
+                    {t("dockmenu.closeWindow")}
                   </div>
+                  {showEndTask && (
+                    <div className="menu-item quit" onClick={async () => {
+                      if (contextMenu.app?.hwnd) {
+                        await invoke('end_task', {
+                          hwnd: contextMenu.app.hwnd,
+                          allHwnds: contextMenu.app.all_hwnds?.map(([h]) => h) ?? null,
+                        });
+                        closeMenu();
+                      }
+                    }}>
+                      {t("dockmenu.endTask")}
+                    </div>
+                  )}
                 </>
               )}
             </>
@@ -2447,23 +2551,7 @@ const Dock = memo(function Dock() {
               <div className="menu-item" onClick={() => { setShowAddPopup(true); closeMenu(); }}>
                 {t("dockmenu.addApp")}
               </div>
-              <div 
-                className="menu-item has-submenu"
-                onMouseEnter={() => setActiveSubmenu('fern')}
-                onMouseLeave={() => setActiveSubmenu(null)}
-              >
-                {t("dockmenu.options")}
-                <span className="submenu-arrow">▶</span>
-                <div className="submenu">
-                  <div className="menu-item" onClick={() => { invoke('open_calendar_window'); closeMenu(); }}>{t("dockmenu.openCalendar")}</div>
-                  <div className="menu-item" onClick={() => { invoke('open_settings_window'); closeMenu(); }}>{t("dockmenu.openSettings")}</div>
-                  <div className="menu-item" onClick={() => { invoke('open_app', { appName: 'taskmgr' }); closeMenu(); }}>{t("dockmenu.taskManager")}</div>
-                  <div className="menu-item" onClick={() => invoke('restart_fern')}>{t("general.restart")}</div>
-                  <div className="menu-item" onClick={() => { handleClearIconCache(); closeMenu(); }}>{t("dockmenu.clearIconCache")}</div>
-                  <div className="menu-divider" />
-                  <div className="menu-item quit" onClick={() => invoke('quit_fern')}>{t("general.quit")}</div>
-                </div>
-              </div>
+              {fernOptionsMenu()}
             </>
           )}
         </div>
@@ -2488,6 +2576,7 @@ const Dock = memo(function Dock() {
             runningApps={activeApps}
             pinned={pinnedApps}
             bottom={popupBottom}
+            isPickingProgramRef={isPickingProgramRef}
           />
         )}
       </AnimatePresence>
@@ -2517,7 +2606,8 @@ function AddAppPopup({
   scale,
   runningApps,
   pinned,
-  bottom
+  bottom,
+  isPickingProgramRef,
 }: {
   onClose: () => void;
   onAdd: (app: AppInfo) => void;
@@ -2526,9 +2616,26 @@ function AddAppPopup({
   runningApps: AppInfo[];
   pinned: AppInfo[];
   bottom: number;
+  isPickingProgramRef?: React.MutableRefObject<boolean>;
 }) {
   const t = useT();
   const [apps, setApps] = useState<AppInfo[]>([]);
+
+  const handleBrowse = async () => {
+    if (isPickingProgramRef) isPickingProgramRef.current = true;
+    try {
+      const picked = await invoke<AppInfo | null>("pick_program");
+      if (picked) {
+        onAdd(picked);
+      }
+    } catch (e) {
+      console.error("Failed to pick program:", e);
+    } finally {
+      setTimeout(() => {
+        if (isPickingProgramRef) isPickingProgramRef.current = false;
+      }, 500);
+    }
+  };
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [loading, setLoading] = useState(true);
@@ -2590,8 +2697,9 @@ function AddAppPopup({
       // Search covers pinned apps too.
       if (a.path === "start") continue;
       const n = a.name.toLowerCase();
-      if (n.startsWith(s)) starts.push(a);
-      else if (n.includes(s)) contains.push(a);
+      const loc = localizeAppName(a.name).toLowerCase();
+      if (n.startsWith(s) || loc.startsWith(s)) starts.push(a);
+      else if (n.includes(s) || loc.includes(s)) contains.push(a);
     }
     const byName = (x: AppInfo, y: AppInfo) => x.name.localeCompare(y.name);
     starts.sort(byName);
@@ -2779,7 +2887,7 @@ function AddAppPopup({
                           <span className="popup-app-initial">{app.name[0]}</span>
                         )}
                       </div>
-                      <span className="popup-app-name">{app.name}</span>
+                      <span className="popup-app-name">{localizeAppName(app.name)}</span>
                       <span className="popup-app-pin">{alreadyPinned ? "✓" : "+"}</span>
                     </div>
                   );
@@ -2793,6 +2901,9 @@ function AddAppPopup({
                 : t("dockmenu.emptyHint")}
             </div>
           )}
+        </div>
+        <div className="popup-browse-row" onClick={handleBrowse}>
+          {t("dockmenu.browseProgram")}
         </div>
       </motion.div>
     </div>

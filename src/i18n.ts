@@ -116,3 +116,81 @@ export function useT() {
 }
 
 export type TFunction = typeof t;
+
+const SYSTEM_APP_KEYS: Record<string, string> = {
+  // English keys & common exe names
+  "file explorer": "app.fileExplorer",
+  "explorer": "app.fileExplorer",
+  "control panel": "app.controlPanel",
+  "task manager": "app.taskManager",
+  "taskmgr": "app.taskManager",
+  "settings": "app.settings",
+  "notepad": "app.notepad",
+  "calculator": "app.calculator",
+  "command prompt": "app.commandPrompt",
+  "cmd": "app.commandPrompt",
+  "terminal": "app.terminal",
+  "windows terminal": "app.terminal",
+  "registry editor": "app.registryEditor",
+  "regedit": "app.registryEditor",
+  "snipping tool": "app.snippingTool",
+  "recycle bin": "app.recycleBin",
+  "windows security": "app.windowsSecurity",
+  "camera": "app.camera",
+  "clock": "app.clock",
+  "photos": "app.photos",
+  "weather": "app.weather",
+  "paint": "app.paint",
+  "sound recorder": "app.soundRecorder",
+  "voice recorder": "app.soundRecorder",
+  "magnifier": "app.magnifier",
+  "remote desktop connection": "app.remoteDesktop",
+  "start": "dockmenu.start",
+
+  // Turkish variants
+  "dosya gezgini": "app.fileExplorer",
+  "denetim masası": "app.controlPanel",
+  "denetim masasi": "app.controlPanel",
+  "görev yöneticisi": "app.taskManager",
+  "gorev yoneticisi": "app.taskManager",
+  "ayarlar": "app.settings",
+  "not defteri": "app.notepad",
+  "hesap makinesi": "app.calculator",
+  "komut istemi": "app.commandPrompt",
+  "kayıt defteri düzenleyicisi": "app.registryEditor",
+  "kayit defteri duzenleyicisi": "app.registryEditor",
+  "ekran alıntısı aracı": "app.snippingTool",
+  "ekran alintisi araci": "app.snippingTool",
+  "geri dönüşüm kutusu": "app.recycleBin",
+  "geri donusum kutusu": "app.recycleBin",
+  "windows güvenliği": "app.windowsSecurity",
+  "windows guvenligi": "app.windowsSecurity",
+  "kamera": "app.camera",
+  "saat": "app.clock",
+  "fotoğraflar": "app.photos",
+  "fotograflar": "app.photos",
+  "hava durumu": "app.weather",
+  "ses kaydedicisi": "app.soundRecorder",
+  "büyüteç": "app.magnifier",
+  "buyutec": "app.magnifier",
+  "uzak masaüstü bağlantısı": "app.remoteDesktop",
+  "uzak masaustu baglantisi": "app.remoteDesktop",
+  "başlat": "dockmenu.start",
+  "baslat": "dockmenu.start",
+};
+
+/**
+ * Localizes standard system application names (like File Explorer -> Dosya Gezgini,
+ * Control Panel -> Denetim Masası, Start -> Başlat) according to the active language.
+ */
+export function localizeAppName(name: string | undefined | null): string {
+  if (!name) return "";
+  const trimmed = name.trim();
+  const lower = trimmed.toLowerCase();
+  const key = SYSTEM_APP_KEYS[lower];
+  if (key) {
+    return t(key);
+  }
+  return trimmed;
+}
+

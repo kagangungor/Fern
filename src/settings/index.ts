@@ -8,5 +8,6 @@ export { CalendarSyncPage } from "./CalendarSyncPage";
 export { DockTab } from "./DockTab";
 export { OverlaysTab } from "./OverlaysTab";
 export { ProcessesTab } from "./ProcessesTab";
+export { DiagnosticsTab } from "./DiagnosticsTab";
 export { AboutTab } from "./AboutTab";
 export type { WidgetConfig, SettingsTab, SettingRowProps } from "./types";

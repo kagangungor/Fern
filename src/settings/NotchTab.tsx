@@ -6,6 +6,7 @@ import {
   PanelTop,
   Calendar,
   Music,
+  Music2,
   Minimize2,
   LayoutList,
   Sparkles,
@@ -80,6 +81,10 @@ interface NotchTabProps {
   toggleAmbience: () => void;
   mediaCompactGlowEnabled: boolean;
   toggleCompactGlow: () => void;
+  lyricsEnabled?: boolean;
+  toggleLyrics?: () => void;
+  lyricsSeekEnabled?: boolean;
+  toggleLyricsSeek?: () => void;
   panelControlCenter: boolean;
   togglePanelControlCenter: () => void;
   panelShelf: boolean;
@@ -98,6 +103,10 @@ interface NotchTabProps {
   resetCcLayout: () => void;
   notchScrollVolume: boolean;
   toggleNotchScrollVolume: () => void;
+  panelStatus: boolean;
+  togglePanelStatus: () => void;
+  panelScrollDirection: string;
+  changePanelScrollDirection: (direction: string) => void;
   weatherEnabled: boolean;
   toggleWeather: () => void;
   tempUnitFahrenheit: boolean;
@@ -160,6 +169,10 @@ export function NotchTab({
   toggleAmbience,
   mediaCompactGlowEnabled,
   toggleCompactGlow,
+  lyricsEnabled = true,
+  toggleLyrics,
+  lyricsSeekEnabled = true,
+  toggleLyricsSeek,
   panelControlCenter,
   togglePanelControlCenter,
   panelShelf,
@@ -178,6 +191,10 @@ export function NotchTab({
   resetCcLayout,
   notchScrollVolume,
   toggleNotchScrollVolume,
+  panelStatus,
+  togglePanelStatus,
+  panelScrollDirection,
+  changePanelScrollDirection,
   weatherEnabled,
   toggleWeather,
   tempUnitFahrenheit,
@@ -316,6 +333,24 @@ export function NotchTab({
           </label>
         </SettingRow>
 
+        <SettingRow icon={Circle} label={t("notch.panelStatus")} desc={t("notch.panelStatus.desc")}>
+          <label className="toggle-switch">
+            <input type="checkbox" checked={panelStatus} onChange={togglePanelStatus} />
+            <span className="slider"></span>
+          </label>
+        </SettingRow>
+
+        <SettingRow icon={Circle} label={t("notch.scrollDirection")} desc={t("notch.scrollDirection.desc")}>
+          <Dropdown
+            value={panelScrollDirection}
+            onChange={changePanelScrollDirection}
+            options={[
+              { value: "natural", label: t("notch.scrollDirection.natural") },
+              { value: "inverted", label: t("notch.scrollDirection.inverted") },
+            ]}
+          />
+        </SettingRow>
+
         {panelShelf && (
           <>
             <SettingRow icon={Circle} label={t("notch.shelfPersist")} desc={t("notch.shelfPersist.desc")}>
@@ -414,6 +449,24 @@ export function NotchTab({
                 <span className="slider"></span>
               </label>
             </SettingRow>
+
+            {toggleLyrics && (
+              <SettingRow icon={Music2} label={t("notch.lyrics")} desc={t("notch.lyrics.desc")}>
+                <label className="toggle-switch">
+                  <input type="checkbox" checked={lyricsEnabled} onChange={toggleLyrics} />
+                  <span className="slider"></span>
+                </label>
+              </SettingRow>
+            )}
+
+            {lyricsEnabled && toggleLyricsSeek && (
+              <SettingRow icon={Sparkles} label={t("notch.lyricsSeek")} desc={t("notch.lyricsSeek.desc")}>
+                <label className="toggle-switch">
+                  <input type="checkbox" checked={lyricsSeekEnabled} onChange={toggleLyricsSeek} />
+                  <span className="slider"></span>
+                </label>
+              </SettingRow>
+            )}
 
             <SettingRow icon={Volume2} label={t("notch.scrollVolume")} desc={t("notch.scrollVolume.desc")} divider={false}>
               <label className="toggle-switch">

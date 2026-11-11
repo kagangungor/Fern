@@ -954,8 +954,11 @@ function App() {
   const [settingsAmbienceEnabled, setSettingsAmbienceEnabled] = useState(() => localStorage.getItem("fern-media-ambience-enabled") !== "false");
   const [settingsCompactGlowEnabled, setSettingsCompactGlowEnabled] = useState(() => localStorage.getItem("fern-media-compact-glow-enabled") !== "false");
   const [settingsCornersEnabled, setSettingsCornersEnabled] = useState(() => localStorage.getItem("fern-corners-enabled") === "true");
-  const [mediaLayout, setMediaLayout] = useState<'classic' | 'compact'>(() => (localStorage.getItem("fern-media-layout") as 'classic' | 'compact') || 'classic');
+  const [mediaLayout, setMediaLayout] = useState<'classic' | 'compact'>(() => (localStorage.getItem("fern-media-layout") as 'classic' | 'compact') || 'compact');
   const [compactVolumeExpanded, setCompactVolumeExpanded] = useState(false);
+  const [settingsLyricsEnabled, setSettingsLyricsEnabled] = useState(() => localStorage.getItem("fern-lyrics-enabled") !== "false");
+  const [settingsLyricsSeekEnabled, setSettingsLyricsSeekEnabled] = useState(() => localStorage.getItem("fern-lyrics-seek-enabled") !== "false");
+  const [isLyricsOpen, setIsLyricsOpen] = useState(() => localStorage.getItem("fern-notch-lyrics-open") === "true");
 
   // Weather hook
   const { temperature, weatherCondition, weatherIcon: WeatherIcon, cityName, tempUnit } = useWeather(settingsWeatherEnabled);
@@ -1181,6 +1184,8 @@ function App() {
       "fern-media-album-art-enabled": setSettingsAlbumArtEnabled,
       "fern-media-ambience-enabled": setSettingsAmbienceEnabled,
       "fern-media-compact-glow-enabled": setSettingsCompactGlowEnabled,
+      "fern-lyrics-enabled": setSettingsLyricsEnabled,
+      "fern-lyrics-seek-enabled": setSettingsLyricsSeekEnabled,
       "fern-media-layout": setMediaLayout,
       "fern-corners-enabled": setSettingsCornersEnabled,
       "fern-scale": setScale,
@@ -2160,7 +2165,10 @@ function App() {
     if (fernMode === 'status' && isHovered) {
       return Math.min(200 + totalWidgets * 65 + netExtra + privacyExtra, 500) + dualClockExtra;
     }
-    if (isMusicMode && isHovered) return (mediaLayout === 'compact' ? 300 : 340) + privacyExtra;
+    if (isMusicMode && isHovered) {
+      const baseW = mediaLayout === 'compact' ? (isLyricsOpen && settingsLyricsEnabled ? 380 : 300) : 340;
+      return baseW + privacyExtra;
+    }
     if ((showPowerPulse || showLowBatteryPulse || showUpdatePulse) && !isHovered) return 200;
 
     let w = 140 + dualClockExtra + (agentWings ? (isMusicMode ? 24 : 56) : 0);
@@ -2202,6 +2210,7 @@ function App() {
       let h = mediaLayout === 'compact' ? (hasProgressBar ? 132 : 116) : 120;
       if (mediaLayout === 'compact') {
         if (compactVolumeExpanded) h += 36;
+        if (isLyricsOpen && settingsLyricsEnabled) h += 122;
       }
       return h + (mediaSessions.length > 1 ? 26 : 0);
     }
@@ -2395,6 +2404,12 @@ function App() {
                         onAnimatePrev={animatePrev}
                         onAnimateNext={animateNext}
                         onOpenCalendar={productivityEnabled ? toggleCalendarMode : undefined}
+                        isLyricsOpen={isLyricsOpen && settingsLyricsEnabled}
+                        onLyricsToggle={(open) => {
+                          setIsLyricsOpen(open);
+                          localStorage.setItem("fern-notch-lyrics-open", String(open));
+                        }}
+                        canSeekLyrics={settingsLyricsSeekEnabled}
                         onLayoutChange={(layout) => {
                           setMediaLayout(layout);
                           localStorage.setItem("fern-media-layout", layout);

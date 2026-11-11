@@ -28,6 +28,17 @@ function parseDrives(val: string | null): string[] {
   }
 }
 
+export const DOCK_MENU_IDS = ["calendar", "settings", "taskmgr", "restart", "clearicons", "quit"];
+
+function parseMenuItems(val: unknown): string[] {
+  try {
+    const parsed = typeof val === "string" ? JSON.parse(val) : val;
+    return Array.isArray(parsed) ? parsed.filter((id): id is string => DOCK_MENU_IDS.includes(id)) : DOCK_MENU_IDS;
+  } catch {
+    return DOCK_MENU_IDS;
+  }
+}
+
 export function useSettings() {
   const [autostart, setAutostart] = useState(false);
   const [weatherEnabled, setWeatherEnabled] = useState(true);
@@ -101,6 +112,12 @@ export function useSettings() {
   const [mediaAmbienceEnabled, setMediaAmbienceEnabled] = useState(true);
   const [artworkThemeEnabled, setArtworkThemeEnabled] = useState(true);
   const [mediaCompactGlowEnabled, setMediaCompactGlowEnabled] = useState(true);
+  const [lyricsEnabled, setLyricsEnabled] = useState(
+    () => localStorage.getItem("fern-lyrics-enabled") !== "false"
+  );
+  const [lyricsSeekEnabled, setLyricsSeekEnabled] = useState(
+    () => localStorage.getItem("fern-lyrics-seek-enabled") !== "false"
+  );
   const [mediaLayout, setMediaLayout] = useState<"classic" | "compact">(
     () => (localStorage.getItem("fern-media-layout") as "classic" | "compact") || "classic"
   );
@@ -177,6 +194,12 @@ export function useSettings() {
   const [dockMixedReorder, setDockMixedReorder] = useState(
     () => localStorage.getItem("fern-dock-mixed-reorder") === "true"
   );
+  const [dockIndicator, setDockIndicator] = useState(() => localStorage.getItem("fern-dock-indicator") ?? "bar");
+  const [dockMenuItems, setDockMenuItems] = useState<string[]>(() => parseMenuItems(localStorage.getItem("fern-dock-menu-items")));
+  const [dockShowEndTask, setDockShowEndTask] = useState(() => localStorage.getItem("fern-dock-show-end-task") !== "false");
+  const [panelStatus, setPanelStatus] = useState(() => localStorage.getItem("fern-panel-status-enabled") !== "false");
+  const readScrollDirection = (v: string | null) => (v === "inverted" ? "inverted" : "natural");
+  const [panelScrollDirection, setPanelScrollDirection] = useState(() => readScrollDirection(localStorage.getItem("fern-notch-scroll-direction")));
   const [dockMode, setDockMode] = useState(() => {
     const raw = localStorage.getItem("fern-dock-mode") || "smart";
     return raw === "auto-hide" ? "smart" : raw;
@@ -272,6 +295,8 @@ export function useSettings() {
       apply(getVal("fern-media-ambience-enabled"), setMediaAmbienceEnabled, readBool);
       apply(getVal("fern-media-artwork-theme"), setArtworkThemeEnabled, readBool);
       apply(getVal("fern-media-compact-glow-enabled"), setMediaCompactGlowEnabled, readBool);
+      apply(getVal("fern-lyrics-enabled"), setLyricsEnabled, readBool);
+      apply(getVal("fern-lyrics-seek-enabled"), setLyricsSeekEnabled, readBool);
       apply(getVal("fern-corners-enabled"), setCornersEnabled, readBool);
       apply(getVal("fern-time-format-24h"), setTimeFormat24h, readBool);
       apply(getVal("fern-memory-saver"), setMemorySaver, readBool);
@@ -305,6 +330,11 @@ export function useSettings() {
       apply(getVal("fern-panel-order"), setPanelOrder, (v) => parsePanelOrder(v));
       apply(getVal("fern-cc-layout"), setCcLayout, (v) => parseCcLayout(v));
       apply(getVal("fern-dock-recycle-enabled"), setDockRecycle, readBool);
+      apply(getVal("fern-dock-indicator"), setDockIndicator, (v) => v ?? "bar");
+      apply(getVal("fern-dock-menu-items"), setDockMenuItems, parseMenuItems);
+      apply(getVal("fern-dock-show-end-task"), setDockShowEndTask, (v) => v !== "false");
+      apply(getVal("fern-panel-status-enabled"), setPanelStatus, (v) => v !== "false");
+      apply(getVal("fern-notch-scroll-direction"), setPanelScrollDirection, readScrollDirection);
       apply(getVal("fern-dock-drives"), setDockDrives, parseDrives);
       apply(getVal("fern-dock-icon-only"), setDockIconOnly, readBool);
       apply(getVal("fern-start-icon"), setStartIcon, (v) => v);
@@ -410,6 +440,11 @@ export function useSettings() {
     "fern-panel-order": (v) => setPanelOrder(parsePanelOrder(v === null ? null : String(v))),
     "fern-cc-layout": (v) => setCcLayout(parseCcLayout(v === null ? null : String(v))),
     "fern-dock-recycle-enabled": setDockRecycle,
+    "fern-dock-indicator": (v) => setDockIndicator(String(v)),
+    "fern-dock-menu-items": (v) => setDockMenuItems(parseMenuItems(v)),
+    "fern-dock-show-end-task": (v) => setDockShowEndTask(v !== false && v !== "false"),
+    "fern-panel-status-enabled": (v) => setPanelStatus(v !== false && v !== "false"),
+    "fern-notch-scroll-direction": (v) => setPanelScrollDirection(String(v)),
     "fern-dock-drives": (v) => setDockDrives(parseDrives(v)),
     "fern-dock-icon-only": setDockIconOnly,
     "fern-start-icon": setStartIcon,
@@ -440,6 +475,8 @@ export function useSettings() {
     "fern-media-ambience-enabled": setMediaAmbienceEnabled,
     "fern-media-artwork-theme": setArtworkThemeEnabled,
     "fern-media-compact-glow-enabled": setMediaCompactGlowEnabled,
+    "fern-lyrics-enabled": setLyricsEnabled,
+    "fern-lyrics-seek-enabled": setLyricsSeekEnabled,
     "fern-media-layout": setMediaLayout,
     "fern-corners-enabled": setCornersEnabled,
     "fern-show-update-indicator": setShowUpdateIndicator,
@@ -776,6 +813,18 @@ export function useSettings() {
     saveSetting("fern-media-compact-glow-enabled", String(next));
   };
 
+  const toggleLyrics = () => {
+    const next = !lyricsEnabled;
+    setLyricsEnabled(next);
+    saveSetting("fern-lyrics-enabled", String(next));
+  };
+
+  const toggleLyricsSeek = () => {
+    const next = !lyricsSeekEnabled;
+    setLyricsSeekEnabled(next);
+    saveSetting("fern-lyrics-seek-enabled", String(next));
+  };
+
   const toggleCorners = () => {
     const next = !cornersEnabled;
     setCornersEnabled(next);
@@ -914,6 +963,38 @@ export function useSettings() {
     const next = !dockCalendarEnabled;
     setDockCalendarEnabled(next);
     saveSetting("fern-dock-calendar-enabled", String(next));
+  };
+
+  
+  const changeDockIndicator = (value: string) => {
+    setDockIndicator(value);
+    saveSetting("fern-dock-indicator", value);
+  };
+
+  const toggleDockMenuItem = (id: string) => {
+    const next = dockMenuItems.includes(id)
+      ? dockMenuItems.filter((x) => x !== id)
+      : DOCK_MENU_IDS.filter((x) => x === id || dockMenuItems.includes(x));
+    setDockMenuItems(next);
+    saveSetting("fern-dock-menu-items", JSON.stringify(next));
+  };
+
+  const toggleDockShowEndTask = () => {
+    const next = !dockShowEndTask;
+    setDockShowEndTask(next);
+    saveSetting("fern-dock-show-end-task", String(next));
+  };
+
+  const togglePanelStatus = () => {
+    const next = !panelStatus;
+    setPanelStatus(next);
+    saveSetting("fern-panel-status-enabled", String(next));
+  };
+
+  const changePanelScrollDirection = (value: string) => {
+    const norm = value === "inverted" ? "inverted" : "natural";
+    setPanelScrollDirection(norm);
+    saveSetting("fern-notch-scroll-direction", norm);
   };
 
   const toggleDockMixedReorder = () => {
@@ -1294,6 +1375,10 @@ export function useSettings() {
     toggleAmbience,
     mediaCompactGlowEnabled,
     toggleCompactGlow,
+    lyricsEnabled,
+    toggleLyrics,
+    lyricsSeekEnabled,
+    toggleLyricsSeek,
 
     // Weather
     weatherEnabled,
@@ -1361,6 +1446,16 @@ export function useSettings() {
     toggleDockWinNumber,
     dockMixedReorder,
     toggleDockMixedReorder,
+    dockIndicator,
+    changeDockIndicator,
+    dockMenuItems,
+    toggleDockMenuItem,
+    dockShowEndTask,
+    toggleDockShowEndTask,
+    panelStatus,
+    togglePanelStatus,
+    panelScrollDirection,
+    changePanelScrollDirection,
     dockAttentionEnabled,
     toggleDockAttention,
     dockHideDelay,

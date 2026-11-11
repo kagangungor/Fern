@@ -41,6 +41,7 @@ mod dock_extras;
 mod launchers;
 mod privacy_hud;
 mod app_audio;
+mod lyrics;
 
 use tauri::Manager;
 use windows::Win32::System::Console::SetConsoleCtrlHandler;
@@ -137,7 +138,10 @@ fn main() {
             windows_accent_backup_exists,
             reload_hotkeys,
             set_live_thumbnails,
+            set_live_thumbnails_opacity,
             clear_live_thumbnails,
+            pick_program,
+            close_app,
             get_target_app_volume,
             set_target_app_volume,
             adjust_target_app_volume,
@@ -296,7 +300,8 @@ fn main() {
             calendar_sync::caldav_get_cache,
             ics::ics_add_link,
             ics::ics_remove_link,
-            ics::ics_detect
+            ics::ics_detect,
+            get_lyrics
         ])
         .setup(|app| {
             init_taskbar_marker(app.handle());

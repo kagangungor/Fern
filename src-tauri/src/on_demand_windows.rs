@@ -114,9 +114,11 @@ fn build(app: &AppHandle, label: &str) -> Result<WebviewWindow, String> {
             api.prevent_close();
             let _ = win.hide();
             let _ = win.destroy();
+            let _ = win.emit("windows-changed", ());
         }
         if matches!(event, tauri::WindowEvent::Destroyed) {
             crate::memory_saver::trim_soon();
+            let _ = win.emit("windows-changed", ());
         }
     });
     crate::services::watch_webview_process(app, &window);
@@ -125,7 +127,10 @@ fn build(app: &AppHandle, label: &str) -> Result<WebviewWindow, String> {
 
 pub fn open(app: &AppHandle, label: &'static str) {
     let handle = app.clone();
-    with_window(app, label, move |_| crate::commands::bring_window_to_front(&handle, label));
+    with_window(app, label, move |_| {
+        crate::commands::bring_window_to_front(&handle, label);
+        let _ = handle.emit("windows-changed", ());
+    });
 }
 
 /// Opens Settings on `page`. A window created by this call has no listener yet, so the page is kept
@@ -151,6 +156,7 @@ pub fn close(app: &AppHandle, label: &str) {
     if let Some(window) = app.get_webview_window(label) {
         let _ = window.hide();
         let _ = window.destroy();
+        let _ = app.emit("windows-changed", ());
     }
 }
 
@@ -163,5 +169,6 @@ pub fn close_all(app: &AppHandle) {
 pub fn on_demand_window_ready(app: AppHandle, window: tauri::Window) {
     if take_waiting(window.label()) {
         crate::commands::bring_window_to_front(&app, window.label());
+        let _ = app.emit("windows-changed", ());
     }
 }

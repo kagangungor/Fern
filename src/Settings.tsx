@@ -4,7 +4,7 @@ import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { Effect, EffectState } from "@tauri-apps/api/window";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { Settings, Palette, PanelTop, Monitor, Layers, Info } from "lucide-react";
+import { Settings, Palette, PanelTop, Monitor, Layers, Activity, Info } from "lucide-react";
 import { WindowControls } from "./components/WindowControls";
 import {
   useSettings,
@@ -14,8 +14,10 @@ import {
   CalendarSyncPage,
   DockTab,
   OverlaysTab,
+  DiagnosticsTab,
   AboutTab,
 } from "./settings/index";
+import { SettingsSearch } from "./settings/SettingsSearch";
 import type { SettingsTab } from "./settings/index";
 import { initTheme } from "./theme";
 import { useT } from "./i18n";
@@ -29,13 +31,57 @@ const TABS: { id: SettingsTab; labelKey: string; icon: typeof Settings }[] = [
   { id: "notch", labelKey: "tabs.notch", icon: PanelTop },
   { id: "dock", labelKey: "tabs.dock", icon: Monitor },
   { id: "overlays", labelKey: "tabs.overlays", icon: Layers },
+  { id: "diagnostics", labelKey: "tabs.diagnostics", icon: Activity },
   { id: "about", labelKey: "tabs.about", icon: Info },
 ];
+
+function smoothScrollTo(container: HTMLElement, target: HTMLElement, duration = 320) {
+  const containerRect = container.getBoundingClientRect();
+  const targetRect = target.getBoundingClientRect();
+  const relativeTop = targetRect.top - containerRect.top;
+  const startTop = container.scrollTop;
+  const targetTop = Math.max(0, startTop + relativeTop - 12);
+
+  if (Math.abs(targetTop - startTop) < 2) {
+    container.scrollTop = targetTop;
+    return;
+  }
+
+  const startTime = performance.now();
+  const step = (now: number) => {
+    const elapsed = now - startTime;
+    const progress = Math.min(elapsed / duration, 1);
+    const ease = 1 - Math.pow(1 - progress, 3);
+    container.scrollTop = startTop + (targetTop - startTop) * ease;
+    if (progress < 1) {
+      requestAnimationFrame(step);
+    }
+  };
+  requestAnimationFrame(step);
+}
 
 function SettingsApp() {
   const t = useT();
   const [activeTab, setActiveTab] = useState<SettingsTab>("general");
   const settings = useSettings();
+
+  const handleNavigate = (tab: SettingsTab, sectionId?: string) => {
+    setActiveTab(tab);
+    if (sectionId) {
+      window.dispatchEvent(new CustomEvent("fern-expand-section", { detail: sectionId }));
+      setTimeout(() => {
+        const el = document.getElementById(sectionId);
+        const container = document.querySelector<HTMLElement>(".settings-content");
+        if (el && container) {
+          smoothScrollTo(container, el);
+          el.classList.remove("section-highlight");
+          void el.offsetWidth;
+          el.classList.add("section-highlight");
+          setTimeout(() => el.classList.remove("section-highlight"), 2000);
+        }
+      }, 160);
+    }
+  };
 
   useEffect(() => {
     return initTheme({ isSettings: true });
@@ -85,6 +131,7 @@ function SettingsApp() {
 
       <div className="settings-body">
         <div className="settings-sidebar">
+          <SettingsSearch onNavigate={handleNavigate} />
           {TABS.map(({ id, labelKey, icon: Icon }) => (
             <button
               key={id}
@@ -182,6 +229,10 @@ function SettingsApp() {
               toggleAmbience={settings.toggleAmbience}
               mediaCompactGlowEnabled={settings.mediaCompactGlowEnabled}
               toggleCompactGlow={settings.toggleCompactGlow}
+              lyricsEnabled={settings.lyricsEnabled}
+              toggleLyrics={settings.toggleLyrics}
+              lyricsSeekEnabled={settings.lyricsSeekEnabled}
+              toggleLyricsSeek={settings.toggleLyricsSeek}
               notchScrollVolume={settings.notchScrollVolume}
               toggleNotchScrollVolume={settings.toggleNotchScrollVolume}
               shelfPersist={settings.shelfPersist}
@@ -194,6 +245,10 @@ function SettingsApp() {
               togglePanelControlCenter={settings.togglePanelControlCenter}
               panelShelf={settings.panelShelf}
               togglePanelShelf={settings.togglePanelShelf}
+              panelStatus={settings.panelStatus}
+              togglePanelStatus={settings.togglePanelStatus}
+              panelScrollDirection={settings.panelScrollDirection}
+              changePanelScrollDirection={settings.changePanelScrollDirection}
               panelOrder={settings.panelOrder}
               reorderPanels={settings.reorderPanels}
               resetPanelOrder={settings.resetPanelOrder}
@@ -273,6 +328,12 @@ function SettingsApp() {
               dockModeByMonitor={settings.dockModeByMonitor}
               setDockModeForMonitor={settings.setDockModeForMonitor}
               replaceDockModes={settings.replaceDockModesByMonitor}
+              dockIndicator={settings.dockIndicator}
+              changeDockIndicator={settings.changeDockIndicator}
+              dockShowEndTask={settings.dockShowEndTask}
+              toggleDockShowEndTask={settings.toggleDockShowEndTask}
+              dockMenuItems={settings.dockMenuItems}
+              toggleDockMenuItem={settings.toggleDockMenuItem}
             />
           )}
           {activeTab === "overlays" && (
@@ -293,6 +354,7 @@ function SettingsApp() {
               handleEdgeDelayChange={settings.handleEdgeDelayChange}
             />
           )}
+          {activeTab === "diagnostics" && <DiagnosticsTab />}
           {activeTab === "about" && (
             <AboutTab
               appVersion={settings.appVersion}

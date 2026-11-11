@@ -78,6 +78,12 @@ interface DockTabProps {
   toggleDockAttention: () => void;
   dockHideDelay: string;
   handleDockHideDelayChange: (delay: string) => void;
+  dockIndicator: string;
+  changeDockIndicator: (indicator: string) => void;
+  dockShowEndTask: boolean;
+  toggleDockShowEndTask: () => void;
+  dockMenuItems: string[];
+  toggleDockMenuItem: (id: string) => void;
   monitors: MonitorInfo[];
   dockMonitorMode: MonitorMode;
   setDockMonitorModeValue: (mode: MonitorMode) => void;
@@ -129,6 +135,12 @@ export function DockTab({
   toggleDockAttention,
   dockHideDelay,
   handleDockHideDelayChange,
+  dockIndicator,
+  changeDockIndicator,
+  dockShowEndTask,
+  toggleDockShowEndTask,
+  dockMenuItems,
+  toggleDockMenuItem,
   monitors,
   dockMonitorMode,
   setDockMonitorModeValue,
@@ -384,6 +396,25 @@ export function DockTab({
           </SettingSection>
 
           <SettingSection id="dock-style" title={t("dock.section.style")}>
+            <SettingRow icon={Circle} label={t("dock.indicator")} desc={t("dock.indicator.desc")}>
+              <Dropdown
+                value={dockIndicator}
+                onChange={changeDockIndicator}
+                options={[
+                  { value: "dot", label: t("dock.indicator.dot") },
+                  { value: "dots", label: t("dock.indicator.dots") },
+                  { value: "bar", label: t("dock.indicator.bar") },
+                ]}
+              />
+            </SettingRow>
+
+            <SettingRow icon={Terminal} label={t("dock.showEndTask")} desc={t("dock.showEndTask.desc")}>
+              <label className="toggle-switch">
+                <input type="checkbox" checked={dockShowEndTask} onChange={toggleDockShowEndTask} />
+                <span className="slider"></span>
+              </label>
+            </SettingRow>
+
             <SettingRow icon={Circle} label={t("dock.iconOnly")} desc={t("dock.iconOnly.desc")}>
               <label className="toggle-switch">
                 <input type="checkbox" checked={dockIconOnly} onChange={toggleDockIconOnly} />
@@ -471,9 +502,48 @@ export function DockTab({
             </div>
           </SettingSection>
 
+          <SettingSection id="dock-menu-items" title={t("dock.section.menuItems")}>
+            <SettingRow icon={CalendarDays} label={t("dockmenu.openCalendar")} desc={t("dock.menuItems.calendar.desc")}>
+              <label className="toggle-switch">
+                <input type="checkbox" checked={dockMenuItems.includes("calendar")} onChange={() => toggleDockMenuItem("calendar")} />
+                <span className="slider"></span>
+              </label>
+            </SettingRow>
+            <SettingRow icon={Circle} label={t("dockmenu.openSettings")} desc={t("dock.menuItems.settings.desc")}>
+              <label className="toggle-switch">
+                <input type="checkbox" checked={dockMenuItems.includes("settings")} onChange={() => toggleDockMenuItem("settings")} />
+                <span className="slider"></span>
+              </label>
+            </SettingRow>
+            <SettingRow icon={Terminal} label={t("dockmenu.taskManager")} desc={t("dock.menuItems.taskmgr.desc")}>
+              <label className="toggle-switch">
+                <input type="checkbox" checked={dockMenuItems.includes("taskmgr")} onChange={() => toggleDockMenuItem("taskmgr")} />
+                <span className="slider"></span>
+              </label>
+            </SettingRow>
+            <SettingRow icon={RotateCcw} label={t("general.restart")} desc={t("dock.menuItems.restart.desc")}>
+              <label className="toggle-switch">
+                <input type="checkbox" checked={dockMenuItems.includes("restart")} onChange={() => toggleDockMenuItem("restart")} />
+                <span className="slider"></span>
+              </label>
+            </SettingRow>
+            <SettingRow icon={Sparkles} label={t("dockmenu.clearIconCache")} desc={t("dock.menuItems.clearicons.desc")}>
+              <label className="toggle-switch">
+                <input type="checkbox" checked={dockMenuItems.includes("clearicons")} onChange={() => toggleDockMenuItem("clearicons")} />
+                <span className="slider"></span>
+              </label>
+            </SettingRow>
+            <SettingRow icon={Circle} label={t("general.quit")} desc={t("dock.menuItems.quit.desc")}>
+              <label className="toggle-switch">
+                <input type="checkbox" checked={dockMenuItems.includes("quit")} onChange={() => toggleDockMenuItem("quit")} />
+                <span className="slider"></span>
+              </label>
+            </SettingRow>
+          </SettingSection>
+
           <SettingSection id="dock-hidden-apps" title={t("dock.hiddenApps")}>
-            <div className="setting-item" style={{ flexDirection: "column", alignItems: "flex-start", gap: "12px", width: "100%" }}>
-              <div style={{ display: "flex", alignItems: "center", gap: "10px", width: "100%" }}>
+            <div className="setting-item" style={{ flexDirection: "column", alignItems: "flex-start", gap: "12px", width: "100%", boxSizing: "border-box" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "10px", width: "100%", boxSizing: "border-box" }}>
                 <div className="setting-icon-bg">
                   <EyeOff size={14} strokeWidth={1.5} />
                 </div>
@@ -483,11 +553,11 @@ export function DockTab({
                 </div>
               </div>
               {hiddenApps.length === 0 ? (
-                <div style={{ paddingLeft: "34px", color: "var(--fern-text-muted, rgba(255,255,255,0.4))", fontSize: "13px" }}>
+                <div style={{ paddingLeft: "34px", color: "var(--fern-text-muted, rgba(255,255,255,0.4))", fontSize: "13px", boxSizing: "border-box" }}>
                   {t("dock.hiddenApps.none")}
                 </div>
               ) : (
-                <div style={{ display: "flex", flexDirection: "column", gap: "8px", width: "100%", paddingLeft: "34px" }}>
+                <div style={{ display: "flex", flexDirection: "column", gap: "8px", width: "100%", paddingLeft: "34px", boxSizing: "border-box" }}>
                   {hiddenApps.map((appId) => (
                     <div
                       key={appId}
@@ -498,6 +568,7 @@ export function DockTab({
                         background: "rgba(255,255,255,0.05)",
                         padding: "8px 12px",
                         borderRadius: "8px",
+                        boxSizing: "border-box",
                       }}
                     >
                       <span style={{ fontSize: "13px", color: "var(--fern-text, #fff)" }}>
