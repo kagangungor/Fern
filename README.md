@@ -40,11 +40,11 @@
 <div align="center">
 <table>
   <tr>
-    <td align="center"><img src="docs/screenshots/island.png" width="420" alt="The Fern notch" /></td>
-    <td align="center"><img src="docs/screenshots/dock.png" width="420" alt="The Fern dock" /></td>
+    <td align="center"><img src="docs/screenshots/island.webp" width="420" alt="The Fern notch with privacy indicator" /></td>
+    <td align="center"><img src="docs/screenshots/dock.webp" width="420" alt="The Fern dock" /></td>
   </tr>
   <tr>
-    <td align="center"><sub>The notch</sub></td>
+    <td align="center"><sub>The notch (with active mic indicator)</sub></td>
     <td align="center"><sub>The dock</sub></td>
   </tr>
 </table>
@@ -87,6 +87,12 @@ Scroll or swipe on the notch to cycle through panels (customizable order in **Se
 | **Calendar** | Day, week, month, and agenda views synced from `.ics` / `webcal://` links or CalDAV (credentials stored in Windows Credential Manager), plus timer, stopwatch, and Pomodoro. |
 | **Shelf** | Drop files or text onto the notch to keep them handy and drag them into any app later. |
 | **Agent Companion** | Fernie mascot status card with tool details, click-to-focus window jumping, and **Allow / Deny** buttons for interactive prompts. |
+
+<div align="center">
+  <img src="docs/screenshots/notch-lyrics.webp" width="580" alt="Live Synchronized Lyrics inside the Fern music notch" />
+  <br />
+  <sub>Live Synchronized Lyrics — click any line to seek</sub>
+</div>
 
 ### Visibility & overlays
 
