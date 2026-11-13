@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="docs/logo.png" width="96" alt="Fern logo" />
+<img src="docs/logo.png" width="128" alt="Fern logo" />
 
 <br />
 
