@@ -8,7 +8,34 @@ use windows::Win32::Graphics::Imaging::{IWICImagingFactory, CLSID_WICImagingFact
 use base64::{Engine as _, engine::general_purpose};
 use std::path::PathBuf;
 use std::sync::OnceLock;
+
+/// RAII guard for COM initialization on worker/blocking threads.
+/// Uninitializes only when `CoInitializeEx` returned `S_OK` or `S_FALSE` (`is_ok()`),
+/// leaving mismatched-apartment failures (`RPC_E_CHANGED_MODE`) untouched.
+#[must_use]
+pub struct ComGuard {
+    pub initialized: bool,
+}
+
+impl ComGuard {
+    pub fn mta() -> Self {
+        use windows::Win32::System::Com::{CoInitializeEx, COINIT_MULTITHREADED};
+        Self {
+            initialized: unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }.is_ok(),
+        }
+    }
+}
+
+impl Drop for ComGuard {
+    fn drop(&mut self) {
+        if self.initialized {
+            unsafe { windows::Win32::System::Com::CoUninitialize() };
+        }
+    }
+}
 use tauri::Manager;
+
+
 
 pub fn resolve_shortcut(path: &str) -> Option<(String, String)> {
     unsafe {
@@ -477,6 +504,8 @@ fn settings_cache() -> &'static std::sync::Mutex<std::collections::HashMap<Strin
 /// Load settings.json into the in-memory cache. Call once at startup.
 pub fn init_settings_cache(app: &tauri::AppHandle) {
     use tauri::Manager;
+
+
     if let Some(path) = app.path().app_config_dir().ok().map(|p| p.join("settings.json")) {
         if let Ok(content) = std::fs::read_to_string(path) {
             if let Ok(settings) = serde_json::from_str::<std::collections::HashMap<String, serde_json::Value>>(&content) {

@@ -41,8 +41,6 @@ pub enum SystemCommand {
     MediaPrevious,
     MediaSeek(i64),
     ToggleVisibility(bool),
-    BrightnessUp,
-    BrightnessDown,
 }
 
 #[derive(Clone, Copy, Deserialize, Debug)]

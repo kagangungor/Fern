@@ -288,7 +288,6 @@ fn main() {
             kill_process,
             export_settings,
             import_settings,
-            reset_settings,
             export_settings_dialog,
             import_settings_dialog,
             updater::check_for_updates,
@@ -405,12 +404,14 @@ fn main() {
                     let app_handle = app.handle().clone();
                     std::thread::spawn(move || {
                         use windows::Win32::System::Threading::{WaitForSingleObject, INFINITE};
-                        use windows::Win32::Foundation::{HANDLE, WAIT_OBJECT_0};
+                        use windows::Win32::Foundation::{HANDLE, WAIT_FAILED, WAIT_OBJECT_0};
                         let h_event = HANDLE(h_event as *mut _);
                         loop {
                             let result = unsafe { WaitForSingleObject(h_event, INFINITE) };
                             if result == WAIT_OBJECT_0 {
                                 crate::on_demand_windows::open(&app_handle, crate::on_demand_windows::SETTINGS);
+                            } else if result == WAIT_FAILED {
+                                break;
                             }
                         }
                     });
@@ -445,17 +446,7 @@ fn main() {
                             crate::commands::restore_taskbar_and_exit(&ah);
                         }
                         "restart" => {
-                            crate::state::SHUTTING_DOWN.store(true, std::sync::atomic::Ordering::Relaxed);
-                            for (label, w) in ah.webview_windows() {
-                                if crate::state::is_notch_label(&label) || crate::state::is_dock_label(&label) {
-                                    if let Ok(hwnd) = w.hwnd() { unregister_appbar_native(hwnd); }
-                                }
-                            }
-                            crate::on_demand_windows::close_all(&ah);
-                            std::env::set_var("FERN_RESTARTING", "1");
-                            close_single_instance_handles();
-
-                            ah.restart();
+                            crate::commands::relaunch_fern(&ah);
                         }
                         "settings" => {
                             crate::on_demand_windows::open(&ah, crate::on_demand_windows::SETTINGS);

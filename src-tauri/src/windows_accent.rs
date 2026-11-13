@@ -93,7 +93,23 @@ fn write_value(key: &str, name: &str, value: &Saved) -> bool {
     }
 }
 
+fn last_self_broadcast() -> &'static std::sync::Mutex<Option<std::time::Instant>> {
+    static LAST: std::sync::OnceLock<std::sync::Mutex<Option<std::time::Instant>>> = std::sync::OnceLock::new();
+    LAST.get_or_init(|| std::sync::Mutex::new(None))
+}
+
+pub fn is_recent_self_broadcast() -> bool {
+    last_self_broadcast()
+        .lock()
+        .ok()
+        .and_then(|g| *g)
+        .is_some_and(|t| t.elapsed() < std::time::Duration::from_millis(1500))
+}
+
 fn broadcast() {
+    if let Ok(mut guard) = last_self_broadcast().lock() {
+        *guard = Some(std::time::Instant::now());
+    }
     let setting = wide("ImmersiveColorSet");
     unsafe {
         let mut result = 0usize;

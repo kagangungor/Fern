@@ -73,6 +73,17 @@ fn mode_setting_keys(kind: WindowKind) -> (&'static str, &'static str) {
     }
 }
 
+pub fn should_use_per_monitor_map(monitor_count: usize, monitor_mode: &str) -> bool {
+    monitor_count > 1 && monitor_mode == "all"
+}
+
+pub fn is_per_monitor_active(app: &AppHandle, kind: WindowKind) -> bool {
+    let monitors = app.available_monitors().unwrap_or_default();
+    let (monitor_mode_key, _) = mode_and_id_keys(kind);
+    let monitor_mode = get_setting_str(app, monitor_mode_key).unwrap_or_else(|| "primary".to_string());
+    should_use_per_monitor_map(monitors.len(), &monitor_mode)
+}
+
 /// Resolves which mode (fixed/smart/peek) a specific dock or notch window
 /// should use. Per-monitor overrides live in a JSON map keyed by the same
 /// stable monitor id used elsewhere (`fern-dock-mode-by-monitor` etc.);
@@ -84,17 +95,7 @@ pub fn resolve_mode_for_label(app: &AppHandle, kind: WindowKind, label: &str) ->
     let fallback = if matches!(kind, WindowKind::Dock) { "smart" } else { "fixed" };
     let default_mode = normalize(get_setting_str(app, default_key).unwrap_or_else(|| fallback.to_string()));
 
-    let monitors = app.available_monitors().unwrap_or_default();
-    if monitors.len() <= 1 {
-        return default_mode;
-    }
-
-    let (monitor_mode_key, _) = match kind {
-        WindowKind::Dock => ("fern-dock-monitor-mode", "fern-dock-monitor-id"),
-        WindowKind::Notch => ("fern-notch-monitor-mode", "fern-notch-monitor-id"),
-    };
-    let monitor_mode = get_setting_str(app, monitor_mode_key).unwrap_or_else(|| "primary".to_string());
-    if monitor_mode != "all" {
+    if !is_per_monitor_active(app, kind) {
         return default_mode;
     }
 
@@ -109,8 +110,7 @@ pub fn resolve_mode_for_label(app: &AppHandle, kind: WindowKind, label: &str) ->
 /// so an in-notch/in-dock mode switcher affects only that screen.
 pub fn set_mode_for_label(app: &AppHandle, kind: WindowKind, label: &str, mode: &str) -> Result<(), String> {
     let (default_key, map_key) = mode_setting_keys(kind);
-    let monitors = app.available_monitors().unwrap_or_default();
-    if monitors.len() <= 1 {
+    if !is_per_monitor_active(app, kind) {
         return crate::commands::save_setting(app.clone(), default_key.to_string(), serde_json::Value::String(mode.to_string()));
     }
 
@@ -222,4 +222,17 @@ pub fn sync_monitor_windows(app: &AppHandle) {
     }
 
     MONITOR_SYNC_IN_PROGRESS.store(false, Ordering::SeqCst);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_use_per_monitor_map;
+
+    #[test]
+    fn per_monitor_map_is_used_only_for_multi_monitor_all_mode() {
+        assert!(!should_use_per_monitor_map(1, "all"));
+        assert!(!should_use_per_monitor_map(2, "primary"));
+        assert!(!should_use_per_monitor_map(2, "specific"));
+        assert!(should_use_per_monitor_map(2, "all"));
+    }
 }

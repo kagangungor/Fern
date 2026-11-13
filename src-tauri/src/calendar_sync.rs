@@ -178,13 +178,28 @@ pub fn emit_state(app: &AppHandle) -> CalendarState {
     state
 }
 
+fn store_lock() -> &'static std::sync::Mutex<()> {
+    static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+    LOCK.get_or_init(|| std::sync::Mutex::new(()))
+}
+
+struct SyncGuard;
+
+impl Drop for SyncGuard {
+    fn drop(&mut self) {
+        SYNCING.store(false, Ordering::SeqCst);
+    }
+}
+
 pub fn put_source(app: &AppHandle, key: &str, data: SourceData) {
+    let _guard = store_lock().lock().unwrap_or_else(|e| e.into_inner());
     let mut store = read_store(app);
     store.sources.insert(key.to_string(), data);
     write_store(app, &store);
 }
 
 pub fn drop_source(app: &AppHandle, key: &str) {
+    let _guard = store_lock().lock().unwrap_or_else(|e| e.into_inner());
     let mut store = read_store(app);
     if store.sources.remove(key).is_some() {
         write_store(app, &store);
@@ -204,6 +219,27 @@ fn record(store: &mut Store, key: String, result: Result<(Vec<CalInfo>, Vec<CalE
     }
 }
 
+fn merge_sync_results(
+    store: &mut Store,
+    account_connected: bool,
+    current_link_keys: &[String],
+    fetched: Vec<(String, Result<(Vec<CalInfo>, Vec<CalEvent>), String>)>,
+) {
+    for (key, result) in fetched {
+        let still_wanted = if key == ACCOUNT_KEY {
+            account_connected
+        } else {
+            current_link_keys.contains(&key)
+        };
+        if still_wanted {
+            record(store, key, result);
+        }
+    }
+    store
+        .sources
+        .retain(|key, _| (account_connected && key == ACCOUNT_KEY) || current_link_keys.contains(key));
+}
+
 async fn sync(app: &AppHandle, background: bool) -> Result<CalendarState, String> {
     let creds = crate::caldav::stored_credentials(app);
     let links = crate::ics::list_links(app);
@@ -213,34 +249,41 @@ async fn sync(app: &AppHandle, background: bool) -> Result<CalendarState, String
     if SYNCING.swap(true, Ordering::SeqCst) {
         return Err("A sync is already running.".to_string());
     }
+    let _sync_guard = SyncGuard;
     LAST_ATTEMPT_MS.store(now_ms(), Ordering::Relaxed);
 
-    let mut store = read_store(app);
-
-    if let Some(creds) = creds {
-        let auth_failed = store
+    let auth_failed = {
+        let _guard = store_lock().lock().unwrap_or_else(|e| e.into_inner());
+        read_store(app)
             .sources
             .get(ACCOUNT_KEY)
             .and_then(|s| s.error.as_deref())
-            == Some(crate::caldav::AUTH_ERROR);
+            == Some(crate::caldav::AUTH_ERROR)
+    };
+
+    let mut fetched: Vec<(String, Result<(Vec<CalInfo>, Vec<CalEvent>), String>)> = Vec::new();
+    if let Some(creds) = creds {
         if !(background && auth_failed) {
             let result = crate::caldav::fetch_all(&creds).await;
-            record(&mut store, ACCOUNT_KEY.to_string(), result);
+            fetched.push((ACCOUNT_KEY.to_string(), result));
         }
     }
 
     for link in &links {
         let result = crate::ics::fetch_link(app, link).await.map(|events| (Vec::new(), events));
-        record(&mut store, link_key(&link.id), result);
+        fetched.push((link_key(&link.id), result));
     }
 
-    let wanted: Vec<String> = links.iter().map(|l| link_key(&l.id)).collect();
-    store
-        .sources
-        .retain(|key, _| key == ACCOUNT_KEY || wanted.contains(key));
+    let store = {
+        let _guard = store_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let mut store = read_store(app);
+        let account_connected = crate::caldav::is_connected(app);
+        let wanted: Vec<String> = crate::ics::list_links(app).iter().map(|l| link_key(&l.id)).collect();
+        merge_sync_results(&mut store, account_connected, &wanted, fetched);
+        write_store(app, &store);
+        store
+    };
 
-    SYNCING.store(false, Ordering::SeqCst);
-    write_store(app, &store);
     let state = state_from(app, &store);
     let _ = app.emit("caldav-updated", &state);
     Ok(state)
@@ -298,4 +341,65 @@ pub async fn caldav_sync_now(app: AppHandle) -> Result<CalendarState, String> {
 #[tauri::command]
 pub fn caldav_get_cache(app: AppHandle) -> CalendarState {
     current_state(&app)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sync_guard_clears_flag_on_drop() {
+        SYNCING.store(false, Ordering::SeqCst);
+        {
+            assert!(!SYNCING.swap(true, Ordering::SeqCst));
+            let _guard = SyncGuard;
+            assert!(SYNCING.load(Ordering::SeqCst));
+        }
+        assert!(!SYNCING.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn merge_sync_results_preserves_concurrently_added_and_drops_removed_sources() {
+        let mut store = Store::default();
+        store.sources.insert(
+            "link:added_mid_sync".to_string(),
+            SourceData {
+                events: vec![CalEvent {
+                    uid: "u1".to_string(),
+                    calendar: "New".to_string(),
+                    color: None,
+                    title: "Mid-sync link".to_string(),
+                    location: None,
+                    all_day: false,
+                    start: 100,
+                    end: 200,
+                }],
+                synced_at: Some(1234),
+                ..Default::default()
+            },
+        );
+        store.sources.insert("link:stale".to_string(), SourceData::default());
+
+        let current_links = vec!["link:added_mid_sync".to_string(), "link:kept".to_string()];
+        let fetched = vec![
+            (
+                ACCOUNT_KEY.to_string(),
+                Ok((vec![CalInfo { name: "Work".to_string(), color: None }], vec![])),
+            ),
+            ("link:kept".to_string(), Ok((vec![], vec![]))),
+            ("link:removed_mid_sync".to_string(), Ok((vec![], vec![]))),
+        ];
+
+        merge_sync_results(&mut store, false, &current_links, fetched);
+
+        // Account was disconnected mid-sync -> must not be resurrected
+        assert!(!store.sources.contains_key(ACCOUNT_KEY));
+        // Removed link must not be resurrected; stale link must be pruned
+        assert!(!store.sources.contains_key("link:removed_mid_sync"));
+        assert!(!store.sources.contains_key("link:stale"));
+        // Link added mid-sync must stay intact with its cached events
+        assert_eq!(store.sources["link:added_mid_sync"].events.len(), 1);
+        // Existing synced link gets updated
+        assert!(store.sources["link:kept"].synced_at.is_some());
+    }
 }

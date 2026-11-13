@@ -247,6 +247,9 @@ async fn install_inner(app: &AppHandle) -> Result<(), String> {
         .installer_args(installer_scope_args())
         .on_before_exit(move || {
             crate::state::SHUTTING_DOWN.store(true, Ordering::Relaxed);
+            crate::commands::unregister_all_appbars(&hook_handle);
+            crate::utils::set_taskbar_visibility(true, true);
+            crate::state::NATIVE_TASKBAR_HIDDEN.store(false, Ordering::Relaxed);
             let _ = hook_handle.emit("auto-update-status", serde_json::json!({ "status": "installing" }));
             hook_handle.cleanup_before_exit();
         })

@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{mpsc, Mutex};
 use std::time::Duration;
 use tauri::{AppHandle, Emitter};
@@ -16,6 +16,8 @@ const SETTING: &str = "fern-agent-api";
 
 static ACTIVE: AtomicUsize = AtomicUsize::new(0);
 static NEXT_ASK: AtomicU64 = AtomicU64::new(1);
+static STARTED: AtomicBool = AtomicBool::new(false);
+static ENABLED: AtomicBool = AtomicBool::new(false);
 static PENDING: Mutex<Option<HashMap<u64, mpsc::Sender<bool>>>> = Mutex::new(None);
 
 #[derive(Deserialize)]
@@ -361,24 +363,52 @@ pub fn set_hooks(enable: bool) {
     sync_claude_hooks(enable);
 }
 
+pub fn set_enabled(app: &AppHandle, enable: bool) {
+    ENABLED.store(enable, Ordering::SeqCst);
+    std::thread::spawn(move || set_hooks(enable));
+    if enable {
+        start(app.clone());
+    }
+}
+
 pub fn start(app: AppHandle) {
     let enabled = crate::utils::get_setting_str(&app, SETTING).as_deref() == Some("true");
+    ENABLED.store(enabled, Ordering::SeqCst);
     if !enabled {
         return;
     }
     std::thread::spawn(|| set_hooks(true));
-    let Some(token) = random_token() else { return };
-    let Ok(listener) = TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0))) else { return };
-    let Ok(addr) = listener.local_addr() else { return };
-    let Some(path) = config_path() else { return };
+    if STARTED.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let Some(token) = random_token() else {
+        STARTED.store(false, Ordering::SeqCst);
+        return;
+    };
+    let Ok(listener) = TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0))) else {
+        STARTED.store(false, Ordering::SeqCst);
+        return;
+    };
+    let Ok(addr) = listener.local_addr() else {
+        STARTED.store(false, Ordering::SeqCst);
+        return;
+    };
+    let Some(path) = config_path() else {
+        STARTED.store(false, Ordering::SeqCst);
+        return;
+    };
     let config = serde_json::json!({ "port": addr.port(), "token": token }).to_string();
     if std::fs::write(&path, config).is_err() {
+        STARTED.store(false, Ordering::SeqCst);
         return;
     }
 
     std::thread::spawn(move || {
         for stream in listener.incoming() {
             let Ok(stream) = stream else { continue };
+            if !ENABLED.load(Ordering::Relaxed) {
+                continue;
+            }
             if !stream.peer_addr().map(|a| a.ip().is_loopback()).unwrap_or(false) {
                 continue;
             }

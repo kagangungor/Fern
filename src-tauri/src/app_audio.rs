@@ -7,7 +7,7 @@ use windows::Win32::Media::Audio::{
     ISimpleAudioVolume, DEVICE_STATE_ACTIVE, MMDeviceEnumerator,
 };
 use windows::Win32::System::Com::{
-    CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_ALL, COINIT_MULTITHREADED,
+    CoCreateInstance, CLSCTX_ALL,
 };
 use windows::Win32::System::Threading::{
     OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
@@ -49,6 +49,18 @@ fn get_exe_name_for_pid(pid: u32) -> Option<String> {
     }
 }
 
+fn stem_prefix_match(longer: &str, shorter: &str) -> bool {
+    if !longer.starts_with(shorter) {
+        return false;
+    }
+    let suffix = &longer[shorter.len()..];
+    if suffix.is_empty() {
+        return true;
+    }
+    // Allow version/arch numeric suffixes like obs -> obs64 (len >= 3) or longer app prefixes (len >= 5).
+    (shorter.len() >= 3 && suffix.chars().all(|c| c.is_ascii_digit())) || shorter.len() >= 5
+}
+
 /// Normalized check to see if an audio session matches the target application.
 fn is_session_match(
     session_pid: u32,
@@ -64,13 +76,32 @@ fn is_session_match(
 
     if let Some(exe) = session_exe {
         let exe_clean = exe.trim().to_lowercase();
+        if exe_clean.is_empty() || target_clean.is_empty() {
+            return false;
+        }
         if exe_clean == target_clean {
             return true;
         }
-        if exe_clean.replace(".exe", "") == target_clean.replace(".exe", "") {
+        let exe_stem = exe_clean.strip_suffix(".exe").unwrap_or(&exe_clean);
+        let target_stem = target_clean.strip_suffix(".exe").unwrap_or(target_clean);
+        if exe_stem == target_stem {
             return true;
         }
-        if target_clean.contains(&exe_clean) || exe_clean.contains(target_clean) {
+        if exe_stem.len() >= 3
+            && target_stem
+                .split(|c: char| !c.is_alphanumeric())
+                .any(|tok| tok == exe_stem)
+        {
+            return true;
+        }
+        if target_stem.len() >= 3
+            && exe_stem
+                .split(|c: char| !c.is_alphanumeric())
+                .any(|tok| tok == target_stem)
+        {
+            return true;
+        }
+        if stem_prefix_match(exe_stem, target_stem) || stem_prefix_match(target_stem, exe_stem) {
             return true;
         }
     }
@@ -95,11 +126,10 @@ where
         .to_lowercase();
 
     unsafe {
-        let com_initialized = CoInitializeEx(None, COINIT_MULTITHREADED).is_ok();
-        let result = (|| -> Result<bool, String> {
-            let enumerator: IMMDeviceEnumerator =
-                CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)
-                    .map_err(|e| e.to_string())?;
+        let _com = crate::utils::ComGuard::mta();
+        let enumerator: IMMDeviceEnumerator =
+            CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)
+                .map_err(|e| e.to_string())?;
 
             let devices = enumerator
                 .EnumAudioEndpoints(eRender, DEVICE_STATE_ACTIVE)
@@ -144,13 +174,6 @@ where
             }
 
             Ok(matched_any)
-        })();
-
-        if com_initialized {
-            CoUninitialize();
-        }
-
-        result
     }
 }
 
@@ -255,4 +278,22 @@ pub fn toggle_app_mute(
         muted: new_mute,
         found: matched,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_session_match;
+
+    #[test]
+    fn session_matching_handles_stems_tokens_and_rejects_short_substrings() {
+        assert!(is_session_match(10, Some("Spotify.exe"), "spotify.exe", None));
+        assert!(is_session_match(10, Some("Spotify.exe"), "spotify", None));
+        assert!(is_session_match(10, Some("chrome.exe"), "google chrome", None));
+        assert!(is_session_match(10, Some("obs64.exe"), "obs", None));
+        assert!(is_session_match(42, Some("other.exe"), "unrelated.exe", Some(&[42])));
+
+        assert!(!is_session_match(10, Some("whatsapp.exe"), "app", None));
+        assert!(!is_session_match(10, Some("knowledge.exe"), "edge.exe", None));
+        assert!(!is_session_match(10, Some("spotify.exe"), "", None));
+    }
 }

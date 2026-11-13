@@ -268,13 +268,19 @@ pub async fn change_dock_mode(app: AppHandle, mode: String) {
     if enabled != "true" {
         return;
     }
+    let per_monitor = crate::monitors::is_per_monitor_active(&app, crate::types::WindowKind::Dock);
     let labels: Vec<String> = app.webview_windows().keys()
         .filter(|l| crate::state::is_dock_label(l))
         .cloned()
         .collect();
     for label in labels {
+        let effective = if per_monitor {
+            crate::monitors::resolve_mode_for_label(&app, crate::types::WindowKind::Dock, &label)
+        } else {
+            mode.clone()
+        };
         if let Some(dock_win) = app.get_webview_window(&label) {
-            change_dock_mode_for_window(&app, dock_win, &mode).await;
+            change_dock_mode_for_window(&app, dock_win, &effective).await;
         }
     }
 }
@@ -358,13 +364,19 @@ async fn change_dock_mode_for_window(app: &AppHandle, dock_win: tauri::WebviewWi
 
 #[tauri::command]
 pub async fn change_notch_mode(app: AppHandle, mode: String) {
+    let per_monitor = crate::monitors::is_per_monitor_active(&app, crate::types::WindowKind::Notch);
     let labels: Vec<String> = app.webview_windows().keys()
         .filter(|l| crate::state::is_notch_label(l))
         .cloned()
         .collect();
     for label in labels {
+        let effective = if per_monitor {
+            crate::monitors::resolve_mode_for_label(&app, crate::types::WindowKind::Notch, &label)
+        } else {
+            mode.clone()
+        };
         if let Some(main_win) = app.get_webview_window(&label) {
-            init_notch_window(&app, main_win, &mode).await;
+            init_notch_window(&app, main_win, &effective).await;
         }
     }
 }
@@ -2710,6 +2722,17 @@ pub fn clear_volume_mixer_rect() {
     }
 }
 
+/// Unregister all active notch and dock appbars across every monitor.
+pub fn unregister_all_appbars(handle: &AppHandle) {
+    for (label, w) in handle.webview_windows() {
+        if crate::state::is_notch_label(&label) || crate::state::is_dock_label(&label) {
+            if let Ok(hwnd) = w.hwnd() {
+                unregister_appbar_native(hwnd);
+            }
+        }
+    }
+}
+
 /// Shared by the tray menu, the in-app Quit button, and the window CloseRequested
 /// handlers so that any shutdown path (including Task Manager's WM_CLOSE) behaves
 /// identically.
@@ -2719,18 +2742,7 @@ pub fn restore_taskbar_and_exit(handle: &AppHandle) {
     for (_, w) in handle.webview_windows() {
         let _ = w.hide();
     }
-    for (label, w) in handle.webview_windows() {
-        let registered = if crate::state::is_notch_label(&label) {
-            crate::state::get_flag(crate::state::main_appbar_registered(), &label)
-        } else if crate::state::is_dock_label(&label) {
-            crate::state::get_flag(crate::state::dock_appbar_registered(), &label)
-        } else {
-            false
-        };
-        if registered {
-            if let Ok(hwnd) = w.hwnd() { unregister_appbar_native(hwnd); }
-        }
-    }
+    unregister_all_appbars(handle);
     set_taskbar_visibility(true, true);
     NATIVE_TASKBAR_HIDDEN.store(false, Ordering::Relaxed);
     // Destroy all webview windows before exiting so Chromium's UnregisterClass for
@@ -2840,8 +2852,9 @@ pub async fn restart_fern(handle: AppHandle) {
 /// Relaunches the process. Also used for webview crashes, reloading pages can't fix those.
 pub fn relaunch_fern(handle: &AppHandle) {
     SHUTTING_DOWN.store(true, Ordering::Relaxed);
-    if let Some(w) = handle.get_webview_window("main") { if let Ok(hwnd) = w.hwnd() { unregister_appbar_native(hwnd); } }
-    if let Some(w) = handle.get_webview_window("dock") { if let Ok(hwnd) = w.hwnd() { unregister_appbar_native(hwnd); } }
+    unregister_all_appbars(handle);
+    set_taskbar_visibility(true, true);
+    NATIVE_TASKBAR_HIDDEN.store(false, Ordering::Relaxed);
     crate::on_demand_windows::close_all(handle);
     std::env::set_var("FERN_RESTARTING", "1");
     close_single_instance_handles();
@@ -3043,39 +3056,39 @@ const MONITOR_TARGETING_KEYS: [&str; 5] = [
     "fern-dock-enabled",
 ];
 
-#[tauri::command]
-pub fn save_setting(app: AppHandle, key: String, value: serde_json::Value) -> Result<(), String> {
-    let path = app.path().app_config_dir().map_err(|e| e.to_string())?.join("settings.json");
-    if let Some(parent) = path.parent() { let _ = std::fs::create_dir_all(parent); }
-    let mut settings = HashMap::new();
-    if let Ok(content) = std::fs::read_to_string(&path) { if let Ok(existing) = serde_json::from_str::<HashMap<String, serde_json::Value>>(&content) { settings = existing; } }
-    settings.insert(key.clone(), value);
-    let content = serde_json::to_string(&settings).map_err(|e| e.to_string())?;
-    std::fs::write(path, content).map_err(|e| e.to_string())?;
+fn settings_file_lock() -> &'static std::sync::Mutex<()> {
+    static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+    LOCK.get_or_init(|| std::sync::Mutex::new(()))
+}
 
-    crate::utils::replace_settings_cache(settings.clone());
-
-    let _ = app.emit("settings-changed", serde_json::json!({ "key": &key, "value": &settings[&key] }));
-
-    if key == "fern-agent-api" {
-        let on = matches!(settings[&key].as_str(), Some("true")) || settings[&key].as_bool() == Some(true);
-        std::thread::spawn(move || crate::agent_api::set_hooks(on));
+fn apply_setting_side_effects(
+    app: &AppHandle,
+    settings: &HashMap<String, serde_json::Value>,
+    changed_keys: &[&str],
+) {
+    if changed_keys.contains(&"fern-agent-api") {
+        let on = settings
+            .get("fern-agent-api")
+            .map(|v| matches!(v.as_str(), Some("true")) || v.as_bool() == Some(true))
+            .unwrap_or(false);
+        crate::agent_api::set_enabled(app, on);
     }
 
-    if key == "fern-scale" {
-        re_register_appbars(&app, &settings);
+    if changed_keys.contains(&"fern-scale") {
+        re_register_appbars(app, settings);
     }
 
-    if key == "fern-language" {
-        crate::i18n::refresh_tray_labels(&app);
+    if changed_keys.contains(&"fern-language") {
+        crate::i18n::refresh_tray_labels(app);
     }
 
-    if MONITOR_TARGETING_KEYS.contains(&key.as_str()) {
+    if changed_keys.iter().any(|k| MONITOR_TARGETING_KEYS.contains(k)) {
         let app_clone = app.clone();
         tauri::async_runtime::spawn(async move {
             crate::monitors::sync_monitor_windows(&app_clone);
             let dock_enabled = crate::utils::get_setting_str(&app_clone, "fern-dock-enabled")
-                .map(|v| v == "true").unwrap_or(true);
+                .map(|v| v == "true")
+                .unwrap_or(true);
             if dock_enabled {
                 let dock_mode = crate::utils::get_setting_str(&app_clone, "fern-dock-mode")
                     .unwrap_or_else(|| "smart".to_string());
@@ -3086,6 +3099,30 @@ pub fn save_setting(app: AppHandle, key: String, value: serde_json::Value) -> Re
             change_notch_mode(app_clone.clone(), notch_mode).await;
         });
     }
+}
+
+#[tauri::command]
+pub fn save_setting(app: AppHandle, key: String, value: serde_json::Value) -> Result<(), String> {
+    let path = app.path().app_config_dir().map_err(|e| e.to_string())?.join("settings.json");
+    if let Some(parent) = path.parent() { let _ = std::fs::create_dir_all(parent); }
+    let (settings, emitted_value) = {
+        let _guard = settings_file_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let mut settings = HashMap::new();
+        if let Ok(content) = std::fs::read_to_string(&path) {
+            if let Ok(existing) = serde_json::from_str::<HashMap<String, serde_json::Value>>(&content) {
+                settings = existing;
+            }
+        }
+        settings.insert(key.clone(), value);
+        let content = serde_json::to_string(&settings).map_err(|e| e.to_string())?;
+        std::fs::write(&path, content).map_err(|e| e.to_string())?;
+        crate::utils::replace_settings_cache(settings.clone());
+        let emitted = settings[&key].clone();
+        (settings, emitted)
+    };
+
+    let _ = app.emit("settings-changed", serde_json::json!({ "key": &key, "value": &emitted_value }));
+    apply_setting_side_effects(&app, &settings, &[key.as_str()]);
 
     Ok(())
 }
@@ -3134,6 +3171,7 @@ pub fn load_settings(app: AppHandle) -> Result<HashMap<String, serde_json::Value
         Ok(p) => p.join("settings.json"),
         Err(_) => return Ok(HashMap::new()),
     };
+    let _guard = settings_file_lock().lock().unwrap_or_else(|e| e.into_inner());
     if let Ok(content) = std::fs::read_to_string(path) { if let Ok(settings) = serde_json::from_str(&content) { return Ok(settings); } }
     Ok(HashMap::new())
 }
@@ -3141,8 +3179,12 @@ pub fn load_settings(app: AppHandle) -> Result<HashMap<String, serde_json::Value
 #[tauri::command]
 pub fn reset_settings(app: AppHandle) -> Result<(), String> {
     let path = app.path().app_config_dir().map_err(|e| e.to_string())?.join("settings.json");
-    std::fs::write(&path, "{}").map_err(|e| e.to_string())?;
-    crate::utils::replace_settings_cache(HashMap::new());
+    {
+        let _guard = settings_file_lock().lock().unwrap_or_else(|e| e.into_inner());
+        std::fs::write(&path, "{}").map_err(|e| e.to_string())?;
+        crate::utils::replace_settings_cache(HashMap::new());
+    }
+    std::thread::spawn(|| crate::agent_api::set_hooks(false));
     Ok(())
 }
 
@@ -3210,11 +3252,7 @@ pub async fn capture_window_thumbnail(hwnd: isize, max_width: u32, max_height: u
 
 fn get_radio_state_sync(kind: windows::Devices::Radios::RadioKind) -> Result<bool, String> {
     use windows::Devices::Radios::{Radio, RadioState};
-    unsafe {
-        let _ = windows::Win32::System::Com::CoInitializeEx(
-            None, windows::Win32::System::Com::COINIT_MULTITHREADED,
-        );
-    }
+    let _com = crate::utils::ComGuard::mta();
     let radios = Radio::GetRadiosAsync()
         .and_then(|op| op.get())
         .map_err(|e| e.to_string())?;
@@ -3230,11 +3268,7 @@ fn get_radio_state_sync(kind: windows::Devices::Radios::RadioKind) -> Result<boo
 
 fn set_radio_state_sync(kind: windows::Devices::Radios::RadioKind, enabled: bool) -> Result<(), String> {
     use windows::Devices::Radios::{Radio, RadioState};
-    unsafe {
-        let _ = windows::Win32::System::Com::CoInitializeEx(
-            None, windows::Win32::System::Com::COINIT_MULTITHREADED,
-        );
-    }
+    let _com = crate::utils::ComGuard::mta();
     let radios = Radio::GetRadiosAsync()
         .and_then(|op| op.get())
         .map_err(|e| e.to_string())?;
@@ -3426,11 +3460,7 @@ pub fn set_brightness(app: AppHandle, brightness: u32) {
 pub async fn get_battery_saver_state() -> Result<bool, String> {
     // Uses Windows Runtime PowerManager — no PowerShell required.
     tauri::async_runtime::spawn_blocking(|| {
-        unsafe {
-            let _ = windows::Win32::System::Com::CoInitializeEx(
-                None, windows::Win32::System::Com::COINIT_MULTITHREADED,
-            );
-        }
+        let _com = crate::utils::ComGuard::mta();
         use windows::System::Power::{EnergySaverStatus, PowerManager};
         match PowerManager::EnergySaverStatus() {
             Ok(status) => Ok(status == EnergySaverStatus::On),
@@ -3442,11 +3472,7 @@ pub async fn get_battery_saver_state() -> Result<bool, String> {
 #[tauri::command]
 pub async fn has_battery() -> Result<bool, String> {
     tauri::async_runtime::spawn_blocking(|| {
-        unsafe {
-            let _ = windows::Win32::System::Com::CoInitializeEx(
-                None, windows::Win32::System::Com::COINIT_MULTITHREADED,
-            );
-        }
+        let _com = crate::utils::ComGuard::mta();
         use windows::System::Power::{BatteryStatus, PowerManager};
         use windows::Win32::System::Power::{GetSystemPowerStatus, SYSTEM_POWER_STATUS};
         let mut power = SYSTEM_POWER_STATUS::default();
@@ -3479,12 +3505,21 @@ pub fn open_battery_saver_settings() {
 
 // --- System metrics for status widgets ---
 
+fn compute_cpu_usage_percent(prev: (u64, u64, u64), curr: (u64, u64, u64)) -> u32 {
+    let idle_delta = curr.0.saturating_sub(prev.0);
+    let kernel_delta = curr.1.saturating_sub(prev.1);
+    let user_delta = curr.2.saturating_sub(prev.2);
+    let total = kernel_delta.saturating_add(user_delta);
+    if total == 0 {
+        return 0;
+    }
+    ((total.saturating_sub(idle_delta) * 100) / total).min(100) as u32
+}
+
 #[tauri::command]
 pub fn get_cpu_usage() -> Result<u32, String> {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static LAST_IDLE: AtomicU64 = AtomicU64::new(0);
-    static LAST_KERNEL: AtomicU64 = AtomicU64::new(0);
-    static LAST_USER: AtomicU64 = AtomicU64::new(0);
+    static LAST_TIMES: std::sync::OnceLock<std::sync::Mutex<(u64, u64, u64)>> = std::sync::OnceLock::new();
+    let lock = LAST_TIMES.get_or_init(|| std::sync::Mutex::new((0, 0, 0)));
 
     unsafe {
         let mut idle = windows::Win32::Foundation::FILETIME::default();
@@ -3493,24 +3528,16 @@ pub fn get_cpu_usage() -> Result<u32, String> {
         windows::Win32::System::Threading::GetSystemTimes(Some(&mut idle), Some(&mut kernel), Some(&mut user))
             .map_err(|e| format!("GetSystemTimes failed: {e}"))?;
 
-        let idle_u64 = (idle.dwHighDateTime as u64) << 32 | idle.dwLowDateTime as u64;
-        let kernel_u64 = (kernel.dwHighDateTime as u64) << 32 | kernel.dwLowDateTime as u64;
-        let user_u64 = (user.dwHighDateTime as u64) << 32 | user.dwLowDateTime as u64;
+        let curr = (
+            ((idle.dwHighDateTime as u64) << 32) | idle.dwLowDateTime as u64,
+            ((kernel.dwHighDateTime as u64) << 32) | kernel.dwLowDateTime as u64,
+            ((user.dwHighDateTime as u64) << 32) | user.dwLowDateTime as u64,
+        );
 
-        let prev_idle = LAST_IDLE.swap(idle_u64, Ordering::Relaxed);
-        let prev_kernel = LAST_KERNEL.swap(kernel_u64, Ordering::Relaxed);
-        let prev_user = LAST_USER.swap(user_u64, Ordering::Relaxed);
-
-        let idle_delta = idle_u64.saturating_sub(prev_idle);
-        let kernel_delta = kernel_u64.saturating_sub(prev_kernel);
-        let user_delta = user_u64.saturating_sub(prev_user);
-        let total = kernel_delta + user_delta;
-
-        if total == 0 {
-            return Ok(0);
-        }
-        let usage = ((total - idle_delta) * 100) / total;
-        Ok(usage as u32)
+        let mut prev = lock.lock().unwrap_or_else(|e| e.into_inner());
+        let usage = compute_cpu_usage_percent(*prev, curr);
+        *prev = curr;
+        Ok(usage)
     }
 }
 
@@ -3656,20 +3683,16 @@ pub fn kill_process(pid: u32, _name: Option<String>) -> Result<(), String> {
     }
 }
 
+fn compute_rate_per_sec(prev_bytes: u64, curr_bytes: u64, elapsed_ms: u64) -> u64 {
+    let delta = curr_bytes.saturating_sub(prev_bytes);
+    ((delta as u128 * 1000) / elapsed_ms.max(1) as u128) as u64
+}
+
 #[tauri::command]
 pub fn get_network_speed() -> Result<(u64, u64), String> {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static LAST_BYTES_SENT: AtomicU64 = AtomicU64::new(0);
-    static LAST_BYTES_RECV: AtomicU64 = AtomicU64::new(0);
-    static LAST_CHECK: AtomicU64 = AtomicU64::new(0);
-
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64;
-
-    let last_check = LAST_CHECK.load(Ordering::Relaxed);
-    let elapsed = if last_check > 0 { (now - last_check).max(1) } else { 1000 };
+    static LAST_SAMPLE: std::sync::OnceLock<std::sync::Mutex<Option<(std::time::Instant, u64, u64)>>> =
+        std::sync::OnceLock::new();
+    let lock = LAST_SAMPLE.get_or_init(|| std::sync::Mutex::new(None));
 
     let (mut total_in, mut total_out) = (0u64, 0u64);
     unsafe {
@@ -3681,25 +3704,27 @@ pub fn get_network_speed() -> Result<(u64, u64), String> {
             let rows = table.Table.as_ptr();
             for i in 0..num_entries as usize {
                 let row = &*rows.add(i);
-                total_in += row.InOctets;
-                total_out += row.OutOctets;
+                total_in = total_in.saturating_add(row.InOctets);
+                total_out = total_out.saturating_add(row.OutOctets);
             }
             windows::Win32::NetworkManagement::IpHelper::FreeMibTable(table_ptr as *const _);
         }
     }
 
-    let prev_sent = LAST_BYTES_SENT.swap(total_out, Ordering::Relaxed);
-    let prev_recv = LAST_BYTES_RECV.swap(total_in, Ordering::Relaxed);
-    LAST_CHECK.store(now, Ordering::Relaxed);
+    let now = std::time::Instant::now();
+    let mut guard = lock.lock().unwrap_or_else(|e| e.into_inner());
+    let result = if let Some((last_time, prev_sent, prev_recv)) = *guard {
+        let elapsed_ms = now.saturating_duration_since(last_time).as_millis().max(1) as u64;
+        (
+            compute_rate_per_sec(prev_sent, total_out, elapsed_ms),
+            compute_rate_per_sec(prev_recv, total_in, elapsed_ms),
+        )
+    } else {
+        (0, 0)
+    };
+    *guard = Some((now, total_out, total_in));
 
-    if last_check == 0 {
-        return Ok((0, 0));
-    }
-
-    let sent_per_sec = if total_out > prev_sent { ((total_out - prev_sent) * 1000) / elapsed } else { 0 };
-    let recv_per_sec = if total_in > prev_recv { ((total_in - prev_recv) * 1000) / elapsed } else { 0 };
-
-    Ok((sent_per_sec, recv_per_sec))
+    Ok(result)
 }
 
 #[tauri::command]
@@ -3791,6 +3816,7 @@ pub fn get_system_accent_color() -> Result<String, String> {
 #[tauri::command]
 pub fn export_settings(app: AppHandle) -> Result<String, String> {
     let path = app.path().app_config_dir().map_err(|e| e.to_string())?.join("settings.json");
+    let _guard = settings_file_lock().lock().unwrap_or_else(|e| e.into_inner());
     if let Ok(content) = std::fs::read_to_string(&path) {
         // Validate it's valid JSON before returning
         let _settings: HashMap<String, serde_json::Value> =
@@ -3861,19 +3887,45 @@ pub fn import_settings(app: AppHandle, settings: String) -> Result<(), String> {
         let _ = std::fs::create_dir_all(parent);
     }
 
-    let content = serde_json::to_string_pretty(&imported).map_err(|e| e.to_string())?;
-    std::fs::write(&path, content).map_err(|e| e.to_string())?;
+    let (removed_keys, all_changed_keys) = {
+        let _guard = settings_file_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let previous: HashMap<String, serde_json::Value> = std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|c| serde_json::from_str(&c).ok())
+            .unwrap_or_default();
 
-    crate::utils::replace_settings_cache(imported.clone());
+        let content = serde_json::to_string_pretty(&imported).map_err(|e| e.to_string())?;
+        std::fs::write(&path, content).map_err(|e| e.to_string())?;
+        crate::utils::replace_settings_cache(imported.clone());
 
-    // Broadcast changes for every imported key so all windows re-sync
+        let removed: Vec<String> = previous
+            .keys()
+            .filter(|k| !imported.contains_key(*k))
+            .cloned()
+            .collect();
+        let mut changed: Vec<String> = imported.keys().cloned().collect();
+        for k in &removed {
+            changed.push(k.clone());
+        }
+        (removed, changed)
+    };
+
+    // Broadcast updates (updating localStorage and React state across all windows)
+    for key in &removed_keys {
+        let _ = app.emit(
+            "settings-external-changed",
+            serde_json::json!({ "key": key, "value": serde_json::Value::Null }),
+        );
+    }
     for (key, value) in &imported {
-        let _ = app.emit("settings-changed", serde_json::json!({ "key": key, "value": value }));
+        let _ = app.emit(
+            "settings-external-changed",
+            serde_json::json!({ "key": key, "value": value }),
+        );
     }
 
-    if imported.get("fern-scale").is_some() {
-        re_register_appbars(&app, &imported);
-    }
+    let key_refs: Vec<&str> = all_changed_keys.iter().map(String::as_str).collect();
+    apply_setting_side_effects(&app, &imported, &key_refs);
 
     Ok(())
 }
@@ -3894,8 +3946,6 @@ pub fn setup_settings_watcher(app: AppHandle) {
             FILE_NOTIFY_CHANGE_LAST_WRITE,
             OPEN_EXISTING, ReadDirectoryChangesW,
         };
-        use windows::Win32::System::IO::OVERLAPPED;
-        use windows::Win32::System::Threading::{CreateEventW, WaitForSingleObject, INFINITE};
 
         unsafe {
             let dir_path: Vec<u16> = config_dir.to_string_lossy()
@@ -3918,18 +3968,8 @@ pub fn setup_settings_watcher(app: AppHandle) {
                 _ => return,
             };
 
-            let h_event = match CreateEventW(None, false, false, None) {
-                Ok(e) => e,
-                Err(_) => {
-                    let _ = CloseHandle(dir_handle);
-                    return;
-                }
-            };
-
             let mut notify_buffer = [0u8; 4096];
             let mut bytes_returned = 0u32;
-            let mut overlapped = OVERLAPPED::default();
-            overlapped.hEvent = h_event;
 
             loop {
                 let success = ReadDirectoryChangesW(
@@ -3939,7 +3979,7 @@ pub fn setup_settings_watcher(app: AppHandle) {
                     false,
                     FILE_NOTIFY_CHANGE_LAST_WRITE,
                     Some(&mut bytes_returned),
-                    Some(&mut overlapped),
+                    None,
                     None,
                 );
 
@@ -3947,52 +3987,53 @@ pub fn setup_settings_watcher(app: AppHandle) {
                     break;
                 }
 
-                WaitForSingleObject(h_event, INFINITE);
-
                 std::thread::sleep(std::time::Duration::from_millis(200));
 
-                if let Ok(new_content) = std::fs::read_to_string(&settings_path) {
-                    if let Ok(new_settings) = serde_json::from_str::<HashMap<String, serde_json::Value>>(&new_content) {
-                        // Collect diffs while holding the lock, then drop before emitting
-                        let (changed, removed) = {
-                            let mut cache = crate::state::SETTINGS_CACHE
-                                .get_or_init(|| std::sync::Mutex::new(HashMap::new()))
-                                .lock()
-                                .unwrap();
+                let parsed = {
+                    let _guard = settings_file_lock().lock().unwrap_or_else(|e| e.into_inner());
+                    std::fs::read_to_string(&settings_path)
+                        .ok()
+                        .and_then(|c| serde_json::from_str::<HashMap<String, serde_json::Value>>(&c).ok())
+                };
+                if let Some(new_settings) = parsed {
+                    // Collect diffs while holding the lock, then drop before emitting
+                    let (changed, removed) = {
+                        let mut cache = crate::state::SETTINGS_CACHE
+                            .get_or_init(|| std::sync::Mutex::new(HashMap::new()))
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner());
 
-                            let mut changed = Vec::new();
-                            for (key, value) in &new_settings {
-                                if cache.get(key) != Some(value) {
-                                    changed.push((key.clone(), value.clone()));
-                                }
+                        let mut changed = Vec::new();
+                        for (key, value) in &new_settings {
+                            if cache.get(key) != Some(value) {
+                                changed.push((key.clone(), value.clone()));
                             }
-
-                            let removed: Vec<String> = cache.keys()
-                                .filter(|k| !new_settings.contains_key(*k))
-                                .cloned()
-                                .collect();
-
-                            *cache = new_settings.clone();
-                            (changed, removed)
-                        };
-                        // Lock dropped — safe to emit without blocking save_setting
-                        for (key, value) in &changed {
-                            let _ = app.emit(
-                                "settings-external-changed",
-                                serde_json::json!({ "key": key, "value": value }),
-                            );
                         }
-                        for key in removed {
-                            let _ = app.emit(
-                                "settings-external-changed",
-                                serde_json::json!({ "key": key, "value": null }),
-                            );
-                        }
+
+                        let removed: Vec<String> = cache.keys()
+                            .filter(|k| !new_settings.contains_key(*k))
+                            .cloned()
+                            .collect();
+
+                        *cache = new_settings.clone();
+                        (changed, removed)
+                    };
+                    // Lock dropped — safe to emit without blocking save_setting
+                    for (key, value) in &changed {
+                        let _ = app.emit(
+                            "settings-external-changed",
+                            serde_json::json!({ "key": key, "value": value }),
+                        );
+                    }
+                    for key in removed {
+                        let _ = app.emit(
+                            "settings-external-changed",
+                            serde_json::json!({ "key": key, "value": null }),
+                        );
                     }
                 }
             }
 
-            let _ = CloseHandle(h_event);
             let _ = CloseHandle(dir_handle);
         }
     });
@@ -4145,8 +4186,8 @@ fn shelf_shell_thumbnail(path: &str) -> Option<String> {
     use windows::Win32::Foundation::SIZE;
     use windows::Win32::UI::Shell::{IShellItemImageFactory, SHCreateItemFromParsingName, SIIGBF, SIIGBF_BIGGERSIZEOK, SIIGBF_THUMBNAILONLY};
 
+    let _com = crate::utils::ComGuard::mta();
     unsafe {
-        let _ = windows::Win32::System::Com::CoInitializeEx(None, windows::Win32::System::Com::COINIT_MULTITHREADED);
         let factory: IShellItemImageFactory = SHCreateItemFromParsingName(&windows::core::HSTRING::from(path), None).ok()?;
         let hbitmap = factory
             .GetImage(SIZE { cx: 256, cy: 256 }, SIIGBF(SIIGBF_THUMBNAILONLY.0 | SIIGBF_BIGGERSIZEOK.0))
@@ -4476,6 +4517,25 @@ pub async fn get_lyrics(
     duration_ms: Option<u64>,
 ) -> Result<Option<crate::lyrics::LyricsPayload>, String> {
     crate::lyrics::fetch_lyrics(&app, &title, &artist, duration_ms).await
+}
+
+#[cfg(test)]
+mod metrics_tests {
+    use super::*;
+
+    #[test]
+    fn cpu_usage_saturates_instead_of_underflowing() {
+        assert_eq!(compute_cpu_usage_percent((100, 100, 100), (100, 100, 100)), 0);
+        assert_eq!(compute_cpu_usage_percent((0, 0, 0), (500, 200, 100)), 0);
+        assert_eq!(compute_cpu_usage_percent((100, 100, 50), (150, 200, 150)), 75);
+    }
+
+    #[test]
+    fn network_rate_handles_counter_reset_and_zero_elapsed() {
+        assert_eq!(compute_rate_per_sec(1000, 500, 1000), 0);
+        assert_eq!(compute_rate_per_sec(0, 2048, 0), 2_048_000);
+        assert_eq!(compute_rate_per_sec(1000, 6000, 500), 10_000);
+    }
 }
 
 

@@ -7,6 +7,7 @@ import { Check, ChevronLeft, ChevronRight, RefreshCw, Settings as SettingsIcon }
 import { WindowControls } from "./components/WindowControls";
 import { initTheme } from "./theme";
 import { useCaldav, type CalEvent } from "./hooks/useCaldav";
+import { useSettingsSync } from "./hooks/useSettingsSync";
 import { dateLocale, startOfWeek, timeAgo, useT, weekdayNames } from "./i18n";
 import { useWeekStart } from "./weekStart";
 import "./Calendar.css";
@@ -78,7 +79,22 @@ function CalendarWindow() {
   const [hidden, setHidden] = useState<Set<string>>(readHidden);
   const [syncing, setSyncing] = useState(false);
   const [syncError, setSyncError] = useState<string | null>(null);
-  const hour12 = localStorage.getItem("fern-time-format-24h") !== "true";
+  const [hour12, setHour12] = useState(() => localStorage.getItem("fern-time-format-24h") !== "true");
+
+  useEffect(() => {
+    invoke<Record<string, unknown>>("load_settings")
+      .then((settings) => {
+        const val = settings?.["fern-time-format-24h"];
+        if (val !== undefined && val !== null) {
+          setHour12(String(val) !== "true");
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  useSettingsSync({
+    "fern-time-format-24h": (v) => setHour12(v !== true && String(v) !== "true"),
+  });
 
   useEffect(() => initTheme(), []);
 

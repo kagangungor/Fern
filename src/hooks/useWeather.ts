@@ -339,7 +339,7 @@ export function useWeather(enabled: boolean) {
       "settings-changed",
       (event) => {
         const { key, value } = event.payload;
-        if (key === "fern-temp-unit") {
+        if (key === "fern-temp-unit" && value !== null && value !== undefined) {
           setTempUnit(String(value));
         }
       },
@@ -348,7 +348,7 @@ export function useWeather(enabled: boolean) {
       "settings-external-changed",
       (event) => {
         const { key, value } = event.payload;
-        if (key === "fern-temp-unit") {
+        if (key === "fern-temp-unit" && value !== null && value !== undefined) {
           setTempUnit(String(value));
         }
       },

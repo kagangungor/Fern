@@ -162,12 +162,6 @@ unsafe extern "system" fn keyboard_hook_proc(code: i32, wparam: windows::Win32::
             if is_down { handle_volume_key_event(vk_code); }
             return windows::Win32::Foundation::LRESULT(1);
         }
-        if (vk_code.0 == 0x216 || vk_code.0 == 0x217)
-            && hook_overlay_enabled("fern-brightness-overlay-enabled")
-        {
-            if is_down { handle_brightness_key_event(vk_code); }
-            return windows::Win32::Foundation::LRESULT(1);
-        }
     }
     windows::Win32::UI::WindowsAndMessaging::CallNextHookEx(None, code, wparam, lparam)
 }
@@ -175,9 +169,12 @@ unsafe extern "system" fn keyboard_hook_proc(code: i32, wparam: windows::Win32::
 fn handle_volume_key_event(vk_code: windows::Win32::UI::Input::KeyboardAndMouse::VIRTUAL_KEY) {
     use std::sync::atomic::AtomicU64;
     static LAST_TIME: AtomicU64 = AtomicU64::new(0);
-    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
     let last = LAST_TIME.load(std::sync::atomic::Ordering::Relaxed);
-    if now - last < 50 { return; }
+    if now.saturating_sub(last) < 50 { return; }
     LAST_TIME.store(now, std::sync::atomic::Ordering::Relaxed);
     if let Some(sender) = crate::state::COMMAND_SENDER.get() {
         use windows::Win32::UI::Input::KeyboardAndMouse::{VK_VOLUME_MUTE, VK_VOLUME_UP, VK_VOLUME_DOWN};
@@ -187,15 +184,6 @@ fn handle_volume_key_event(vk_code: windows::Win32::UI::Input::KeyboardAndMouse:
             VK_VOLUME_DOWN => Some(SystemCommand::VolumeDown),
             _ => None,
         };
-        if let Some(cmd) = cmd { let _ = sender.send(cmd); }
-    }
-}
-
-fn handle_brightness_key_event(vk_code: windows::Win32::UI::Input::KeyboardAndMouse::VIRTUAL_KEY) {
-    if let Some(sender) = crate::state::COMMAND_SENDER.get() {
-        let cmd = if vk_code.0 == 0x216 { Some(SystemCommand::BrightnessDown) }
-        else if vk_code.0 == 0x217 { Some(SystemCommand::BrightnessUp) }
-        else { None };
         if let Some(cmd) = cmd { let _ = sender.send(cmd); }
     }
 }
@@ -575,6 +563,46 @@ fn audio_visualization_wanted(app: &AppHandle) -> bool {
         && !microphone_blocked()
 }
 
+unsafe fn is_ieee_float_format(format_ptr: *const windows::Win32::Media::Audio::WAVEFORMATEX) -> bool {
+    const WAVE_FORMAT_IEEE_FLOAT_TAG: u16 = 0x0003;
+    const WAVE_FORMAT_EXTENSIBLE_TAG: u16 = 0xFFFE;
+    let wf = &*format_ptr;
+    if wf.wFormatTag == WAVE_FORMAT_IEEE_FLOAT_TAG {
+        return true;
+    }
+    if wf.wFormatTag == WAVE_FORMAT_EXTENSIBLE_TAG && wf.cbSize >= 22 {
+        const KSDATAFORMAT_SUBTYPE_IEEE_FLOAT: windows::core::GUID =
+            windows::core::GUID::from_u128(0x00000003_0000_0010_8000_00aa00389b71);
+        let ext_ptr = format_ptr as *const windows::Win32::Media::Audio::WAVEFORMATEXTENSIBLE;
+        let subformat = std::ptr::read_unaligned(std::ptr::addr_of!((*ext_ptr).SubFormat));
+        return subformat == KSDATAFORMAT_SUBTYPE_IEEE_FLOAT;
+    }
+    false
+}
+
+fn decode_audio_frame(frame_bytes: &[u8], channels: usize, bytes_per_sample: usize, is_float: bool) -> f32 {
+    if channels == 0 || bytes_per_sample == 0 || frame_bytes.len() < channels * bytes_per_sample {
+        return 0.0;
+    }
+    let mut sum = 0.0f64;
+    for ch in 0..channels {
+        let start = ch * bytes_per_sample;
+        let s = &frame_bytes[start..start + bytes_per_sample];
+        let val = if is_float && bytes_per_sample == 4 {
+            let f = f32::from_le_bytes([s[0], s[1], s[2], s[3]]);
+            if f.is_finite() { (f as f64).clamp(-1.0, 1.0) } else { 0.0 }
+        } else if !is_float && bytes_per_sample == 2 {
+            (i16::from_le_bytes([s[0], s[1]]) as f64) / 32768.0
+        } else if !is_float && bytes_per_sample == 4 {
+            (i32::from_le_bytes([s[0], s[1], s[2], s[3]]) as f64) / 2147483648.0
+        } else {
+            0.0
+        };
+        sum += val;
+    }
+    (sum / channels as f64) as f32
+}
+
 pub fn setup_audio_visualization(app_handle: AppHandle) {
     std::thread::spawn(move || {
         use windows::Win32::Media::Audio::{
@@ -617,17 +645,29 @@ pub fn setup_audio_visualization(app_handle: AppHandle) {
 
                     let format_ptr = audio_client.GetMixFormat()
                         .map_err(|e| format!("GetMixFormat failed: {:?}", e))?;
-                    
+                    struct MixFormatGuard(*mut windows::Win32::Media::Audio::WAVEFORMATEX);
+                    impl Drop for MixFormatGuard {
+                        fn drop(&mut self) {
+                            unsafe { CoTaskMemFree(Some(self.0 as *const _)); }
+                        }
+                    }
+                    let _format_guard = MixFormatGuard(format_ptr);
+
                     let channels = (*format_ptr).nChannels as usize;
                     let bits_per_sample = (*format_ptr).wBitsPerSample;
                     let bytes_per_sample = (bits_per_sample / 8) as usize;
+                    let is_float = is_ieee_float_format(format_ptr);
 
-                    
-                    if bytes_per_sample == 0 || channels == 0 || bytes_per_sample > 4 {
-                        CoTaskMemFree(Some(format_ptr as *const _));
-                        return Err(format!("Invalid audio format: channels={}, bits={}", channels, bits_per_sample));
+                    if channels == 0
+                        || (is_float && bits_per_sample != 32)
+                        || (!is_float && bits_per_sample != 16 && bits_per_sample != 32)
+                    {
+                        return Err(format!(
+                            "Invalid audio format: channels={}, bits={}, float={}",
+                            channels, bits_per_sample, is_float
+                        ));
                     }
-                    
+
                     let buffer_duration = 10_000_000i64;
                     audio_client.Initialize(
                         AUDCLNT_SHAREMODE_SHARED,
@@ -638,7 +678,7 @@ pub fn setup_audio_visualization(app_handle: AppHandle) {
                         Some(std::ptr::null()),
                     ).map_err(|e| format!("Initialize failed: {:?}", e))?;
 
-                    CoTaskMemFree(Some(format_ptr as *const _));
+                    drop(_format_guard);
 
                     let capture_client: IAudioCaptureClient = audio_client.GetService()
                         .map_err(|e| format!("GetService failed: {:?}", e))?;
@@ -719,25 +759,21 @@ pub fn setup_audio_visualization(app_handle: AppHandle) {
                                 break;
                             }
 
-                            if !data_ptr.is_null() && num_frames > 0 && bytes_per_sample > 0 && channels > 0 {
+                            if num_frames > 0 && bytes_per_sample > 0 && channels > 0 {
+                                let is_silent = (flags & (windows::Win32::Media::Audio::AUDCLNT_BUFFERFLAGS_SILENT.0 as u32)) != 0
+                                    || data_ptr.is_null();
                                 let stride = channels * bytes_per_sample;
+                                let raw_slice = if is_silent {
+                                    &[]
+                                } else {
+                                    std::slice::from_raw_parts(data_ptr, num_frames as usize * stride)
+                                };
                                 for frame in 0..num_frames as usize {
-                                    let frame_offset = frame * stride;
-                                    let mut sample_val: i64 = 0;
-                                    for ch in 0..channels {
-                                        let sample_offset = frame_offset + ch * bytes_per_sample;
-                                        let sample: i64 = match bytes_per_sample {
-                                            2 => *(data_ptr.add(sample_offset) as *const i16) as i64,
-                                            4 => *(data_ptr.add(sample_offset) as *const i32) as i64,
-                                            _ => 0,
-                                        };
-                                        sample_val = sample_val.wrapping_add(sample);
-                                    }
-                                    sample_val /= channels as i64;
-                                    let normalized = match bytes_per_sample {
-                                        2 => (sample_val as f32) / 32768.0,
-                                        4 => (sample_val as f32) / 2147483648.0,
-                                        _ => 0.0,
+                                    let normalized = if is_silent {
+                                        0.0
+                                    } else {
+                                        let frame_bytes = &raw_slice[frame * stride..(frame + 1) * stride];
+                                        decode_audio_frame(frame_bytes, channels, bytes_per_sample, is_float)
                                     };
                                     if buffer_pos < FFT_SIZE {
                                         let window = 0.5 * (1.0 - (2.0 * std::f32::consts::PI * buffer_pos as f32 / FFT_SIZE as f32).cos());
@@ -914,23 +950,6 @@ pub fn setup_system_worker(app_handle: AppHandle) -> Sender<SystemCommand> {
                             SystemCommand::ToggleVisibility(visible) => {
                                 let _ = handle_system.emit("visibility-change", visible);
                                 if let Some(w) = handle_system.get_webview_window("bottom-corners") { if visible { let _ = w.show(); } else { let _ = w.hide(); } }
-                            }
-                            SystemCommand::BrightnessUp => {
-                                let new_val = (CURRENT_BRIGHTNESS.load(Ordering::Relaxed) + 10).min(100);
-                                CURRENT_BRIGHTNESS.store(new_val, Ordering::Relaxed);
-                                LAST_BRIGHTNESS_CHANGE.store(get_now_ms(), Ordering::Relaxed);
-                                let _ = handle_system.emit("brightness-change", BrightnessChangeEvent { brightness: new_val });
-                                if let Some(tx) = BRIGHTNESS_SENDER.get() { let _ = tx.send(new_val); }
-                                hide_osd("fern-brightness-overlay-enabled");
-                            }
-                            SystemCommand::BrightnessDown => {
-                                let current = CURRENT_BRIGHTNESS.load(Ordering::Relaxed);
-                                let new_val = current.saturating_sub(10);
-                                CURRENT_BRIGHTNESS.store(new_val, Ordering::Relaxed);
-                                LAST_BRIGHTNESS_CHANGE.store(get_now_ms(), Ordering::Relaxed);
-                                let _ = handle_system.emit("brightness-change", BrightnessChangeEvent { brightness: new_val });
-                                if let Some(tx) = BRIGHTNESS_SENDER.get() { let _ = tx.send(new_val); }
-                                hide_osd("fern-brightness-overlay-enabled");
                             }
                         }
                     }
@@ -1278,33 +1297,11 @@ pub fn setup_system_worker(app_handle: AppHandle) -> Sender<SystemCommand> {
                                     } else {
                                         should_overlap = false;
                                         if let Some(dr) = crate::state::dock_rects().lock().ok().and_then(|m| m.get("dock").copied()) {
-                                            {
-                                                let scale = cached_scale;
-                                                let d_left = (dr.x as f64 * scale) as i32;
-                                                let d_right = d_left + (dr.width as f64 * scale) as i32;
-                                                let res_h = (56.0 * scale) as i32;
-                                                let trigger_y = screen_rect.bottom - res_h;
-
-                                                if rect.left < d_right - 4 && rect.right > d_left + 4 &&
-                                                   rect.bottom > trigger_y + 4 {
-                                                    should_overlap = true;
-                                                }
-                                            }
+                                            should_overlap = rect_overlaps_dock(screen_rect.left, screen_rect.bottom, rect, dr, cached_scale);
                                         }
 
                                         if let Some(nr) = crate::state::notch_rects().lock().ok().and_then(|m| m.get("main").copied()) {
-                                            {
-                                                let scale = cached_scale;
-                                                let n_left = (nr.x as f64 * scale) as i32;
-                                                let n_right = n_left + (nr.width as f64 * scale) as i32;
-                                                let res_h = (36.0 * scale) as i32;
-                                                let trigger_y = screen_rect.top + res_h;
-
-                                                if rect.left < n_right - 4 && rect.right > n_left + 4 && 
-                                                   rect.top < trigger_y - 4 {
-                                                    should_notch_overlap = true;
-                                                }
-                                            }
+                                            should_notch_overlap = rect_overlaps_notch(screen_rect.left, screen_rect.top, rect, nr, cached_scale);
                                         }
                                     }
                                 }
@@ -1413,17 +1410,11 @@ pub fn setup_system_worker(app_handle: AppHandle) -> Sender<SystemCommand> {
                                 true
                             } else if is_dock {
                                 crate::state::dock_rects().lock().ok().and_then(|m| m.get(&label).copied()).is_some_and(|dr| {
-                                    let d_left = mx + (dr.x as f64 * cached_scale) as i32;
-                                    let d_right = d_left + (dr.width as f64 * cached_scale) as i32;
-                                    let trigger_y = screen.bottom - (56.0 * cached_scale) as i32;
-                                    rect.left < d_right - 4 && rect.right > d_left + 4 && rect.bottom > trigger_y + 4
+                                    rect_overlaps_dock(mx, screen.bottom, rect, dr, cached_scale)
                                 })
                             } else {
                                 crate::state::notch_rects().lock().ok().and_then(|m| m.get(&label).copied()).is_some_and(|nr| {
-                                    let n_left = mx + (nr.x as f64 * cached_scale) as i32;
-                                    let n_right = n_left + (nr.width as f64 * cached_scale) as i32;
-                                    let trigger_y = screen.top + (36.0 * cached_scale) as i32;
-                                    rect.left < n_right - 4 && rect.right > n_left + 4 && rect.top < trigger_y - 4
+                                    rect_overlaps_notch(mx, screen.top, rect, nr, cached_scale)
                                 })
                             }
                         }
@@ -3783,27 +3774,82 @@ unsafe extern "system" fn display_monitor_proc(
             }
             LRESULT(0)
         }
-        WM_DWMCOLORIZATIONCOLORCHANGED | WM_SETTINGCHANGE => {
-            if let Some(app_handle) = DISPLAY_MONITOR_HANDLE.get() {
-                let color_hex = if let Some(c) = crate::commands::get_windows_accent_color() {
-                    c
-                } else {
-                    let mut color = 0u32;
-                    let mut opaque = windows::core::BOOL(0);
-                    if unsafe { windows::Win32::Graphics::Dwm::DwmGetColorizationColor(&mut color, &mut opaque).is_ok() } {
-                        let r = ((color >> 16) & 0xff) as u8;
-                        let g = ((color >> 8) & 0xff) as u8;
-                        let b = (color & 0xff) as u8;
-                        format!("#{:02x}{:02x}{:02x}", r, g, b)
-                    } else {
-                        "#0078d4".to_string()
-                    }
-                };
-                let _ = app_handle.emit("system-accent-changed", color_hex);
+        WM_DWMCOLORIZATIONCOLORCHANGED => {
+            if !crate::windows_accent::is_recent_self_broadcast() {
+                emit_system_accent_change();
+            }
+            DefWindowProcW(hwnd, msg, wparam, lparam)
+        }
+        WM_SETTINGCHANGE => {
+            let area = if lparam.0 != 0 {
+                unsafe { windows::core::PCWSTR(lparam.0 as *const u16).to_string() }.unwrap_or_default()
+            } else {
+                String::new()
+            };
+            if should_emit_setting_change(wparam.0, &area, crate::windows_accent::is_recent_self_broadcast()) {
+                emit_system_accent_change();
             }
             DefWindowProcW(hwnd, msg, wparam, lparam)
         }
         _ => DefWindowProcW(hwnd, msg, wparam, lparam),
+    }
+}
+
+fn rect_overlaps_dock(
+    monitor_left: i32,
+    monitor_bottom: i32,
+    fg_rect: windows::Win32::Foundation::RECT,
+    dr: crate::types::IntRect,
+    scale: f64,
+) -> bool {
+    let d_left = monitor_left + (dr.x as f64 * scale) as i32;
+    let d_right = d_left + (dr.width as f64 * scale) as i32;
+    let trigger_y = monitor_bottom - (56.0 * scale) as i32;
+    fg_rect.left < d_right - 4 && fg_rect.right > d_left + 4 && fg_rect.bottom > trigger_y + 4
+}
+
+fn rect_overlaps_notch(
+    monitor_left: i32,
+    monitor_top: i32,
+    fg_rect: windows::Win32::Foundation::RECT,
+    nr: crate::types::IntRect,
+    scale: f64,
+) -> bool {
+    let n_left = monitor_left + (nr.x as f64 * scale) as i32;
+    let n_right = n_left + (nr.width as f64 * scale) as i32;
+    let trigger_y = monitor_top + (36.0 * scale) as i32;
+    fg_rect.left < n_right - 4 && fg_rect.right > n_left + 4 && fg_rect.top < trigger_y - 4
+}
+
+fn should_emit_setting_change(wparam: usize, area: &str, recent_self_broadcast: bool) -> bool {
+    const SPI_SETDESKWALLPAPER: usize = 0x0014;
+    if wparam == SPI_SETDESKWALLPAPER {
+        return true;
+    }
+    match area {
+        "ImmersiveColorSet" => !recent_self_broadcast,
+        "WindowsThemeElement" | "Wallpaper" => true,
+        _ => false,
+    }
+}
+
+fn emit_system_accent_change() {
+    if let Some(app_handle) = DISPLAY_MONITOR_HANDLE.get() {
+        let color_hex = if let Some(c) = crate::commands::get_windows_accent_color() {
+            c
+        } else {
+            let mut color = 0u32;
+            let mut opaque = windows::core::BOOL(0);
+            if unsafe { windows::Win32::Graphics::Dwm::DwmGetColorizationColor(&mut color, &mut opaque).is_ok() } {
+                let r = ((color >> 16) & 0xff) as u8;
+                let g = ((color >> 8) & 0xff) as u8;
+                let b = (color & 0xff) as u8;
+                format!("#{:02x}{:02x}{:02x}", r, g, b)
+            } else {
+                "#0078d4".to_string()
+            }
+        };
+        let _ = app_handle.emit("system-accent-changed", color_hex);
     }
 }
 
@@ -4015,5 +4061,61 @@ mod tests {
         assert!(!is_helper_name("Brave"));
         assert!(!is_launchable_entry("Docs", "https://example.com"));
         assert!(is_launchable_entry("Brave", r"C:\Program Files\Brave\brave.exe"));
+    }
+
+    #[test]
+    fn audio_frame_decoder_handles_ieee_float_and_pcm() {
+        use super::decode_audio_frame;
+        // Stereo 32-bit IEEE float (+0.5, -0.25) -> avg 0.125
+        let mut float_frame = Vec::new();
+        float_frame.extend_from_slice(&0.5f32.to_le_bytes());
+        float_frame.extend_from_slice(&(-0.25f32).to_le_bytes());
+        let val = decode_audio_frame(&float_frame, 2, 4, true);
+        assert!((val - 0.125).abs() < 1e-6);
+
+        // NaN float sample should clamp cleanly to 0.0
+        let nan_frame = f32::NAN.to_le_bytes();
+        assert_eq!(decode_audio_frame(&nan_frame, 1, 4, true), 0.0);
+
+        // Mono 16-bit PCM half-scale negative (-16384 -> -0.5)
+        let pcm16 = (-16384i16).to_le_bytes();
+        assert!((decode_audio_frame(&pcm16, 1, 2, false) - (-0.5)).abs() < 1e-6);
+
+        // Mono 32-bit PCM half-scale positive
+        let pcm32 = (i32::MAX / 2).to_le_bytes();
+        assert!((decode_audio_frame(&pcm32, 1, 4, false) - 0.5).abs() < 1e-4);
+    }
+
+    #[test]
+    fn primary_overlap_helpers_account_for_monitor_origin() {
+        use super::{rect_overlaps_dock, rect_overlaps_notch};
+        use crate::types::IntRect;
+        use windows::Win32::Foundation::RECT;
+
+        let dock_rect = IntRect { x: 600, y: 0, width: 720, height: 60 };
+        // Specific monitor placed at x=1920..3840
+        let fg_on_right = RECT { left: 2600, top: 800, right: 3100, bottom: 1060 };
+        assert!(rect_overlaps_dock(1920, 1080, fg_on_right, dock_rect, 1.0));
+        // Window only on primary monitor (0..1920) must not overlap dock on monitor at x=1920
+        let fg_on_primary = RECT { left: 600, top: 800, right: 1300, bottom: 1060 };
+        assert!(!rect_overlaps_dock(1920, 1080, fg_on_primary, dock_rect, 1.0));
+
+        let notch_rect = IntRect { x: 760, y: 0, width: 400, height: 36 };
+        let fg_top_right = RECT { left: 2700, top: 10, right: 2900, bottom: 500 };
+        assert!(rect_overlaps_notch(1920, 0, fg_top_right, notch_rect, 1.0));
+        assert!(!rect_overlaps_notch(1920, 0, fg_on_primary, notch_rect, 1.0));
+    }
+
+    #[test]
+    fn setting_change_filter_suppresses_tray_echo_and_unrelated_areas() {
+        use super::should_emit_setting_change;
+
+        assert!(!should_emit_setting_change(0, "TraySettings", false));
+        assert!(!should_emit_setting_change(0, "intl", false));
+        assert!(!should_emit_setting_change(0, "", false));
+        assert!(!should_emit_setting_change(0, "ImmersiveColorSet", true));
+        assert!(should_emit_setting_change(0, "ImmersiveColorSet", false));
+        assert!(should_emit_setting_change(0, "WindowsThemeElement", false));
+        assert!(should_emit_setting_change(0x0014, "Wallpaper", true));
     }
 }

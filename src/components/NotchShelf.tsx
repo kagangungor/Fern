@@ -95,9 +95,10 @@ export function useShelf(windowLabel: string, enabled: boolean, persist: boolean
         if (e.payload.label === windowLabel) cbRef.current.onDragLeave();
       }),
       listen<{ label: string; paths?: string[]; text?: string }>("shelf-drag-drop", (e) => {
+        if (e.payload.label !== windowLabel) return;
         add(e.payload.paths, e.payload.text);
         emit("shelf-item-added").catch(() => {});
-        if (e.payload.label === windowLabel) cbRef.current.onDrop();
+        cbRef.current.onDrop();
       }),
     ];
     return () => { unlistens.forEach((u) => u.then((fn) => fn())); };

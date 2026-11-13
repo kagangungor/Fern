@@ -16,15 +16,17 @@ export function AgentSounds() {
   });
 
   const refreshCustom = async () => {
-    const next: Record<SoundState, boolean> = { ...hasCustom };
-    for (const state of STATES) {
-      try {
-        next[state] = await invoke<boolean>("agent_sound_custom", { state });
-      } catch {
-        next[state] = false;
-      }
+    try {
+      const active = await invoke<SoundState[]>("agent_sound_custom");
+      const activeSet = new Set(Array.isArray(active) ? active : []);
+      setHasCustom({
+        needs_input: activeSet.has("needs_input"),
+        done: activeSet.has("done"),
+        error: activeSet.has("error"),
+      });
+    } catch {
+      setHasCustom({ needs_input: false, done: false, error: false });
     }
-    setHasCustom(next);
   };
 
   useEffect(() => {
@@ -33,7 +35,7 @@ export function AgentSounds() {
 
   const handlePick = async (state: SoundState) => {
     try {
-      const picked = await invoke<string | null>("pick_agent_sound", { state });
+      const picked = await invoke<boolean>("pick_agent_sound", { state });
       if (picked) {
         await refreshCustom();
         playAgentSound(state, true);

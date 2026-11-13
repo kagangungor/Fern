@@ -1,10 +1,12 @@
 import { useEffect, useRef } from "react";
 import { listen } from "@tauri-apps/api/event";
 
-function convertSettingValue(value: any): any {
+export function convertSettingValue(value: any): any {
   if (value === "true") return true;
   if (value === "false") return false;
-  if (typeof value === "string" && !isNaN(Number(value))) return Number(value);
+  if (typeof value === "string" && value.trim() !== "" && !isNaN(Number(value))) {
+    return Number(value);
+  }
   return value;
 }
 

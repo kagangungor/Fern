@@ -5,9 +5,7 @@ use windows::Win32::Media::Audio::Endpoints::IAudioEndpointVolume;
 use windows::Win32::Media::Audio::{
     eCapture, eCommunications, eConsole, IMMDeviceEnumerator, MMDeviceEnumerator,
 };
-use windows::Win32::System::Com::{
-    CoCreateInstance, CoInitializeEx, CLSCTX_ALL, COINIT_MULTITHREADED,
-};
+use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_ALL};
 use windows::Win32::System::Registry::{
     RegCloseKey, RegEnumKeyExW, RegOpenKeyExW, RegQueryValueExW, HKEY, HKEY_CURRENT_USER, KEY_READ,
     REG_VALUE_TYPE,
@@ -30,8 +28,8 @@ fn wide(s: &str) -> Vec<u16> {
 }
 
 pub fn get_default_capture_mute() -> Result<bool, String> {
+    let _com = crate::utils::ComGuard::mta();
     unsafe {
-        let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
         let enumerator: IMMDeviceEnumerator =
             CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL).map_err(|e| e.to_string())?;
         let device = enumerator
@@ -48,8 +46,8 @@ pub fn get_default_capture_mute() -> Result<bool, String> {
 }
 
 pub fn set_default_capture_mute(muted: bool) -> Result<bool, String> {
+    let _com = crate::utils::ComGuard::mta();
     unsafe {
-        let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
         let enumerator: IMMDeviceEnumerator =
             CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL).map_err(|e| e.to_string())?;
         let mut success = false;

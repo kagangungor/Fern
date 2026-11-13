@@ -940,6 +940,7 @@ function OverlayApp() {
 
   // ── Window Visibility Management ──
   useEffect(() => {
+    let cancelled = false;
     const syncWindow = async () => {
       try {
         const appWindow = getCurrentWebviewWindow();
@@ -951,11 +952,14 @@ function OverlayApp() {
         if (mode === 'idle') {
           // Wait for exit animation to finish before hiding
           hideWindowTimeoutRef.current = setTimeout(async () => {
-            await appWindow.hide();
+            if (!cancelled) {
+              await appWindow.hide();
+            }
           }, 400);
         } else {
           // Position the window first, then show
           await invoke('sync_overlay_position');
+          if (cancelled) return;
           await appWindow.show();
         }
       } catch (e) {
@@ -969,6 +973,7 @@ function OverlayApp() {
     }
 
     return () => {
+      cancelled = true;
       if (hideWindowTimeoutRef.current) clearTimeout(hideWindowTimeoutRef.current);
     };
   }, [mode]);

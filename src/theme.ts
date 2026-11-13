@@ -304,11 +304,12 @@ export function initTheme(options: { backdrop?: boolean; isSettings?: boolean } 
 
   // Sync settings.json in background to avoid flickers
   invoke<Record<string, any>>('load_settings').then((settings) => {
-    const mode = settings['fern-theme-mode'] ? String(settings['fern-theme-mode']) : syncMode;
-    const color = settings['fern-theme-color'] ? String(settings['fern-theme-color']) : syncColor;
-    const opacityVal = settings['fern-theme-opacity'] ? parseFloat(String(settings['fern-theme-opacity'])) : syncOpacity;
-    const saturationVal = settings['fern-theme-saturation'] ? parseFloat(String(settings['fern-theme-saturation'])) : syncSaturation;
-    const brightnessVal = settings['fern-theme-brightness'] ? parseFloat(String(settings['fern-theme-brightness'])) : syncBrightness;
+    const hasSetting = (v: unknown) => v !== undefined && v !== null && v !== '';
+    const mode = hasSetting(settings['fern-theme-mode']) ? String(settings['fern-theme-mode']) : syncMode;
+    const color = hasSetting(settings['fern-theme-color']) ? String(settings['fern-theme-color']) : syncColor;
+    const opacityVal = hasSetting(settings['fern-theme-opacity']) ? parseFloat(String(settings['fern-theme-opacity'])) : syncOpacity;
+    const saturationVal = hasSetting(settings['fern-theme-saturation']) ? parseFloat(String(settings['fern-theme-saturation'])) : syncSaturation;
+    const brightnessVal = hasSetting(settings['fern-theme-brightness']) ? parseFloat(String(settings['fern-theme-brightness'])) : syncBrightness;
 
     let surfaceChanged = false;
     for (const key of ['fern-theme-style', 'fern-glass-wallpaper']) {

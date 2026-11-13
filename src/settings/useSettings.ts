@@ -83,7 +83,7 @@ export function useSettings() {
     () => localStorage.getItem("fern-brightness-edge-enabled") !== "false"
   );
   const [agentApiEnabled, setAgentApiEnabled] = useState(
-    () => localStorage.getItem("fern-agent-api") !== "false"
+    () => localStorage.getItem("fern-agent-api") === "true"
   );
   const [agentSoundsEnabled, setAgentSoundsEnabled] = useState(
     () => localStorage.getItem("fern-agent-sounds") !== "false"
@@ -305,7 +305,7 @@ export function useSettings() {
       apply(getVal("fern-update-channel"), setPrereleaseChannel, (v) => v === "prerelease");
       apply(getVal("fern-volume-edge-enabled"), setVolumeEdgeEnabled, readBool);
       apply(getVal("fern-brightness-edge-enabled"), setBrightnessEdgeEnabled, readBool);
-      apply(getVal("fern-agent-api"), setAgentApiEnabled, (v) => v !== "false");
+      apply(getVal("fern-agent-api"), setAgentApiEnabled, (v) => v === "true");
       apply(getVal("fern-agent-sounds"), setAgentSoundsEnabled, (v) => v !== "false");
       apply(getVal("fern-notch-edge-delay"), setNotchEdgeDelay, (v) => v);
       apply(getVal("fern-volume-side"), setVolumeSide, (v) => (v === "right" ? "right" : "left"));
@@ -492,7 +492,7 @@ export function useSettings() {
     "fern-volume-edge-enabled": setVolumeEdgeEnabled,
     "fern-brightness-overlay-enabled": setBrightnessOverlayEnabled,
     "fern-brightness-edge-enabled": setBrightnessEdgeEnabled,
-    "fern-agent-api": (v) => setAgentApiEnabled(v !== "false" && v !== false),
+    "fern-agent-api": (v) => setAgentApiEnabled(v === "true" || v === true),
     "fern-agent-sounds": (v) => setAgentSoundsEnabled(v !== "false" && v !== false),
     "fern-notch-edge-delay": setNotchEdgeDelay,
     "fern-volume-side": (v) => setVolumeSide(v === "right" ? "right" : "left"),

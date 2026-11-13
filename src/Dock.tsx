@@ -1574,6 +1574,9 @@ const Dock = memo(function Dock() {
     return () => window.removeEventListener('blur', handleBlur);
   }, []);
 
+  const dockItemsRef = useRef(dockItems);
+  dockItemsRef.current = dockItems;
+
   useEffect(() => {
     if (contextMenu) {
       if (previewTimerRef.current) clearTimeout(previewTimerRef.current);
@@ -1597,7 +1600,7 @@ const Dock = memo(function Dock() {
         setPreviewData(null);
         return;
       }
-      const app = dockItems.find(a => itemKey(a) === hoveredApp);
+      const app = dockItemsRef.current.find(a => itemKey(a) === hoveredApp);
       if (app && app.is_running) {
         const hwndsToCapture = app.all_hwnds || (app.hwnd ? [[app.hwnd, app.name]] : []);
 
@@ -1639,7 +1642,7 @@ const Dock = memo(function Dock() {
     return () => {
       if (previewTimerRef.current) clearTimeout(previewTimerRef.current);
     };
-  }, [hoveredApp, isDragging, dockItems, previewDelay, contextMenu]);
+  }, [hoveredApp, isDragging, previewDelay, contextMenu, activeVolumeKey]);
 
   const iconVariants = {
     idle: { y: 0, scale: 1 },

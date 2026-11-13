@@ -18,7 +18,7 @@ use windows::Win32::System::Ole::{
     CF_UNICODETEXT, DROPEFFECT, DROPEFFECT_COPY, DROPEFFECT_NONE,
 };
 use windows::Win32::System::SystemServices::MODIFIERKEYS_FLAGS;
-use windows::Win32::UI::Shell::{DragFinish, DragQueryFileW, HDROP};
+use windows::Win32::UI::Shell::{DragQueryFileW, HDROP};
 use windows::Win32::UI::WindowsAndMessaging::EnumChildWindows;
 const MAX_TEXT_UNITS: usize = 1 << 17;
 struct TargetStore(#[allow(dead_code)] Vec<IDropTarget>);
@@ -26,7 +26,7 @@ unsafe impl Send for TargetStore {}
 
 static SHELF_DROP_TARGETS: Mutex<Option<TargetStore>> = Mutex::new(None);
 enum DragPayload {
-    Files(Vec<String>, HDROP),
+    Files(Vec<String>),
     Text(String),
 }
 
@@ -41,12 +41,12 @@ struct ShelfDropTarget {
 
 impl ShelfDropTarget {
     unsafe fn extract(data: &IDataObject) -> Option<DragPayload> {
-        if let Some((paths, hdrop)) = unsafe { Self::extract_files(data) } {
-            return Some(DragPayload::Files(paths, hdrop));
+        if let Some(paths) = unsafe { Self::extract_files(data) } {
+            return Some(DragPayload::Files(paths));
         }
         unsafe { Self::extract_text(data) }.map(DragPayload::Text)
     }
-    unsafe fn extract_files(data: &IDataObject) -> Option<(Vec<String>, HDROP)> {
+    unsafe fn extract_files(data: &IDataObject) -> Option<Vec<String>> {
         let format = FORMATETC {
             cfFormat: CF_HDROP.0,
             ptd: std::ptr::null_mut(),
@@ -54,11 +54,11 @@ impl ShelfDropTarget {
             lindex: -1,
             tymed: TYMED_HGLOBAL.0 as u32,
         };
-        let medium = data.GetData(&format).ok()?;
+        let mut medium = data.GetData(&format).ok()?;
         let hdrop = HDROP(medium.u.hGlobal.0 as _);
         let count = DragQueryFileW(hdrop, 0xFFFFFFFF, None);
         if count == 0 {
-            unsafe { DragFinish(hdrop) };
+            ReleaseStgMedium(&mut medium);
             return None;
         }
         let mut paths = Vec::with_capacity(count as usize);
@@ -68,7 +68,8 @@ impl ShelfDropTarget {
             DragQueryFileW(hdrop, i, Some(&mut buf));
             paths.push(String::from_utf16_lossy(&buf[..len]));
         }
-        Some((paths, hdrop))
+        ReleaseStgMedium(&mut medium);
+        Some(paths)
     }
     unsafe fn extract_text(data: &IDataObject) -> Option<String> {
         let format = FORMATETC {
@@ -142,12 +143,11 @@ impl IDropTarget_Impl for ShelfDropTarget_Impl {
 
         let point = unsafe { self.client_point(pt) };
         match payload {
-            DragPayload::Files(paths, hdrop) => {
+            DragPayload::Files(paths) => {
                 let _ = self.app.emit(
                     "shelf-drag-enter",
                     serde_json::json!({ "label": self.label, "paths": paths, "position": { "x": point.x, "y": point.y } }),
                 );
-                unsafe { DragFinish(hdrop) };
             }
             DragPayload::Text(text) => {
                 let _ = self.app.emit(
@@ -182,19 +182,23 @@ impl IDropTarget_Impl for ShelfDropTarget_Impl {
         pdata: Ref<'_, IDataObject>,
         _keys: MODIFIERKEYS_FLAGS,
         _pt: &POINTL,
-        _effect: *mut DROPEFFECT,
+        effect: *mut DROPEFFECT,
     ) -> windows::core::Result<()> {
         if unsafe { *self.enter_valid.get() } {
             unsafe { *self.enter_valid.get() = false };
             let payload = pdata
                 .as_ref()
                 .and_then(|data| unsafe { ShelfDropTarget::extract(data) });
+            if !effect.is_null() {
+                unsafe {
+                    *effect = if payload.is_some() { *self.cursor_effect.get() } else { DROPEFFECT_NONE };
+                }
+            }
             match payload {
-                Some(DragPayload::Files(paths, hdrop)) => {
+                Some(DragPayload::Files(paths)) => {
                     let _ = self
                         .app
                         .emit("shelf-drag-drop", serde_json::json!({ "label": self.label, "paths": paths }));
-                    unsafe { DragFinish(hdrop) };
                 }
                 Some(DragPayload::Text(text)) => {
                     let _ = self
@@ -203,6 +207,8 @@ impl IDropTarget_Impl for ShelfDropTarget_Impl {
                 }
                 None => {}
             }
+        } else if !effect.is_null() {
+            unsafe { *effect = DROPEFFECT_NONE };
         }
         Ok(())
     }

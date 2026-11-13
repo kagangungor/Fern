@@ -45,10 +45,30 @@ fn cache_key(title: &str, artist: &str) -> String {
     format!("{}|{}", artist.trim().to_lowercase(), title.trim().to_lowercase())
 }
 
+const MAX_CACHE_FILENAME_STEM_CHARS: usize = 80;
+
+fn fnv1a_64(input: &str) -> u64 {
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for byte in input.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    hash
+}
+
 fn sanitize_filename(key: &str) -> String {
-    key.chars()
+    let sanitized: String = key
+        .chars()
         .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
-        .collect()
+        .collect();
+    if sanitized.chars().count() <= MAX_CACHE_FILENAME_STEM_CHARS && sanitized.len() <= 120 {
+        return sanitized;
+    }
+    let prefix: String = sanitized
+        .chars()
+        .take(MAX_CACHE_FILENAME_STEM_CHARS.saturating_sub(17))
+        .collect();
+    format!("{}_{:016x}", prefix, fnv1a_64(key))
 }
 
 fn lyrics_cache_dir(app: &AppHandle) -> Option<PathBuf> {
@@ -368,7 +388,11 @@ pub async fn fetch_lyrics(
 
     // 3. Query LRCLIB via reqwest
     let client = reqwest::Client::builder()
-        .user_agent("Fern/1.4.0 (https://github.com/kagangungor/Fern)")
+        .user_agent(concat!(
+            "Fern/",
+            env!("CARGO_PKG_VERSION"),
+            " (https://github.com/kagangungor/Fern)"
+        ))
         .timeout(Duration::from_secs(6))
         .build()
         .map_err(|e| e.to_string())?;
@@ -548,5 +572,17 @@ mod tests {
         assert_eq!(lines[0].text, "First");
         assert_eq!(lines[1].time_ms, 20_500);
         assert_eq!(lines[1].text, "Second");
+    }
+
+    #[test]
+    fn sanitize_filename_bounds_long_keys_and_disambiguates_collisions() {
+        assert_eq!(sanitize_filename("wegh|yağsın_dünya"), "wegh_yağsın_dünya");
+        let long_a = format!("{}|track_one", "a".repeat(120));
+        let long_b = format!("{}|track_two", "a".repeat(120));
+        let sa = sanitize_filename(&long_a);
+        let sb = sanitize_filename(&long_b);
+        assert!(sa.chars().count() <= MAX_CACHE_FILENAME_STEM_CHARS);
+        assert!(sb.chars().count() <= MAX_CACHE_FILENAME_STEM_CHARS);
+        assert_ne!(sa, sb);
     }
 }

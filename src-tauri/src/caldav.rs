@@ -185,7 +185,13 @@ fn parse_calendar_list(xml: &str, home: &Url) -> Result<Vec<RemoteCalendar>, Str
                 .map(|t| t.trim().to_string())
                 .filter(|t| !t.is_empty())
         };
-        let color = text_of("calendar-color").map(|c| if c.starts_with('#') && c.len() == 9 { c[..7].to_string() } else { c });
+        let color = text_of("calendar-color").map(|c| {
+            if c.starts_with('#') && c.chars().count() == 9 {
+                c.chars().take(7).collect()
+            } else {
+                c
+            }
+        });
         let name = text_of("displayname").unwrap_or_else(|| "Calendar".to_string());
         out.push(RemoteCalendar { url, name, color });
     }
@@ -552,5 +558,13 @@ END:VCALENDAR&#13;
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].title, "Standup");
         assert_eq!(events[0].end - events[0].start, 900_000);
+    }
+
+    #[test]
+    fn truncates_alpha_hex_color_without_panicking_on_utf8() {
+        let xml = LIST_XML.replace("#0082c9FF", "#şğı12");
+        let home = Url::parse("https://cloud.example.com/remote.php/dav/calendars/alice/").unwrap();
+        let cals = parse_calendar_list(&xml, &home).unwrap();
+        assert_eq!(cals[0].color.as_deref(), Some("#şğı12"));
     }
 }

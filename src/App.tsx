@@ -994,8 +994,19 @@ function App() {
 
   useEffect(() => {
     if (!windowLabel) return;
+    let disposed = false;
+    const timers: ReturnType<typeof setTimeout>[] = [];
+    let unlistenDock: Promise<() => void> | null = null;
+    const schedule = (fn: () => void, ms: number) => {
+      if (disposed) return;
+      const id = setTimeout(() => {
+        if (!disposed) fn();
+      }, ms);
+      timers.push(id);
+    };
 
     invoke("load_settings").then((settings: any) => {
+      if (disposed) return;
       const getVal = (key: string, fallback: string | null = null) => {
         const val = settings[key];
         if (val !== undefined && val !== null) return String(val);
@@ -1055,30 +1066,32 @@ function App() {
         const dockEnabled = getVal("fern-dock-enabled", "true") === "true";
         const runDockInit = () => {
           // 1. Snappy initial sync
-          setTimeout(syncWindows, 400);
+          schedule(syncWindows, 400);
           // 2. Safety-net dock retry
           if (dockEnabled) {
-            setTimeout(() => invoke("init_dock", { mode: dockMode }).catch(() => {}), 1500);
+            schedule(() => invoke("init_dock", { mode: dockMode }).catch(() => {}), 1500);
           }
           // 3. Layout corrections
-          setTimeout(() => invoke("sync_appbar"), 1000);
-          setTimeout(() => invoke("sync_appbar"), 2500);
-          setTimeout(() => invoke("sync_appbar"), 5000);
+          schedule(() => invoke("sync_appbar"), 1000);
+          schedule(() => invoke("sync_appbar"), 2500);
+          schedule(() => invoke("sync_appbar"), 5000);
         };
 
         const runDockInitAfterSplash = () => {
           let dockStarted = false;
-          const unlistenDock = listen("splash-done", () => {
-            if (dockStarted) return;
+          unlistenDock = listen("splash-done", () => {
+            if (dockStarted || disposed) return;
             dockStarted = true;
             runDockInit();
-            unlistenDock.then(fn => fn());
+            unlistenDock?.then(fn => fn());
+            unlistenDock = null;
           });
-          setTimeout(() => {
-            if (dockStarted) return;
+          schedule(() => {
+            if (dockStarted || disposed) return;
             dockStarted = true;
             runDockInit();
-            unlistenDock.then(fn => fn());
+            unlistenDock?.then(fn => fn());
+            unlistenDock = null;
           }, 6000);
         };
 
@@ -1098,6 +1111,12 @@ function App() {
         } catch {}
       }
     }).catch(console.error);
+
+    return () => {
+      disposed = true;
+      timers.forEach(clearTimeout);
+      unlistenDock?.then(fn => fn());
+    };
   }, [windowLabel]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {

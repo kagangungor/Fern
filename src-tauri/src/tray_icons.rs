@@ -3,7 +3,7 @@ use std::sync::Mutex;
 use tauri::{AppHandle, Emitter};
 use windows::Win32::Foundation::{HWND, POINT, RECT};
 use windows::Win32::Graphics::Gdi::{GetMonitorInfoW, MonitorFromPoint, MONITORINFO, MONITOR_DEFAULTTONEAREST};
-use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED};
+use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_INPROC_SERVER};
 use windows::Win32::UI::Accessibility::{
     CUIAutomation, IUIAutomation, IUIAutomationElement, IUIAutomationExpandCollapsePattern,
     IUIAutomationInvokePattern, IUIAutomationLegacyIAccessiblePattern, IUIAutomationTogglePattern,
@@ -337,9 +337,7 @@ fn place_flyout(flyout: HWND, anchor: Option<(i32, i32)>) {
 }
 
 pub fn warm_up() {
-    unsafe {
-        let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
-    }
+    let _com = crate::utils::ComGuard::mta();
     let Ok(_guard) = AUTOMATION_LOCK.try_lock() else { return };
     let (Ok(tray), Ok(auto)) = (find_window(c"Shell_TrayWnd"), automation()) else { return };
     let _ = find_show_hidden_icons_button(&auto, tray);
@@ -354,9 +352,7 @@ impl Drop for OpeningFlag {
 }
 
 pub fn open_native_tray(app: Option<AppHandle>, anchor: Option<(i32, i32)>) {
-    unsafe {
-        let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
-    }
+    let _com = crate::utils::ComGuard::mta();
 
     crate::diagnostics::log(&format!("tray: open requested, anchor={anchor:?}, flyout_open={}", FLYOUT_OPEN.load(Ordering::SeqCst)));
     if let Some(flyout) = find_overflow_window().filter(|&w| unsafe { IsWindowVisible(w) }.as_bool()) {
@@ -457,6 +453,9 @@ pub fn open_native_tray(app: Option<AppHandle>, anchor: Option<(i32, i32)>) {
         crate::diagnostics::log(&format!("tray: open_with_shortcut opened={opened}"));
     }
 
+    // Release UIA/automation lock before waiting for the user to close the flyout
+    drop(_guard);
+
     if opened {
         FLYOUT_OPEN.store(true, Ordering::SeqCst);
         if let Some(ref a) = app {
@@ -513,11 +512,21 @@ fn all_taskbars() -> Vec<HWND> {
 
 pub fn schedule_taskbar_layout_refresh() {
     static SCHEDULED: AtomicBool = AtomicBool::new(false);
+    struct ScheduledReset;
+    impl Drop for ScheduledReset {
+        fn drop(&mut self) {
+            SCHEDULED.store(false, Ordering::SeqCst);
+        }
+    }
     if SCHEDULED.swap(true, Ordering::SeqCst) {
         return;
     }
     std::thread::spawn(|| {
+        let _reset = ScheduledReset;
         std::thread::sleep(std::time::Duration::from_millis(2500));
+        if FLYOUT_OPEN.load(Ordering::SeqCst) {
+            return;
+        }
         let Ok(_guard) = AUTOMATION_LOCK.try_lock() else { return };
         if !crate::state::NATIVE_TASKBAR_HIDDEN.swap(false, Ordering::SeqCst) {
             return;
