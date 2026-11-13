@@ -1,22 +1,22 @@
 <div align="center">
 
-<img src="docs/logo.png" width="128" alt="Fern logo" />
+<img src="docs/logo.png" width="96" alt="Fern logo" />
 
 <br />
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/wordmark-dark.png" />
-  <img src="docs/wordmark-light.png" height="44" alt="Fern" />
+  <img src="docs/wordmark-light.png" height="48" alt="Fern" />
 </picture>
 
-<p><strong>A notch and a dock for Windows.<br />Physics-animated, reactive, and built to replace your taskbar.</strong><br /><em>Not a cosmetic macOS clone — the missing productivity, media, and hardware control layer for Windows 11.</em></p>
+<p><strong>A notch and a dock for Windows — physics-animated, reactive, and built to replace your taskbar.</strong><br /><sub>Productivity, media, hardware control, and AI agent awareness in one native layer for Windows 11.</sub></p>
 
 [![Latest release](https://shieldcn.dev/github/release/kagangungor/Fern/stable.svg?logo=lu:Tag)](https://github.com/kagangungor/Fern/releases/latest)
 [![Downloads](https://shieldcn.dev/github/downloads/kagangungor/Fern.svg?logo=lu:Download)](https://github.com/kagangungor/Fern/releases)
 [![License](https://shieldcn.dev/github/license/kagangungor/Fern.svg?logo=lu:Scale)](LICENSE)
 [![Platform](https://shieldcn.dev/badge/platform-Windows.svg?logo=ri:FaWindows)](https://www.microsoft.com/windows)
 
-[**Download**](https://github.com/kagangungor/Fern/releases/latest) &nbsp;·&nbsp; [Features](#features) &nbsp;·&nbsp; [Install](#install) &nbsp;·&nbsp; [Settings](SETTINGS.md) &nbsp;·&nbsp; [Sponsor](https://buymeacoffee.com/kagangungor) &nbsp;·&nbsp; [Report a bug](https://github.com/kagangungor/Fern/issues/new/choose)
+[**Download**](https://github.com/kagangungor/Fern/releases/latest) &nbsp;·&nbsp; [Features](#features) &nbsp;·&nbsp; [Install](#install) &nbsp;·&nbsp; [Usage](#usage) &nbsp;·&nbsp; [Settings](SETTINGS.md) &nbsp;·&nbsp; [Sponsor](https://buymeacoffee.com/kagangungor) &nbsp;·&nbsp; [Report a bug](https://github.com/kagangungor/Fern/issues/new/choose)
 
 <br />
 
@@ -28,22 +28,20 @@
 
 ## Features
 
-| What you get | How |
+| Area | What Fern gives you |
 | --- | --- |
-| **A notch that does things** | Music, a Control Center you arrange yourself, status, calendar, connected devices, and a file shelf in one spring-animated island. |
-| **Hardware & Connected Devices** | Real-time battery levels for Bluetooth earbuds (AirPods, Galaxy Buds), headsets, and USB peripherals with custom dynamic vector art. |
-| **Fernie Mascot & Agent Status** | Interactive desktop companion with reactive states (idle, working, music, sleeping) and audio cues for local AI agent workflows. |
-| **A dock that replaces your taskbar** | Mirrors your real taskbar, same pinned apps and order, window previews, attention badges, with real icons and names. |
-| **Native where it counts** | The tray opens the real Windows flyout, Win+1..9 switches apps, and Quit ends an app like Task Manager's End task. |
-| **Out of your way** | Fixed, Smart or Peek modes, with intelligent click-through and zero interference over fullscreen games. |
-| **Made for your setup** | Every monitor, one monitor, or a specific one. English and Turkish. Every option lives in a plain `settings.json`. |
-| **Light on the system** | Secondary windows (Settings, Calendar) load on demand, background memory saver suspends idle WebViews, and sensors pause when not needed. |
+| **Notch & Media** | Spring-animated island with **Live Synchronized Lyrics** (click any line to seek), album-art theming, multi-session switching, a drag-to-arrange **Control Center**, Calendar (`Day / Week / Month / Agenda` + read-only `.ics` & CalDAV sync), Timer, Stopwatch, Dual Clock, and a persistent File Shelf. |
+| **Hardware & Audio** | Live **split battery levels** (left bud, right bud, case) for AirPods, Beats, Google Fast Pair earbuds, and Samsung Galaxy Buds, plus USB & 3.5mm jack alerts with custom vector art. Scroll any running **Dock icon** to adjust that app's volume in real time with a floating mini-HUD. |
+| **Privacy & Meetings** | **Privacy Aura** glows around the notch whenever your camera or microphone is active, paired with a system-wide **Mic Mute hotkey** (`Ctrl+F1` by default) that works across Zoom, Teams, Meet, and Discord. |
+| **AI Agent Companion** | **Fernie** reacts to background AI workflows (`working`, `needs_input`, `done`, `error`) with audio cues, automatic **Claude Code** hooks, and a local authenticated HTTP API where you can approve or deny prompts right from the notch. |
+| **Taskbar Replacement Dock** | Mirrors your pinned apps and order with real icons, live **DWM window previews**, attention badges, drag-and-drop hover focus, `Win+1..9` switching, native Windows tray flyout, `End Task`, Show Desktop corner, drives/Recycle Bin, and launcher integration (Windows Search, PowerToys Run, Raycast, Flow Launcher, Everything, Listary). |
+| **Glass, Themes & Performance** | **Solid**, **Frosted Glass**, **Liquid Glass** (with blurred wallpaper & cursor Edge Shine), and **Material You** styles, plus optional **Windows Accent Sync**. On-demand Settings/Calendar windows, **Memory Saver**, multi-monitor rules, English & Turkish UI, and live-reloaded `settings.json`. |
 
 <div align="center">
 <table>
   <tr>
-    <td align="center"><img src="docs/screenshots/island.png" height="130" alt="The Fern notch" /></td>
-    <td align="center"><img src="docs/screenshots/dock.png" height="130" alt="The Fern dock" /></td>
+    <td align="center"><img src="docs/screenshots/island.png" width="420" alt="The Fern notch" /></td>
+    <td align="center"><img src="docs/screenshots/dock.png" width="420" alt="The Fern dock" /></td>
   </tr>
   <tr>
     <td align="center"><sub>The notch</sub></td>
@@ -54,18 +52,19 @@
 
 ## Install
 
-1. Download the installer from the [latest release](https://github.com/kagangungor/Fern/releases/latest).
-2. Choose **Just me** or **All users**. An all-users install asks for administrator permission once.
-3. Fern starts with a short splash, then the notch and dock appear together.
+Download from the [latest release](https://github.com/kagangungor/Fern/releases/latest):
 
-Fern updates itself: a green dot on the notch means an update is ready, and **Auto Update** in **Settings › About** installs it for you. Turn on **Get pre-releases** there to receive early builds before the weekly release. **Uninstall** from Windows Settings › Apps or from **Settings › About**, either puts your taskbar back.
+- **Installer (`Fern-Setup-<version>.exe`)** — Choose **Just me** or **All users** (asks for administrator permission once). Launches with a short splash, then starts the notch and dock together.
+- **Portable (`fern-<version>-portable-windows-x64.zip`)** — Extract and run `fern.exe` directly without installing.
+
+Fern updates itself: a green dot on the notch signals a ready update, and **Auto Update** in **Settings › About** installs it for you. Enable **Get pre-releases** there for early builds. Uninstalling from **Windows Settings › Apps** or **Settings › About** automatically restores your Windows taskbar.
 
 <details>
-<summary>Verify your download</summary>
+<summary>Download safety</summary>
 
 <br />
 
-Only download Fern from the [releases page](https://github.com/kagangungor/Fern/releases) of this repository. Each release has a `SHA256SUMS.txt`. Compare the output of this command with the matching line:
+Only download Fern binaries from the official [releases page](https://github.com/kagangungor/Fern/releases) of this repository. You can inspect the local file hash at any time with:
 
 ```powershell
 Get-FileHash .\Fern-Setup-<version>.exe -Algorithm SHA256
@@ -75,29 +74,53 @@ Get-FileHash .\Fern-Setup-<version>.exe -Algorithm SHA256
 
 ## Usage
 
-**Notch panels.** Scroll or swipe on the notch to change panel.
+### Notch panels
+
+Scroll or swipe on the notch to cycle through panels (customizable order in **Settings › Notch**):
 
 | Panel | What it does |
 | --- | --- |
-| **Music** | Album art, track info, playback controls, a visualizer, and a switch between several playing apps. |
-| **Control Center** | Wi-Fi, Bluetooth, Do Not Disturb, volume and brightness. Drag tiles, buttons and sliders into your own layout. |
-| **Status** | Battery (hidden on desktops without one) and weather, in a layout you choose. |
-| **Connected Devices** | Live battery indicators and hardware detection for Bluetooth earbuds (AirPods, Galaxy Buds case & buds), headsets, and USB devices. |
-| **Calendar** | Day, week, month and agenda views, a timer, a stopwatch and Pomodoro. |
-| **Shelf** | Drop files or text on the notch and drag them out later. |
-| **Agent Companion** | Fernie mascot animations reflecting background AI agent status (idle, working, needs input, done, error) with subtle audio cues. |
+| **Music** | Album art, dynamic cover tinting, playback controls, visualizer, multi-app audio switcher, and **Live Synchronized Lyrics** with click-to-seek. |
+| **Control Center** | Wi-Fi, Bluetooth, Do Not Disturb, Battery Saver, volume (with output switcher & per-app mixer), and brightness. Drag tiles, buttons, and sliders into your own layout. |
+| **Status** | Configurable left/right widgets: weather, battery (auto-hidden on desktops), CPU, RAM, disk, and network speed/status. |
+| **Connected Devices** | Live battery readouts and dynamic SVG cards for Bluetooth earbuds (individual left/right/case levels), headsets, and USB peripherals. |
+| **Calendar** | Day, week, month, and agenda views synced from `.ics` / `webcal://` links or CalDAV (credentials stored in Windows Credential Manager), plus timer, stopwatch, and Pomodoro. |
+| **Shelf** | Drop files or text onto the notch to keep them handy and drag them into any app later. |
+| **Agent Companion** | Fernie mascot status card with tool details, click-to-focus window jumping, and **Allow / Deny** buttons for interactive prompts. |
 
-**Visibility modes.** The notch and the dock each have their own.
+### Visibility & overlays
+
+The notch and the dock each configure their own visibility mode — and when **Show On** is set to **All Monitors**, you can assign **Per-Monitor Behavior** independently:
 
 | Mode | Behavior |
 | --- | --- |
-| **Fixed** | Always visible. The dock reserves screen space like a normal taskbar. |
-| **Smart** | Hides when another window overlaps it and reveals on hover. |
-| **Peek** | Hidden until the cursor reaches the screen edge, or a media event arrives. |
+| **Fixed** | Always visible. The dock reserves screen space like a standard taskbar (and supports **Adaptive Mode** to stretch full-width when a window is maximized). |
+| **Smart** | Automatically hides when overlapped by another window or fullscreen app and reveals on hover. |
+| **Peek** | Stays hidden until the cursor reaches the screen edge or a media/notification event arrives. |
 
-In Smart and Peek both stay hidden, and click-through, while a fullscreen app is in front.
+In **Smart** and **Peek**, both stay hidden and click-through over fullscreen games and apps. Fern also includes edge-triggered **Volume** and **Brightness** HUD overlays (with DDC/CI support for external monitors).
 
-**Multiple monitors.** Under **Show On**, pick **Primary Monitor** (the default), **All Monitors** or a **Specific Monitor** for the dock and the notch separately. Each extra monitor gets its own windows, so **All Monitors** uses more memory than a single display.
+### Shortcuts & quick actions
+
+| Action | Trigger |
+| --- | --- |
+| **Per-app volume** | Scroll mouse wheel over any running Dock icon (`Middle-click` to mute) |
+| **Toggle microphone** | `Ctrl+F1` (customizable under **Settings › Notch › Meeting & Privacy**) |
+| **Toggle notch** | Customizable global shortcut under **Settings › Notch › Keyboard Shortcuts** |
+| **Switch or launch pinned apps** | `Win+1` .. `Win+9` |
+| **Drag file to open window** | Drag any file over a Dock icon and hold briefly (`450 ms`) to bring it to front |
+
+<details>
+<summary><b>For developers: AI Agent API & Claude Code integration</b></summary>
+
+<br />
+
+When **Claude Code & AI agents** is enabled in **Settings › Notch**, Fern automatically configures Claude Code hooks and starts an authenticated loopback HTTP server described in `%APPDATA%\com.kagangungor.fern\agent.json` (`port` and `token`).
+
+- `POST /activity` — Push states (`working`, `tool`, `needs_input`, `done`, `error`, `clear`) with optional `name`, `project`, `detail`, and `window` HWND.
+- `POST /ask` — Display an interactive **Allow / Deny** prompt inside the notch and wait for the user's decision.
+
+</details>
 
 ## Troubleshooting
 
@@ -106,7 +129,7 @@ In Smart and Peek both stay hidden, and click-through, while a fullscreen app is
 
 <br />
 
-Fern hides the dock and notch over a fullscreen window that covers the whole monitor, in Smart and Peek. Fixed mode stays visible by design. If something still appears, open an issue with the game and its display mode (fullscreen, borderless or windowed).
+Fern hides the dock and notch over fullscreen windows in **Smart** and **Peek** modes. **Fixed** mode stays visible by design. If something still appears over a game, open an issue with the game name and display mode (fullscreen, borderless, or windowed).
 
 </details>
 
@@ -115,16 +138,16 @@ Fern hides the dock and notch over a fullscreen window that covers the whole mon
 
 <br />
 
-Start Fern again, it restores the taskbar on launch even after a crash. Uninstalling from Windows Settings › Apps or from **Settings › About** brings it back too.
+Start Fern again — it restores the taskbar on launch even after a crash. Uninstalling from **Windows Settings › Apps** or **Settings › About** also brings it back.
 
 </details>
 
 <details>
-<summary><b>Fern uses a lot of memory</b></summary>
+<summary><b>Memory usage on multi-monitor setups</b></summary>
 
 <br />
 
-With on-demand window loading and the background memory saver, Fern keeps memory usage minimal during normal use. However, when **Show On** is set to **All Monitors**, each extra monitor runs its own notch and dock windows. Set **Show On** to **Primary Monitor** to reduce memory footprint even further.
+Fern loads secondary windows (Settings, Calendar) on demand, and you can enable **Memory Saver** under **Settings › General** to trim working sets and slow background checks while idle or locked. When **Show On** is set to **All Monitors**, each extra display runs its own notch and dock WebViews — switching to **Primary Monitor** reduces memory usage further.
 
 </details>
 
@@ -133,7 +156,7 @@ With on-demand window loading and the background memory saver, Fern keeps memory
 
 <br />
 
-External monitors are controlled over DDC/CI. Turn DDC/CI on in the monitor's own menu, and connect it directly if you use a dock or adapter, since some do not pass it on.
+External monitors are controlled over DDC/CI. Enable DDC/CI in your monitor's on-screen menu and connect it directly if you use a USB-C hub or dock, as some adapters block DDC/CI commands.
 
 </details>
 
@@ -142,7 +165,7 @@ External monitors are controlled over DDC/CI. Turn DDC/CI on in the monitor's ow
 
 <br />
 
-Open **Settings › About › Copy Diagnostics** and paste the result into a [bug report](https://github.com/kagangungor/Fern/issues/new/choose). It includes your versions, monitors and recent log.
+Open **Settings › Diagnostics › Copy Diagnostics** and paste the output into a [bug report](https://github.com/kagangungor/Fern/issues/new/choose). It includes your app version, monitor layout, and recent logs.
 
 </details>
 
@@ -157,28 +180,21 @@ bun install
 bun run tauri dev
 ```
 
-`bun run tauri build` makes a release build. Before a pull request, read [CONTRIBUTING.md](CONTRIBUTING.md).
+`bun run tauri build` creates a release build. Before opening a pull request, read [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Roadmap
 
-> **Vision:** Fern is not a cosmetic macOS clone — it is the missing productivity, media, and hardware control layer built to give Windows users real desktop superpowers.
+### Shipped highlights
+- [x] **Live Synchronized Lyrics (Karaoke Mode)** — Real-time synced lyrics with click-to-seek inside the music notch
+- [x] **Per-App Audio Scroll Mixer** — Fluid per-application volume control directly from Dock icons
+- [x] **Universal Meeting & Privacy HUD** — Camera/mic Privacy Aura and system-wide Mic Mute hotkey
+- [x] **Connected Hardware & Fernie Agent API** — Split TWS earbud battery levels, USB/jack popups, and Claude Code notch integration
 
-### Upcoming Milestones
+### Upcoming milestones
+- [ ] **Developer & Terminal Ambient HUD** — Visual notch progress line for long-running CLI tasks (`cargo build`, `npm install`, `docker`, test suites) and active Git branch / dirty-file context when an IDE or terminal is focused
+- [ ] **Pro Clipboard & Smart Inspector** — Fast island clipboard history with live color token previews (`#hex`, `rgb`, `hsl`), Tailwind/CSS conversion, and quick JSON/Base64/regex actions
 
-#### 💻 Developer & Terminal Ambient HUD (Dev HUD)
-- [ ] **Long-Running Task & Build Progress:** Visual progress line across the notch for CLI tasks (`cargo build`, `npm install`, `docker`, test suites, long scripts) via Agent API
-- [ ] **Active Git Context:** Compact branch name and uncommitted changes count when IDE or terminal is focused
-- [ ] **Streaming AI Agent Actions:** Real-time micro-log and status streaming in the expanded island
-
-#### 🎵 Live Synchronized Lyrics (Karaoke Mode)
-- [x] **Synchronized Live Lyrics:** Real-time synced lyric lines streaming smoothly inside the music notch
-
-#### 📋 Pro Clipboard & Smart Developer Inspector
-- [ ] **Fast Island Clipboard:** Lightweight, accessible recent clipboard history integrated right into the island
-- [ ] **Color & Token Inspector:** Instant live preview when copying color codes (`#hex`, `rgb`, `hsl`) with one-click conversion to Tailwind, CSS, or Hex
-- [ ] **Code & Format Quick Actions:** Instant JSON beautify, Base64 toggle, and regex tester right from the clipboard shelf
-
-See the [open issues](https://github.com/kagangungor/Fern/issues) for requests and known bugs.
+See the [open issues](https://github.com/kagangungor/Fern/issues) for feature requests and known bugs.
 
 ## Built with
 
@@ -192,7 +208,7 @@ See the [open issues](https://github.com/kagangungor/Fern/issues) for requests a
 
 Fern is free and open source. If it makes your desktop nicer, you can support its development:
 
-[<img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me A Coffee" height="50">](https://buymeacoffee.com/kagangungor)
+[![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-FFDD00?style=for-the-badge&logo=buymeacoffee&logoColor=black)](https://buymeacoffee.com/kagangungor)
 
 ## License
 
@@ -200,4 +216,4 @@ Fern is open source under the [GPLv3](LICENSE).
 
 ## Credits
 
-Fern is a fork of [Nectar](https://github.com/kua8/Nectar) by kua8, which began as a fork of [Bloom](https://github.com/SehajveerSingh2005/bloom) by Sehajveer Singh. Fern split from Nectar in 2026, has been modified since, and is distributed under the GPLv3.
+Fern is a fork of [Nectar](https://github.com/kua8/Nectar) by kua8, which began as a fork of [Bloom](https://github.com/SehajveerSingh2005/bloom) by Sehajveer Singh. Fern split from Nectar in 2026, has been modified extensively since, and is distributed under the GPLv3.
