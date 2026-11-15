@@ -14,6 +14,13 @@ import { deviceLookFor } from "./devices/deviceLooks";
 import { usbArtFor, usbDisplayName, isWiredAudio, type UsbIdentity } from "./devices/usbArtFor";
 import type { DeviceArtKey } from "./devices/art";
 import type { BudsBattery, BudLevel } from "./devices/connectedDevices";
+import {
+  DEVICE_ALERT_RECOVERY_MS,
+  enqueueDeviceAlert,
+  shouldClearDeviceAlertOnModeChange,
+  shouldPreserveModeOnHover,
+  shouldScheduleOnScreenRecovery,
+} from "./devices/deviceAlertState";
 import { ConnectedDevicesPanel } from "./components/ConnectedDevicesPanel";
 import { useConnectedDevices } from "./hooks/useConnectedDevices";
 
@@ -468,6 +475,8 @@ function App() {
   const [dualTime, setDualTime] = useState("");
   const [dualDayShift, setDualDayShift] = useState(0);
   const [isHovered, setIsHovered] = useState(false);
+  const isHoveredRef = useRef(isHovered);
+  isHoveredRef.current = isHovered;
   const [isReady, setIsReady] = useState(false);
   const [scale, setScale] = useState(() => parseFloat(localStorage.getItem("fern-scale") || "1.0"));
   const [timeFormat24h, setTimeFormat24h] = useState(() => localStorage.getItem("fern-time-format-24h") === "true");
@@ -834,8 +843,9 @@ function App() {
     if (notchMode === "peek") triggerEventPeek(duration);
     if (deviceAlertTimerRef.current) clearTimeout(deviceAlertTimerRef.current);
     deviceAlertTimerRef.current = setTimeout(() => {
+      deviceAlertTimerRef.current = null;
       const next = deviceAlertQueueRef.current.shift();
-      if (next && !isHovered) presentDeviceAlertRef.current(next);
+      if (next && !isHoveredRef.current) presentDeviceAlertRef.current(next);
       else {
         deviceAlertQueueRef.current = [];
         setDeviceAlert(null);
@@ -844,15 +854,17 @@ function App() {
   };
 
   const showDeviceAlert = useCallback((alert: Omit<DeviceAlert, "runId">) => {
-    if (tourActive || fernMode === "shelf") return;
-    const current = deviceAlertRef.current;
-    if (current && current.id !== alert.id) {
-      const queue = deviceAlertQueueRef.current.filter((queued) => queued.id !== alert.id);
-      deviceAlertQueueRef.current = [...queue, alert].slice(-DEVICE_ALERT_QUEUE);
-      return;
-    }
+    if (tourActiveRef.current || fernModeRef.current === "shelf") return;
+    const outcome = enqueueDeviceAlert(
+      deviceAlertRef.current,
+      deviceAlertQueueRef.current,
+      alert,
+      DEVICE_ALERT_QUEUE,
+    );
+    deviceAlertQueueRef.current = outcome.queue;
+    if (outcome.action === "queue") return;
     presentDeviceAlertRef.current(alert);
-  }, [fernMode, tourActive]);
+  }, []);
 
   useEffect(() => () => {
     if (deviceAlertTimerRef.current) clearTimeout(deviceAlertTimerRef.current);
@@ -863,6 +875,25 @@ function App() {
       setFernMode(isHovered ? (mediaInfo.has_media && isPlaying ? "music" : "status") : (mediaInfo.has_media && isPlaying && settingsMusicCompactNotch ? "music" : "status"));
     }
   }, [fernMode, deviceAlert, isHovered, mediaInfo.has_media, isPlaying, settingsMusicCompactNotch]);
+
+  useEffect(() => {
+    if (shouldClearDeviceAlertOnModeChange(fernMode, deviceAlert !== null)) {
+      if (deviceAlertTimerRef.current) {
+        clearTimeout(deviceAlertTimerRef.current);
+        deviceAlertTimerRef.current = null;
+      }
+      deviceAlertQueueRef.current = [];
+      setDeviceAlert(null);
+    }
+  }, [fernMode, deviceAlert]);
+
+  useEffect(() => {
+    if (!shouldScheduleOnScreenRecovery(deviceAlertOnScreen, fernMode, deviceAlert !== null)) return;
+    const timer = setTimeout(() => {
+      setDeviceAlertOnScreen(false);
+    }, DEVICE_ALERT_RECOVERY_MS);
+    return () => clearTimeout(timer);
+  }, [deviceAlertOnScreen, fernMode, deviceAlert]);
 
   useEffect(() => {
     if (windowLabel !== "main") return;
@@ -2313,7 +2344,7 @@ function App() {
         }}
         onHoverStart={() => {
           setIsHovered(true);
-          if (!tourActive && fernMode !== 'shelf') {
+          if (!tourActive && !shouldPreserveModeOnHover(fernMode)) {
             const remembered = settingsRememberMode ? rememberedModeRef.current : null;
             if (agentNeedsYou) setFernMode('agent');
             else if (remembered && availableNotchModes().includes(remembered)) setFernMode(remembered);
@@ -3101,52 +3132,56 @@ function App() {
                 )}
               </AnimatePresence>
 
-              <AnimatePresence>
-                
-                {/* Device alert: a device connected or disconnected */}
-                <AnimatePresence
-                  onExitComplete={() => setDeviceAlertOnScreen(deviceAlertRef.current !== null)}
-                >
-                  {fernMode === "device" && deviceAlert && (
-                    <motion.div
-                      className="device-alert"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        const usb = deviceAlert.usb;
-                        deviceAlertQueueRef.current = [];
-                        setDeviceAlert(null);
-                        if (usb) return;
-                        setIsHovered(true);
-                        setFernMode("command-center");
-                        setCcView("devices");
-                      }}
-                      initial={{ opacity: 0 }}
-                      animate={{ opacity: 1 }}
-                      exit={{ opacity: 0, filter: "blur(4px)", transition: { duration: 0.12 } }}
-                      transition={{ duration: 0.2 }}
-                    >
-                      <DeviceArt
-                        art={deviceAlert.art}
-                        phase={deviceAlert.connected ? "play" : "leave"}
-                        runId={deviceAlert.runId}
-                        size={60}
-                      />
-                      <div className="device-alert-text">
-                        <span className="device-alert-name">{deviceAlert.name}</span>
-                        <span className="device-alert-status">
-                          {deviceAlertStatus(deviceAlert.art, deviceAlert.connected, deviceAlert.usb)}
-                        </span>
-                      </div>
-                      {deviceAlert.connected && deviceAlert.buds ? (
-                        <DeviceBudsBattery buds={deviceAlert.buds} />
-                      ) : (
-                        deviceAlert.connected &&
-                        deviceAlert.battery !== null && <DeviceBatteryRing level={deviceAlert.battery} />
-                      )}
-                    </motion.div>
-                  )}
-                </AnimatePresence>
+              {/* Device alert: a device connected or disconnected */}
+              <AnimatePresence
+                onExitComplete={() => setDeviceAlertOnScreen(deviceAlertRef.current !== null)}
+              >
+                {fernMode === "device" && deviceAlert && (
+                  <motion.div
+                    key="device-alert"
+                    className="device-alert"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      const usb = deviceAlert.usb;
+                      if (deviceAlertTimerRef.current) {
+                        clearTimeout(deviceAlertTimerRef.current);
+                        deviceAlertTimerRef.current = null;
+                      }
+                      deviceAlertQueueRef.current = [];
+                      setDeviceAlert(null);
+                      if (usb) return;
+                      setIsHovered(true);
+                      setFernMode("command-center");
+                      setCcView("devices");
+                    }}
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    exit={{ opacity: 0, filter: "blur(4px)", transition: { duration: 0.12 } }}
+                    transition={{ duration: 0.2 }}
+                  >
+                    <DeviceArt
+                      art={deviceAlert.art}
+                      phase={deviceAlert.connected ? "play" : "leave"}
+                      runId={deviceAlert.runId}
+                      size={60}
+                    />
+                    <div className="device-alert-text">
+                      <span className="device-alert-name">{deviceAlert.name}</span>
+                      <span className="device-alert-status">
+                        {deviceAlertStatus(deviceAlert.art, deviceAlert.connected, deviceAlert.usb)}
+                      </span>
+                    </div>
+                    {deviceAlert.connected && deviceAlert.buds ? (
+                      <DeviceBudsBattery buds={deviceAlert.buds} />
+                    ) : (
+                      deviceAlert.connected &&
+                      deviceAlert.battery !== null && <DeviceBatteryRing level={deviceAlert.battery} />
+                    )}
+                  </motion.div>
+                )}
+              </AnimatePresence>
 
+              <AnimatePresence>
                 {fernMode === 'shelf' && (
                   <motion.div
                     key="shelf"
