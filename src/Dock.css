@@ -866,6 +866,37 @@ body {
   font-weight: 500;
 }
 
+.rename-popup {
+  width: 240px;
+  height: auto;
+  padding-bottom: 8px;
+}
+
+.rename-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  padding: 4px 10px 2px;
+}
+
+.rename-btn {
+  height: 26px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 8px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  background: var(--fern-group-bg, rgba(255, 255, 255, 0.12));
+  color: inherit;
+}
+
+.rename-btn.primary {
+  background: var(--fern-text, #fff);
+  color: var(--fern-bg-expanded, #000);
+}
+
 /* Invert Fern logo / Settings icon in light mode */
 .light-mode .fern-icon-img {
   filter: invert(1) brightness(0.15) contrast(1.2);

@@ -41,6 +41,7 @@ $RECYCLE.BIN/
 # AI tools and agent workspaces
 .serena/
 .superpowers/
+docs/superpowers/
 
 # Tauri keys
 *.key

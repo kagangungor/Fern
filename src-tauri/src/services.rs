@@ -1849,7 +1849,9 @@ fn apply_capture_ui_state(app: &AppHandle, active: bool) {
                 crate::utils::set_window_click_through(&win, true);
                 let _ = win.hide();
             } else {
-                let _ = win.show();
+                if crate::state::SPLASH_FINISHED.load(Ordering::Relaxed) {
+                    let _ = win.show();
+                }
                 if crate::state::get_flag(crate::state::main_appbar_registered(), &label) {
                     register_appbar(win.clone());
                 } else if let Ok(hwnd) = win.hwnd() {
@@ -1941,6 +1943,22 @@ fn top_edge_armed(app_handle: &AppHandle, label: &str, in_band: bool, now: i64) 
     }
     CURSOR_RECHECK_PENDING.store(true, Ordering::Relaxed);
     false
+}
+
+fn edge_area_narrow(app_handle: &AppHandle, key: &str) -> bool {
+    crate::utils::get_setting_str(app_handle, key).as_deref() == Some("narrow")
+}
+
+fn edge_area_allows_x(narrow: bool, span: Option<(i32, i32)>, cursor_x: i32, pad: i32) -> bool {
+    !narrow || span.map_or(true, |(l, r)| cursor_x >= l - pad && cursor_x <= r + pad)
+}
+
+fn notch_x_span_for(label: &str, scale: f64) -> Option<(i32, i32)> {
+    let (win_pos, _) = crate::state::main_window_rects().lock().ok().and_then(|m| m.get(label).copied())?;
+    let region = crate::state::notch_rects().try_lock().ok()?;
+    let r = region.get(label).copied()?;
+    let left = win_pos.x + (r.x as f64 * scale) as i32;
+    Some((left, left + (r.width as f64 * scale) as i32))
 }
 
 fn start_mouse_worker(app_handle: AppHandle) {
@@ -2269,8 +2287,14 @@ unsafe fn process_mouse_move(app_handle: &AppHandle, cursor: windows::Win32::Fou
                     // Hot-edge detection (Bottom edge)
                     let in_dock_hover = crate::state::get_flag(crate::state::dock_hovered(), "dock");
                     let scale = dock_win.scale_factor().unwrap_or(1.0);
+                    let over_dock_span = edge_area_allows_x(
+                        edge_area_narrow(app_handle, "fern-dock-edge-area"),
+                        dock_span,
+                        cursor.x,
+                        (60.0 * scale) as i32,
+                    );
                     let at_bottom_edge = cursor.y >= (dock_mon_y + dock_mon_h - (8.0 * scale) as i32) &&
-                                         cursor.x >= dock_mon_x && cursor.x <= (dock_mon_x + dock_mon_w);
+                                         cursor.x >= dock_mon_x && cursor.x <= (dock_mon_x + dock_mon_w) && over_dock_span;
 
                     if dock_fg_fs {
                         MH_DOCK_EXPIRY_MS.store(0, Ordering::Relaxed);
@@ -2342,8 +2366,14 @@ unsafe fn process_mouse_move(app_handle: &AppHandle, cursor: windows::Win32::Fou
                         let in_notch_hover = !notch_fs && crate::state::get_flag(crate::state::notch_hovered(), "main");
                         let mut is_notch_hovered = false;
                         let scale = main_win.scale_factor().unwrap_or(1.0);
+                        let over_notch_span = edge_area_allows_x(
+                            edge_area_narrow(app_handle, "fern-notch-edge-area"),
+                            notch_x_span_for("main", scale),
+                            cursor.x,
+                            (60.0 * scale) as i32,
+                        );
                         let in_top_band = cursor.y <= (notch_mon_y + (8.0 * scale) as i32) &&
-                                          cursor.x >= notch_mon_x && cursor.x <= (notch_mon_x + notch_mon_w);
+                                          cursor.x >= notch_mon_x && cursor.x <= (notch_mon_x + notch_mon_w) && over_notch_span;
                         let at_top_edge = top_edge_armed(app_handle, "main", in_top_band && !notch_fs, now);
 
                         if notch_fs {
@@ -2715,8 +2745,14 @@ fn hit_test_extra_dock_windows(app_handle: &AppHandle, cursor: windows::Win32::F
         }
 
         let in_dock_hover = crate::state::get_flag(crate::state::dock_hovered(), &label);
+        let over_dock_span = edge_area_allows_x(
+            edge_area_narrow(app_handle, "fern-dock-edge-area"),
+            dock_span,
+            cursor.x,
+            (60.0 * scale) as i32,
+        );
         let at_bottom_edge = cursor.y >= (mon_y + mon_h - (8.0 * scale) as i32) &&
-                             cursor.x >= mon_x && cursor.x <= (mon_x + mon_w);
+                             cursor.x >= mon_x && cursor.x <= (mon_x + mon_w) && over_dock_span;
 
         let dock_fs = crate::state::get_flag(crate::state::dock_fullscreen(), &label);
         if dock_fs {
@@ -2804,8 +2840,14 @@ fn hit_test_extra_notch_windows(app_handle: &AppHandle, cursor: windows::Win32::
         let scale = main_win.scale_factor().unwrap_or(1.0);
         let notch_fs = notch_suppressed(app_handle, &label);
         let in_notch_hover = !notch_fs && crate::state::get_flag(crate::state::notch_hovered(), &label);
+        let over_notch_span = edge_area_allows_x(
+            edge_area_narrow(app_handle, "fern-notch-edge-area"),
+            notch_x_span_for(&label, scale),
+            cursor.x,
+            (60.0 * scale) as i32,
+        );
         let in_top_band = cursor.y <= (mon_y + (8.0 * scale) as i32) &&
-                          cursor.x >= mon_x && cursor.x <= (mon_x + mon_w);
+                          cursor.x >= mon_x && cursor.x <= (mon_x + mon_w) && over_notch_span;
         let at_top_edge = top_edge_armed(app_handle, &label, in_top_band && !notch_fs, now);
 
         let mut is_notch_hovered = false;
@@ -3074,6 +3116,9 @@ pub fn sync_overlays(app: &AppHandle) {
 
 pub fn register_appbar(window: tauri::WebviewWindow) {
     let label = window.label().to_string();
+    if label != "main" && label != "dock" && !crate::state::SPLASH_FINISHED.load(Ordering::Relaxed) {
+        return;
+    }
     if let Some(monitor) = crate::monitors::monitor_for_window_label(window.app_handle(), crate::types::WindowKind::Notch, &label) {
         let m_size = monitor.size();
         let m_pos = monitor.position();
@@ -3144,6 +3189,9 @@ pub fn register_dock_appbar(window: tauri::WebviewWindow) {
 
 fn register_dock_appbar_inner(window: tauri::WebviewWindow, attempt: i32) {
     let label = window.label().to_string();
+    if label != "main" && label != "dock" && !crate::state::SPLASH_FINISHED.load(Ordering::Relaxed) {
+        return;
+    }
     if let Some(monitor) = crate::monitors::monitor_for_window_label(window.app_handle(), crate::types::WindowKind::Dock, &label) {
         let m_size = monitor.size();
         let m_pos = monitor.position();
@@ -3574,6 +3622,12 @@ pub fn create_monitor_window(app: &AppHandle, kind: crate::types::WindowKind, la
         let _ = window.set_ignore_cursor_events(true);
         wire_window_events(&app, &window, kind, true);
 
+        // Extra monitors wait for the splash
+        if !crate::state::SPLASH_FINISHED.load(Ordering::Relaxed) {
+            crate::commands::wait_for_splash().await;
+            tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+        }
+
         match kind {
             crate::types::WindowKind::Dock => {
                 let mode = crate::utils::get_setting_str(&app, "fern-dock-mode").unwrap_or_else(|| "smart".to_string());
@@ -3604,7 +3658,8 @@ fn reposition_all_windows(app_handle: &AppHandle) {
             // a dock that the user had previously disabled.
             let dock_enabled = get_setting_str(app_handle, "fern-dock-enabled")
                 .unwrap_or_else(|| "true".to_string());
-            if dock_enabled == "true" {
+            let waiting_for_splash = !crate::state::SPLASH_FINISHED.load(Ordering::Relaxed);
+            if dock_enabled == "true" && !waiting_for_splash {
                 if crate::state::get_flag(crate::state::dock_appbar_registered(), &label) {
                     register_dock_appbar(win);
                 } else {
@@ -4117,5 +4172,18 @@ mod tests {
         assert!(should_emit_setting_change(0, "ImmersiveColorSet", false));
         assert!(should_emit_setting_change(0, "WindowsThemeElement", false));
         assert!(should_emit_setting_change(0x0014, "Wallpaper", true));
+    }
+
+    #[test]
+    fn edge_area_allows_x_respects_narrow_mode_and_pad() {
+        use super::edge_area_allows_x;
+
+        assert!(edge_area_allows_x(false, Some((700, 1220)), 0, 60));
+        assert!(edge_area_allows_x(false, Some((700, 1220)), 1900, 60));
+        assert!(edge_area_allows_x(true, Some((700, 1220)), 640, 60));
+        assert!(edge_area_allows_x(true, Some((700, 1220)), 1280, 60));
+        assert!(!edge_area_allows_x(true, Some((700, 1220)), 639, 60));
+        assert!(!edge_area_allows_x(true, Some((700, 1220)), 1281, 60));
+        assert!(edge_area_allows_x(true, None, 0, 60));
     }
 }

@@ -3,14 +3,28 @@ import { useT } from "../i18n";
 
 export type AgentState = "working" | "tool" | "needs_input" | "done" | "error";
 
+export interface AskQuestion {
+  question: string;
+  options: string[];
+}
+
 export interface AgentActivity {
   state: AgentState;
   name?: string;
   project?: string;
   window?: number;
   detail?: string;
-  ask?: { id: number; tool?: string; detail?: string };
+  ask?: { id: number; tool?: string; detail?: string; questions?: AskQuestion[] };
   cancelled?: number;
+}
+
+export function shouldAgentAutoOpen(activity: AgentActivity | null): boolean {
+  return !!activity && (activity.state === "needs_input" || activity.state === "error");
+}
+
+export function advanceAskPick(picks: number[], choiceIndex: number, questionCount: number): { done: boolean; next: number[] } {
+  const next = [...picks, choiceIndex];
+  return { done: next.length >= questionCount, next };
 }
 
 const MASCOT: Record<AgentState, string> = {
@@ -59,17 +73,30 @@ export function AgentLeft({ activity, dot }: { activity: AgentActivity; dot: boo
 
 export function AgentPanel({
   activity,
+  picks,
+  onPick,
   onOpen,
   onDismiss,
   onAnswer,
 }: {
   activity: AgentActivity;
+  picks: number[];
+  onPick: (choices: number[]) => void;
   onOpen: () => void;
   onDismiss: () => void;
-  onAnswer: (allow: boolean) => void;
+  onAnswer: (allow: boolean, choices?: number[]) => void;
 }) {
   const t = useT();
   const { ask } = activity;
+  const questions = ask?.questions;
+  const step = picks.length;
+  const current = questions?.[step];
+  const options = current?.options;
+  const choose = (i: number) => {
+    const { done, next } = advanceAskPick(picks, i, questions?.length ?? 0);
+    if (done) onAnswer(true, next);
+    else onPick(next);
+  };
   return (
     <>
       <div className="agent-panel-head">
@@ -78,9 +105,21 @@ export function AgentPanel({
           <b>{activity.name ?? t("agent.default")}</b>
           <span>{activity.project ? `${t(`agent.${activity.state}`)} · ${activity.project}` : t(`agent.${activity.state}`)}</span>
         </div>
-        <span className={`agent-dot ${activity.state}`} />
       </div>
-      {ask && (
+      {ask && current && options && (
+        <div className="agent-ask">
+          <span className="agent-ask-text">
+            {questions!.length > 1 && <em className="agent-step">{step + 1}/{questions!.length}</em>}
+            {current.question}
+          </span>
+          <div className="agent-options">
+            {options.map((label, i) => (
+              <button key={i} className="agent-btn agent-option" onClick={() => choose(i)}>{label}</button>
+            ))}
+          </div>
+        </div>
+      )}
+      {ask && !questions && (
         <div className="agent-ask">
           {ask.tool && <b>{ask.tool}</b>}
           {ask.detail && <code>{ask.detail}</code>}
@@ -91,26 +130,28 @@ export function AgentPanel({
           <span className="agent-ask-text">{activity.detail}</span>
         </div>
       )}
-      <div className="agent-panel-actions">
-        {ask ? (
-          <>
-            <button className="agent-btn primary" onClick={() => onAnswer(true)}>
-              {t("agent.allow")}
-            </button>
-            <button className="agent-btn" onClick={() => onAnswer(false)}>
-              {t("agent.deny")}
-            </button>
-          </>
-        ) : null}
-        <button className={`agent-btn${ask ? "" : " primary"}`} onClick={onOpen} disabled={!activity.window}>
-          {t("agent.open")}
-        </button>
-        {!ask && (
-          <button className="agent-btn" onClick={onDismiss}>
-            {t("agent.dismiss")}
+      {!questions && (
+        <div className="agent-panel-actions">
+          {ask ? (
+            <>
+              <button className="agent-btn primary" onClick={() => onAnswer(true)}>
+                {t("agent.allow")}
+              </button>
+              <button className="agent-btn" onClick={() => onAnswer(false)}>
+                {t("agent.deny")}
+              </button>
+            </>
+          ) : null}
+          <button className={`agent-btn${ask ? "" : " primary"}`} onClick={onOpen} disabled={!activity.window}>
+            {t("agent.open")}
           </button>
-        )}
-      </div>
+          {!ask && (
+            <button className="agent-btn" onClick={onDismiss}>
+              {t("agent.dismiss")}
+            </button>
+          )}
+        </div>
+      )}
     </>
   );
 }

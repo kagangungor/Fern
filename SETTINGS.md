@@ -38,12 +38,14 @@ Edit `settings.json` with any text editor while Fern is running. Changes are app
 | `fern-dock-recycle-enabled` | `"true"` / `"false"` | `"false"` | Show the Recycle Bin in the dock. |
 | `fern-dock-drives` | JSON array, e.g. `["C","D"]` | `[]` | Drive letters to show as dock buttons that open the drive in Explorer. |
 | `fern-dock-icon-only` | `"true"` / `"false"` | `"false"` | Minimal icon-only style (no background/padding around icons). |
+| `fern-dock-strip-dark-plate` | `"true"` / `"false"` | `"true"` | Automatically strip near-black square background plates from extracted dock icons. Changing it clears the icon cache so dock icons re-extract. |
 | `fern-start-icon` | `"default"` / `"windows"` / `custom:<data URI>` | `"default"` | Start button icon in the dock: the Fern logo, the Windows logo, or an uploaded image (`custom:` followed by its data URI). |
 | `fern-dock-adaptive` | `"true"` / `"false"` | `"false"` | Fixed dock only. Stretch the dock to full width like a traditional taskbar while a window is maximized, and contract back when it's restored. |
 | `fern-dock-win-number-enabled` | `"true"` / `"false"` | `"true"` | When the taskbar is replaced, Win+1 through Win+9 activate the matching pinned dock app (focus/minimize if running, launch otherwise) instead of the native taskbar slots. |
 | `fern-dock-mixed-reorder` | `"true"` / `"false"` | `"false"` | `"false"` = pinned and running icons stay in two separate groups with a divider between them. `"true"` = a single group — any icon, pinned or not, can be dragged anywhere. |
 | `fern-dock-attention-enabled` | `"true"` / `"false"` | `"true"` | Show notification badges or unread counts on dock icons for applications requesting attention. |
 | `fern-dock-hide-delay` | string (`"300"` / `"500"` / `"800"` / `"1200"` / `"2000"`) | `"800"` | Delay in milliseconds before the dock hides after the cursor leaves (in smart or peek mode). |
+| `fern-dock-edge-area` | `"full"` / `"narrow"` | `"full"` | Smart and peek dock only. `"full"` wakes anywhere along the bottom edge; `"narrow"` only within 60 px of the dock's horizontal span, ignoring corners. |
 
 ### Notch
 
@@ -51,6 +53,7 @@ Edit `settings.json` with any text editor while Fern is running. Changes are app
 |-----|------|---------|-------------|
 | `fern-notch-mode` | `"fixed"` / `"smart"` / `"peek"` | `"fixed"` | Notch visibility behavior. **fixed** = always visible. **smart** = automatically collapses when not hovered or active. **peek** = stays hidden until hovered. |
 | `fern-notch-edge-delay` | string (`"0"` / `"150"` / `"300"` / `"500"`) | `"0"` | Delay in milliseconds before expanding the notch when the cursor approaches the top screen edge. |
+| `fern-notch-edge-area` | `"full"` / `"narrow"` | `"full"` | Smart and peek notch only. `"full"` wakes anywhere along the top edge; `"narrow"` only within 60 px of the notch's horizontal span, ignoring corners. |
 | `fern-agent-api` | `"true"` / `"false"` | `"true"` | Enable local AI agent integration (Claude Code hook and HTTP/CLI agent status endpoint). |
 | `fern-agent-sounds` | `"true"` / `"false"` | `"true"` | Play sound effects when AI agents request input, finish successfully, or fail. |
 |-----|------|---------|-------------|
@@ -164,11 +167,12 @@ Removing a link or disconnecting the account deletes its stored secret and cache
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `fern-theme-mode` | `"dark"` / `"light"` / `"custom"` / `"adaptive"` | `"dark"` | Theme mode. **dark** = dark translucent. **light** = light translucent. **custom** = user-picked color. **adaptive** = follows Windows system accent color. |
+| `fern-theme-mode` | `"auto"` / `"dark"` / `"light"` / `"custom"` / `"adaptive"` | `"dark"` | Theme mode. **auto** = matches Windows dark/light mode. **dark** = dark translucent. **light** = light translucent. **custom** = user-picked color (or one-click preset). **adaptive** = follows Windows system accent color. |
 | `fern-theme-color` | hex string | `"#007aff"` | Custom theme color (used in `custom` and `adaptive` modes). |
+| `fern-theme-accent` | `"mono"` / `"system"` / `"custom"` | `"mono"` | Independent highlight/accent color for active switches, sliders, pills and indicators. |
+| `fern-theme-accent-color` | hex string | `"#0a84ff"` | Custom highlight hex color when `fern-theme-accent` is `"custom"`. |
 | `fern-theme-opacity` | float string | `"0.80"` | Background opacity (0.1 to 1.0). |
 | `fern-theme-saturation` | float string | `"0.50"` | Color saturation for custom/adaptive themes (0.0 to 1.0). |
-| `fern-theme-brightness` | float string | `"0.15"` | Background brightness for custom/adaptive themes (0.0 to 1.0). |
 | `fern-theme-style` | `"solid"` / `"frosted"` / `"liquid"` / `"material"` | `"solid"` | How the notch, dock and overlays are drawn. **frosted** and **liquid** show a blurred copy of the wallpaper behind the notch and dock. **material** builds a tonal palette from the custom color or the Windows accent. Choosing a style in Settings also sets `fern-theme-opacity`. |
 | `fern-glass-wallpaper` | `"true"` / `"false"` | `"true"` | Blend blurred desktop wallpaper behind frosted/liquid glass surfaces. When disabled, uses a pure frosted/liquid glass texture without the desktop backdrop. |
 | `fern-edge-shine` | `"true"` / `"false"` | `"false"` | A soft light on the rim of the notch, dock and overlays, under the cursor. Only applies to **frosted** and **liquid**. |
@@ -200,7 +204,7 @@ Example:
 | `fern-language` | `"system"` / language code, e.g. `"en"` | `"system"` | UI language. `"system"` follows the Windows display language and falls back to English when that language has no translation. Missing keys in a translation fall back to English. Translations live in `src/locales/<code>.json` and are registered in `src/i18n.ts` and `src-tauri/src/i18n.rs` (tray menu). Calendar dates and times follow this language too. |
 | `fern-tour-seen` | `"1"` | unset | Set once the first-run tour has been finished or skipped. Delete it to see the tour again, or use Settings > About > Replay Tour. |
 | `fern-memory-saver` | `"true"` / `"false"` | `"false"` | While the user is away for a minute or the session is locked, empty the working sets of Fern and its WebView2 processes and slow down background polling. Settings > General > Memory Saver. |
-| `fern-webview-disable-gpu` | `"true"` / `"false"` | `"false"` | Software rendering for all webviews: frees the GPU process, but animations cost more CPU. No UI, read once on startup, so restart Fern after changing it. |
+| `fern-webview-disable-gpu` | `"true"` / `"false"` | `"false"` | Software rendering for all webviews: frees the GPU process, but animations cost more CPU. Settings > General > Disable WebView GPU (read once on startup, so restart Fern after changing it). |
 
 ### Internal (Do Not Edit Manually)
 

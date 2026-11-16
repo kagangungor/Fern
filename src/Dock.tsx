@@ -15,6 +15,13 @@ import { createRegionSender, dockBand, fullWindow } from './windowRegion';
 import { restingInterval } from './restingInterval';
 import { useRestState } from './hooks/useRestState';
 import { appAttention, appUnreadCount } from './attention';
+import {
+  applyDockNameOverride,
+  hideIdentifierForApp,
+  isAppHiddenInDock,
+  parseDockNames,
+  resolveDockDisplayName,
+} from './dockHelpers';
 
 // Room around the widest bar for its width animation, and above the tallest for the icons' lift.
 const DOCK_REGION_WIDTH_PAD = 120;
@@ -504,13 +511,29 @@ const Dock = memo(function Dock() {
   }, []);
 
   const handleHideApp = (app: AppInfo) => {
-    const identifier = app.executable || app.path || app.name;
+    const identifier = hideIdentifierForApp(app, itemKey(app), isBrowserHost(app.path));
     if (!identifier) return;
     const updated = Array.from(new Set([...hiddenApps, identifier]));
     setHiddenApps(updated);
     localStorage.setItem("fern-dock-hidden-apps", JSON.stringify(updated));
     invoke("save_setting", { key: "fern-dock-hidden-apps", value: JSON.stringify(updated) }).catch(() => {});
     emit("refresh-hidden-apps").catch(() => {});
+  };
+
+  const [renameApp, setRenameApp] = useState<AppInfo | null>(null);
+  const [dockNames, setDockNames] = useState<Record<string, string>>(() =>
+    parseDockNames(localStorage.getItem("fern-dock-names"))
+  );
+  const displayName = (app: AppInfo) =>
+    resolveDockDisplayName(app, itemKey(app), dockNames, localizeAppName);
+  const saveName = (app: AppInfo, name: string) => {
+    const next = applyDockNameOverride(dockNames, itemKey(app), localizeAppName(app.name), name);
+    setDockNames(next);
+    const value = JSON.stringify(next);
+    localStorage.setItem("fern-dock-names", value);
+    invoke("save_setting", { key: "fern-dock-names", value }).catch(console.error);
+    setRenameApp(null);
+    invoke('set_menu_open', { open: false, rect: null }).catch(() => {});
   };
     const [dockAppVolumeScroll, setDockAppVolumeScroll] = useState(() => localStorage.getItem("fern-dock-app-volume-scroll") !== "false");
   const [volumeHuds, setVolumeHuds] = useState<{ [appKey: string]: { currentVol: number; targetVol: number; muted: boolean; visible: boolean } }>({});
@@ -656,6 +679,7 @@ const Dock = memo(function Dock() {
   const [isOverlapped, setIsOverlapped] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [showAddPopup, setShowAddPopup] = useState(false);
+  const popupOpen = showAddPopup || !!renameApp;
   const [contextMenu, setContextMenu] = useState<{
     x: number;
     y: number;
@@ -733,15 +757,15 @@ const Dock = memo(function Dock() {
   // Measure the dock pill when the popup opens. The card tucks ~14px behind it,
   // so the seam stays fused even if the measurement is slightly off.
   useEffect(() => {
-    if (showAddPopup) {
+    if (popupOpen) {
       const h = dockRef.current?.getBoundingClientRect().height ?? 0;
       if (h > 0) setPopupBottom((h / (scale || 1)) + 12);
     }
-  }, [showAddPopup, scale]);
+  }, [popupOpen, scale]);
 
   const isCurrentlyHovered = isDockHovered || isEdgeHovered;
   const [interactionState, setInteractionState] = useState<'active' | 'grace' | 'none'>('none');
-  const isAnyInteraction = isCurrentlyHovered || !!contextMenu || showAddPopup;
+  const isAnyInteraction = isCurrentlyHovered || !!contextMenu || popupOpen;
   
   const previewTimerRef = useRef<any>(null);
   const isPreviewHoveredRef = useRef(false);
@@ -910,6 +934,13 @@ const Dock = memo(function Dock() {
       const scaleVal = getVal("fern-scale");
       if (scaleVal !== null) setScale(parseFloat(scaleVal));
 
+      const dockNamesVal = settings["fern-dock-names"];
+      if (dockNamesVal !== undefined && dockNamesVal !== null) {
+        const parsedNames = parseDockNames(dockNamesVal);
+        setDockNames(parsedNames);
+        localStorage.setItem("fern-dock-names", JSON.stringify(parsedNames));
+      }
+
       const pinned = await invoke<AppInfo[]>('load_pinned_apps');
       setPinnedApps(pinned.map(a => ({ ...a, is_pinned: true })));
       pinned.forEach(app => fetchIcon(app.path));
@@ -1000,6 +1031,7 @@ const Dock = memo(function Dock() {
       "fern-dock-indicator": (v) => setWindowIndicator(v || "dot"),
       "fern-dock-show-end-task": (v) => setShowEndTask(v !== false && v !== "false"),
       "fern-dock-menu-items": (v) => setMenuItems(parseMenuItems(v)),
+      "fern-dock-names": (v) => setDockNames(parseDockNames(v)),
       "fern-scale": setScale,
     }
   );
@@ -1281,6 +1313,7 @@ const Dock = memo(function Dock() {
 
   const closePopup = () => {
     setShowAddPopup(false);
+    setRenameApp(null);
     invoke('set_menu_open', { open: false, rect: null }).catch(() => {});
   };
 
@@ -1323,7 +1356,7 @@ const Dock = memo(function Dock() {
         height: Math.round(r.height) 
       };
       open = true;
-    } else if (showAddPopup && popupRef.current) {
+    } else if (popupOpen && popupRef.current) {
       const r = popupRef.current.getBoundingClientRect();
       rect = { 
         x: Math.round(r.x), 
@@ -1336,7 +1369,7 @@ const Dock = memo(function Dock() {
 
     invoke('set_menu_open', { open, rect }).catch(() => {});
 
-  }, [contextMenu, showAddPopup, pinnedApps, activeApps, activeSubmenu, scale]);
+  }, [contextMenu, showAddPopup, renameApp, pinnedApps, activeApps, activeSubmenu, scale]);
 
   const dockItems = useMemo(() => {
     const runningMap = new Map();
@@ -1391,23 +1424,15 @@ const Dock = memo(function Dock() {
       return undefined;
     };
 
+    const isAppHidden = (a: AppInfo) => isAppHiddenInDock(a, itemKey(a), hiddenApps);
+
     const pinned: AppInfo[] = [
       { name: 'Start', path: 'start', icon: null, is_running: false, is_pinned: true, hwnd: undefined, all_hwnds: undefined, executable: undefined },
       ...pinnedApps.map(p => {
         const running = findRunningApp(p);
         return { ...p, is_running: !!running, hwnd: running?.hwnd, all_hwnds: running?.all_hwnds };
-      })
+      }).filter(p => !isAppHidden(p))
     ];
-
-    const isAppHidden = (a: AppInfo) => {
-      const key1 = a.path?.toLowerCase();
-      const key2 = a.executable?.toLowerCase();
-      const key3 = a.name?.toLowerCase();
-      return hiddenApps.some((h) => {
-        const hl = h.toLowerCase();
-        return hl === key1 || hl === key2 || hl === key3;
-      });
-    };
 
     const unpinned = activeOrder
       .map(id => activeApps.find(a => appIdentity(a.path, a.executable, a.name) === id))
@@ -1677,7 +1702,7 @@ const Dock = memo(function Dock() {
     const icon = customIcons[cacheKey] || (allowPathFallback && customIcons[app.path]) || iconsRef.current[cacheKey] || (allowPathFallback && iconsRef.current[app.path]) || app.icon;
     const isFernOrSettings = isFernWindow(app);
     return (icon || isFernOrSettings) ? (
-      <DockAppIcon src={isFernOrSettings ? "/fern.png" : (icon ?? undefined)} alt={localizeAppName(app.name)} fern={isFernOrSettings} />
+      <DockAppIcon src={isFernOrSettings ? "/fern.png" : (icon ?? undefined)} alt={displayName(app)} fern={isFernOrSettings} />
     ) : (
       <div className="fallback-icon">{app.name[0]}</div>
     );
@@ -1764,7 +1789,7 @@ const Dock = memo(function Dock() {
   updateDockRegionRef.current = () => {
     const w = window.innerWidth;
     const h = window.innerHeight;
-    if (!isReady || isDragging || contextMenu || showAddPopup || toast) {
+    if (!isReady || isDragging || contextMenu || popupOpen || toast) {
       sendDockRegion([fullWindow(w, h)]);
       return;
     }
@@ -1801,7 +1826,7 @@ const Dock = memo(function Dock() {
   return (
     <div
       className={`dock-container ${isDragging ? 'dragging' : ''}`}
-      onClick={closeMenu}
+      onClick={() => { closeMenu(); if (popupOpen && !isPickingProgramRef.current) closePopup(); }}
       onDragOver={(e) => {
         e.preventDefault();
         if (!isDockHovered) setIsDockHovered(true);
@@ -2130,7 +2155,7 @@ const Dock = memo(function Dock() {
                 
                 {/* Fallback to text tooltip if previews are disabled, app isn't running, or preview failed to load */}
                 {!contextMenu && (!dockPreviewEnabled || (dockPreviewEnabled && hoveredApp === itemKey(app) && !previewData)) && !volumeHuds[itemKey(app)]?.visible && (
-                  <div className="tooltip">{localizeAppName(app.name)}</div>
+                  <div className="tooltip">{displayName(app)}</div>
                 )}
                 <motion.div 
                   className="dock-icon"
@@ -2248,7 +2273,7 @@ const Dock = memo(function Dock() {
                           )}
                         </AnimatePresence>
                         {!contextMenu && (!dockPreviewEnabled || (dockPreviewEnabled && hoveredApp === itemKey(app) && !previewData)) && !volumeHuds[itemKey(app)]?.visible && (
-                          <div className="tooltip">{localizeAppName(app.name)}</div>
+                          <div className="tooltip">{displayName(app)}</div>
                         )}
                         <motion.div
                           className="dock-icon"
@@ -2360,7 +2385,7 @@ const Dock = memo(function Dock() {
                       </AnimatePresence>
 
                       {!contextMenu && (!dockPreviewEnabled || (dockPreviewEnabled && hoveredApp === itemKey(app) && !previewData)) && !volumeHuds[itemKey(app)]?.visible && (
-                        <div className="tooltip">{localizeAppName(app.name)}</div>
+                        <div className="tooltip">{displayName(app)}</div>
                       )}
                       <motion.div
                         className="dock-icon"
@@ -2481,7 +2506,7 @@ const Dock = memo(function Dock() {
               <div className="menu-item" onClick={() => togglePin(contextMenu.app!)}>
                 {contextMenu.app.is_pinned ? t("dockmenu.unpin") : t("dockmenu.pin")}
               </div>
-              {contextMenu.app.is_running && !contextMenu.app.is_pinned && contextMenu.app.path !== 'start' && (
+              {(contextMenu.app.is_pinned || contextMenu.app.is_running) && contextMenu.app.path !== 'start' && (
                 <div className="menu-item" onClick={() => { handleHideApp(contextMenu.app!); closeMenu(); }}>
                   {t("dockmenu.hideApp")}
                 </div>
@@ -2489,6 +2514,13 @@ const Dock = memo(function Dock() {
               {contextMenu.app.is_pinned && contextMenu.app.path !== 'start' && (
                 <>
                   <div className="menu-divider" />
+                  <div className="menu-item" onClick={() => {
+                    const targetApp = contextMenu.app!;
+                    closeMenu();
+                    setRenameApp(targetApp);
+                  }}>
+                    {t("dockmenu.rename")}
+                  </div>
                   <div className="menu-item" onClick={() => {
                     const isHost = isBrowserHost(contextMenu.app!.path);
                     const ck = isHost ? `${contextMenu.app!.path}:${contextMenu.app!.name.toLowerCase()}` : contextMenu.app!.path;
@@ -2570,6 +2602,18 @@ const Dock = memo(function Dock() {
       />
 
       <AnimatePresence>
+        {renameApp && (
+          <RenamePopup
+            key={itemKey(renameApp)}
+            containerRef={popupRef}
+            app={renameApp}
+            current={dockNames[itemKey(renameApp)] ?? ""}
+            scale={scale}
+            bottom={popupBottom}
+            onSave={(name) => saveName(renameApp, name)}
+            onClose={() => { setRenameApp(null); invoke('set_menu_open', { open: false, rect: null }).catch(() => {}); }}
+          />
+        )}
         {showAddPopup && (
           <AddAppPopup 
             containerRef={popupRef}
@@ -2627,9 +2671,9 @@ function AddAppPopup({
   const handleBrowse = async () => {
     if (isPickingProgramRef) isPickingProgramRef.current = true;
     try {
-      const picked = await invoke<AppInfo | null>("pick_program");
+      const picked = await invoke<[string, string] | null>("pick_program");
       if (picked) {
-        onAdd(picked);
+        onAdd({ name: picked[0], path: picked[1], icon: null, is_running: false });
       }
     } catch (e) {
       console.error("Failed to pick program:", e);
@@ -2907,6 +2951,80 @@ function AddAppPopup({
         </div>
         <div className="popup-browse-row" onClick={handleBrowse}>
           {t("dockmenu.browseProgram")}
+        </div>
+      </motion.div>
+    </div>
+  );
+}
+
+function RenamePopup({
+  app,
+  current,
+  containerRef,
+  scale,
+  bottom,
+  onSave,
+  onClose,
+}: {
+  app: AppInfo;
+  current: string;
+  containerRef: React.RefObject<HTMLDivElement | null>;
+  scale: number;
+  bottom: number;
+  onSave: (name: string) => void;
+  onClose: () => void;
+}) {
+  const t = useT();
+  const [value, setValue] = useState(current || localizeAppName(app.name));
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    invoke('set_window_keyboard_focus', { enabled: true })
+      .catch(() => {})
+      .finally(() => {
+        inputRef.current?.focus();
+        inputRef.current?.select();
+      });
+    return () => {
+      invoke('set_window_keyboard_focus', { enabled: false }).catch(() => {});
+    };
+  }, []);
+
+  return (
+    <div className="add-popup-anchor" style={{ zoom: scale, bottom }}>
+      <motion.div
+        ref={containerRef}
+        className="add-app-popup rename-popup"
+        style={{ transformOrigin: "bottom center" }}
+        initial={{ opacity: 0, scaleY: 0 }}
+        animate={{ opacity: 1, scaleY: 1 }}
+        exit={{ opacity: 0, scaleY: 0, transition: { duration: 0.16, ease: "easeIn" } }}
+        transition={{ opacity: { duration: 0.15 }, scaleY: { type: "spring", stiffness: 300, damping: 28, mass: 0.9 } }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="popup-search-row">
+          <input
+            ref={inputRef}
+            type="text"
+            className="popup-search-input"
+            value={value}
+            maxLength={40}
+            onChange={(e) => setValue(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") onSave(value);
+              if (e.key === "Escape") onClose();
+            }}
+          />
+        </div>
+        <div className="rename-actions">
+          {current && (
+            <button type="button" className="rename-btn" onClick={() => onSave("")}>
+              {t("dockmenu.renameReset")}
+            </button>
+          )}
+          <button type="button" className="rename-btn primary" onClick={() => onSave(value)}>
+            {t("dockmenu.renameSave")}
+          </button>
         </div>
       </motion.div>
     </div>

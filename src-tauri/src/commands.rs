@@ -105,6 +105,26 @@ pub fn set_ignore_cursor_events(window: Window, ignore: bool) {
     }
 }
 
+pub(crate) async fn wait_for_splash_with(
+    flag: &std::sync::atomic::AtomicBool,
+    timeout: std::time::Duration,
+) -> bool {
+    let waited = std::time::Instant::now();
+    while !flag.load(Ordering::Relaxed) {
+        let elapsed = waited.elapsed();
+        if elapsed >= timeout {
+            return false;
+        }
+        let step = (timeout - elapsed).min(std::time::Duration::from_millis(100));
+        tokio::time::sleep(step).await;
+    }
+    true
+}
+
+pub async fn wait_for_splash() {
+    let _ = wait_for_splash_with(&crate::state::SPLASH_FINISHED, std::time::Duration::from_secs(8)).await;
+}
+
 #[tauri::command]
 pub async fn init_dock(app: AppHandle, mode: String) {
     // Backend guard: bail if dock is disabled in settings.
@@ -121,6 +141,8 @@ pub async fn init_dock(app: AppHandle, mode: String) {
         crate::startup::settle("dock disabled");
         return;
     }
+
+    wait_for_splash().await;
 
     if let Some(dock_win) = app.get_webview_window("dock") {
         init_dock_window(&app, dock_win, &mode).await;
@@ -268,6 +290,7 @@ pub async fn change_dock_mode(app: AppHandle, mode: String) {
     if enabled != "true" {
         return;
     }
+    wait_for_splash().await;
     let per_monitor = crate::monitors::is_per_monitor_active(&app, crate::types::WindowKind::Dock);
     let labels: Vec<String> = app.webview_windows().keys()
         .filter(|l| crate::state::is_dock_label(l))
@@ -364,6 +387,7 @@ async fn change_dock_mode_for_window(app: &AppHandle, dock_win: tauri::WebviewWi
 
 #[tauri::command]
 pub async fn change_notch_mode(app: AppHandle, mode: String) {
+    wait_for_splash().await;
     let per_monitor = crate::monitors::is_per_monitor_active(&app, crate::types::WindowKind::Notch);
     let labels: Vec<String> = app.webview_windows().keys()
         .filter(|l| crate::state::is_notch_label(l))
@@ -2230,6 +2254,7 @@ pub fn set_splash_fullscreen(app: AppHandle, fullscreen: bool) {
             let _ = win.show();
         } else {
             let _ = win.hide();
+            crate::state::SPLASH_FINISHED.store(true, Ordering::Relaxed);
             crate::services::sync_overlays(&app);
         }
     }
@@ -2838,6 +2863,17 @@ pub async fn restart_fern(handle: AppHandle) {
     #[cfg(debug_assertions)]
     {
         // Dev just reloads the pages. Leave SHUTTING_DOWN alone here or the hooks stay off.
+        crate::state::SPLASH_FINISHED.store(false, Ordering::Relaxed);
+        for (label, w) in handle.webview_windows() {
+            let extra = label != "main" && label != "dock";
+            if crate::state::is_dock_label(&label) || crate::state::is_notch_label(&label) {
+                if extra {
+                    crate::monitors::destroy_monitor_window(&handle, &label);
+                } else {
+                    let _ = w.hide();
+                }
+            }
+        }
         for (_, w) in handle.webview_windows() {
             let _ = w.eval("window.location.reload()");
         }
@@ -4182,6 +4218,35 @@ pub async fn shelf_thumbnail(path: String) -> Option<String> {
         .flatten()
 }
 
+pub(crate) fn extract_shelf_text_preview(p: &std::path::Path) -> Option<String> {
+    use std::io::Read;
+    let ext = p.extension()?.to_str()?.to_ascii_lowercase();
+    if !matches!(
+        ext.as_str(),
+        "txt" | "md" | "markdown" | "log" | "json" | "csv" | "tsv" | "xml" | "yaml" | "yml" | "toml" | "ini" | "cfg" | "conf"
+            | "html" | "htm" | "css" | "js" | "jsx" | "ts" | "tsx" | "rs" | "py" | "go" | "java" | "c" | "h" | "cpp" | "cs"
+            | "sh" | "ps1" | "bat" | "sql" | "rtf"
+    ) {
+        return None;
+    }
+    let mut buf = vec![0u8; 1024];
+    let n = std::fs::File::open(p).ok()?.read(&mut buf).ok()?;
+    if n == 0 || buf[..n].contains(&0) {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&buf[..n]);
+    let preview: Vec<&str> = text.lines().map(str::trim).filter(|l| !l.is_empty()).take(8).collect();
+    if preview.is_empty() { None } else { Some(preview.join("\n")) }
+}
+
+#[tauri::command]
+pub async fn shelf_text_preview(path: String) -> Option<String> {
+    tauri::async_runtime::spawn_blocking(move || extract_shelf_text_preview(std::path::Path::new(&path)))
+        .await
+        .ok()
+        .flatten()
+}
+
 fn shelf_shell_thumbnail(path: &str) -> Option<String> {
     use windows::Win32::Foundation::SIZE;
     use windows::Win32::UI::Shell::{IShellItemImageFactory, SHCreateItemFromParsingName, SIIGBF, SIIGBF_BIGGERSIZEOK, SIIGBF_THUMBNAILONLY};
@@ -4322,8 +4387,8 @@ pub async fn focus_agent_window(window: u64) {
 }
 
 #[tauri::command]
-pub fn agent_answer(id: u64, allow: bool) {
-    crate::agent_api::answer(id, allow);
+pub fn agent_answer(id: u64, allow: bool, choices: Option<Vec<usize>>) {
+    crate::agent_api::answer(id, allow, choices.unwrap_or_default());
 }
 
 const AGENT_SOUND_STATES: [&str; 3] = ["needs_input", "done", "error"];
@@ -4457,19 +4522,30 @@ pub fn is_dwm_composition_enabled() -> Result<bool, String> {
     Ok(crate::live_preview::is_composition_enabled())
 }
 
+pub fn format_picked_program_name(stem: Option<&str>) -> String {
+    let raw = stem.filter(|s| !s.trim().is_empty()).unwrap_or("App");
+    let mut chars = raw.chars();
+    match chars.next() {
+        Some(first) if first.is_lowercase() => first.to_uppercase().chain(chars).collect(),
+        _ => raw.to_string(),
+    }
+}
+
 #[tauri::command]
 pub async fn pick_program(app: AppHandle) -> Result<Option<(String, String)>, String> {
-    let Some(path) = app
+    let mut dialog = app
         .dialog()
         .file()
         .set_title("Choose a program")
-        .add_filter("Programs", &["exe", "lnk", "bat", "cmd", "url"])
-        .blocking_pick_file()
-    else {
+        .add_filter("Programs", &["exe", "lnk", "bat", "cmd", "url"]);
+    if let Some(dock) = app.get_webview_window("dock") {
+        dialog = dialog.set_parent(&dock);
+    }
+    let Some(path) = dialog.blocking_pick_file() else {
         return Ok(None);
     };
     let path = path.into_path().map_err(|e| e.to_string())?;
-    let name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("App").to_string();
+    let name = format_picked_program_name(path.file_stem().and_then(|s| s.to_str()));
     Ok(Some((name, path.to_string_lossy().into_owned())))
 }
 
@@ -4535,6 +4611,50 @@ mod metrics_tests {
         assert_eq!(compute_rate_per_sec(1000, 500, 1000), 0);
         assert_eq!(compute_rate_per_sec(0, 2048, 0), 2_048_000);
         assert_eq!(compute_rate_per_sec(1000, 6000, 500), 10_000);
+    }
+
+    #[test]
+    fn wait_for_splash_returns_immediately_when_finished() {
+        let flag = std::sync::atomic::AtomicBool::new(true);
+        let started = std::time::Instant::now();
+        let finished = tauri::async_runtime::block_on(wait_for_splash_with(&flag, std::time::Duration::from_secs(2)));
+        assert!(finished);
+        assert!(started.elapsed() < std::time::Duration::from_millis(100));
+    }
+
+    #[test]
+    fn wait_for_splash_respects_timeout_when_unfinished() {
+        let flag = std::sync::atomic::AtomicBool::new(false);
+        let finished = tauri::async_runtime::block_on(wait_for_splash_with(&flag, std::time::Duration::from_millis(60)));
+        assert!(!finished);
+    }
+
+    #[test]
+    fn format_picked_program_name_capitalizes_lowercase_first_letter() {
+        assert_eq!(format_picked_program_name(Some("spotify")), "Spotify");
+        assert_eq!(format_picked_program_name(Some("VSCode")), "VSCode");
+        assert_eq!(format_picked_program_name(None), "App");
+        assert_eq!(format_picked_program_name(Some("")), "App");
+    }
+
+    #[test]
+    fn shelf_text_preview_reads_text_and_rejects_binary_or_disallowed() {
+        let dir = std::env::temp_dir().join(format!("fern_shelf_preview_test_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+
+        let txt = dir.join("notes.md");
+        std::fs::write(&txt, "\n  # Title  \n\n  Line two\n  Line three\n").unwrap();
+        assert_eq!(extract_shelf_text_preview(&txt).as_deref(), Some("# Title\nLine two\nLine three"));
+
+        let bin_ext = dir.join("photo.png");
+        std::fs::write(&bin_ext, "hello").unwrap();
+        assert_eq!(extract_shelf_text_preview(&bin_ext), None);
+
+        let nul_txt = dir.join("nul.txt");
+        std::fs::write(&nul_txt, b"abc\0def").unwrap();
+        assert_eq!(extract_shelf_text_preview(&nul_txt), None);
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
 

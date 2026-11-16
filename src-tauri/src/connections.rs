@@ -4,7 +4,8 @@ use windows::Win32::Foundation::HANDLE;
 use windows::Win32::NetworkManagement::WiFi::{
     dot11_BSS_type_infrastructure, wlan_connection_mode_profile, WlanCloseHandle, WlanConnect, WlanDeleteProfile,
     WlanDisconnect, WlanEnumInterfaces, WlanFreeMemory, WlanGetAvailableNetworkList, WlanOpenHandle, WlanScan,
-    WlanSetProfile, DOT11_SSID, WLAN_AVAILABLE_NETWORK_LIST, WLAN_CONNECTION_PARAMETERS, WLAN_INTERFACE_INFO_LIST,
+    WlanSetProfile, DOT11_AUTH_ALGO_WPA3_SAE, DOT11_SSID, WLAN_AVAILABLE_NETWORK_LIST, WLAN_CONNECTION_PARAMETERS,
+    WLAN_INTERFACE_INFO_LIST,
 };
 
 const NETWORK_CONNECTED: u32 = 0x1;
@@ -17,6 +18,7 @@ pub struct WifiNetwork {
     secured: bool,
     connected: bool,
     known: bool,
+    sae: bool,
 }
 
 
@@ -83,12 +85,13 @@ fn xml_escape(s: &str) -> String {
     s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;").replace('\'', "&apos;")
 }
 
-fn profile_xml(ssid: &str, password: Option<&str>) -> String {
+fn profile_xml(ssid: &str, password: Option<&str>, sae: bool) -> String {
     let name = xml_escape(ssid);
     let security = match password {
         Some(key) => format!(
-            "<authEncryption><authentication>WPA2PSK</authentication><encryption>AES</encryption><useOneX>false</useOneX></authEncryption>\
+            "<authEncryption><authentication>{}</authentication><encryption>AES</encryption><useOneX>false</useOneX></authEncryption>\
              <sharedKey><keyType>passPhrase</keyType><protected>false</protected><keyMaterial>{}</keyMaterial></sharedKey>",
+            if sae { "WPA3SAE" } else { "WPA2PSK" },
             xml_escape(key)
         ),
         None => "<authEncryption><authentication>open</authentication><encryption>none</encryption><useOneX>false</useOneX></authEncryption>".to_string(),
@@ -122,11 +125,13 @@ fn scan_networks() -> Result<Vec<WifiNetwork>, String> {
                 secured: entry.bSecurityEnabled.as_bool(),
                 connected: entry.dwFlags & NETWORK_CONNECTED != 0,
                 known: entry.dwFlags & NETWORK_HAS_PROFILE != 0,
+                sae: entry.dot11DefaultAuthAlgorithm == DOT11_AUTH_ALGO_WPA3_SAE,
             };
             match networks.iter_mut().find(|n| n.ssid == network.ssid) {
                 Some(existing) => {
                     existing.connected |= network.connected;
                     existing.known |= network.known;
+                    existing.sae |= network.sae;
                     existing.signal = existing.signal.max(network.signal);
                 }
                 None => networks.push(network),
@@ -138,17 +143,26 @@ fn scan_networks() -> Result<Vec<WifiNetwork>, String> {
     }
 }
 
+fn set_wlan_profile(wlan: &Wlan, ssid: &str, password: Option<&str>, sae: bool) -> u32 {
+    let xml = wide(&profile_xml(ssid, password, sae));
+    let mut reason = 0u32;
+    unsafe { WlanSetProfile(wlan.handle, &wlan.interface, 0, PCWSTR(xml.as_ptr()), None, true, None, &mut reason) }
+}
+
 fn connect_network(ssid: &str, password: Option<&str>) -> Result<(), String> {
     let wlan = Wlan::open()?;
     let mut dot11 = ssid_from_str(ssid)?;
-    let known = scan_networks()?.iter().any(|n| n.ssid == ssid && n.known);
+    let networks = scan_networks()?;
+    let known = networks.iter().any(|n| n.ssid == ssid && n.known);
+    let sae = networks.iter().any(|n| n.ssid == ssid && n.sae);
     unsafe {
         let profile_name = wide(ssid);
         if !known || password.is_some() {
-            let secured = password.is_some();
-            let xml = wide(&profile_xml(ssid, if secured { password } else { None }));
-            let mut reason = 0u32;
-            let status = WlanSetProfile(wlan.handle, &wlan.interface, 0, PCWSTR(xml.as_ptr()), None, true, None, &mut reason);
+            let mut status = set_wlan_profile(&wlan, ssid, password, sae);
+            // Older drivers or transition-mode APs sometimes reject WPA3SAE XML even when advertising SAE; retry WPA2PSK.
+            if status != 0 && sae && password.is_some() {
+                status = set_wlan_profile(&wlan, ssid, password, false);
+            }
             if status != 0 {
                 return Err("Windows rejected this network's settings".into());
             }
@@ -281,6 +295,26 @@ pub fn open_ethernet_settings() {
             windows::core::PCSTR::null(),
             SW_SHOWNORMAL,
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::profile_xml;
+
+    #[test]
+    fn profile_xml_selects_wpa3_sae_or_wpa2_or_open() {
+        let wpa3 = profile_xml("A&B", Some("p<w>d"), true);
+        assert!(wpa3.contains("<authentication>WPA3SAE</authentication>"));
+        assert!(wpa3.contains("<name>A&amp;B</name>"));
+        assert!(wpa3.contains("<keyMaterial>p&lt;w&gt;d</keyMaterial>"));
+
+        let wpa2 = profile_xml("Home", Some("secret"), false);
+        assert!(wpa2.contains("<authentication>WPA2PSK</authentication>"));
+
+        let open = profile_xml("Guest", None, true);
+        assert!(open.contains("<authentication>open</authentication>"));
+        assert!(!open.contains("WPA3SAE"));
     }
 }
 

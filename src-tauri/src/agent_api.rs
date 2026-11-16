@@ -9,16 +9,18 @@ use std::time::Duration;
 use tauri::{AppHandle, Emitter};
 
 const MAX_HEAD: usize = 8192;
-const MAX_BODY: usize = 4096;
+const MAX_BODY: usize = 8192;
 const MAX_CONNECTIONS: usize = 8;
 const ASK_WAIT: u64 = 120;
+const DETAIL_MAX: usize = 600;
 const SETTING: &str = "fern-agent-api";
 
 static ACTIVE: AtomicUsize = AtomicUsize::new(0);
 static NEXT_ASK: AtomicU64 = AtomicU64::new(1);
 static STARTED: AtomicBool = AtomicBool::new(false);
 static ENABLED: AtomicBool = AtomicBool::new(false);
-static PENDING: Mutex<Option<HashMap<u64, mpsc::Sender<bool>>>> = Mutex::new(None);
+type Decision = (bool, Vec<usize>);
+static PENDING: Mutex<Option<HashMap<u64, mpsc::Sender<Decision>>>> = Mutex::new(None);
 
 #[derive(Deserialize)]
 struct Incoming {
@@ -36,6 +38,13 @@ struct IncomingAsk {
     window: Option<u64>,
     tool: Option<String>,
     detail: Option<String>,
+    questions: Option<Vec<AskQuestion>>,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+struct AskQuestion {
+    question: String,
+    options: Vec<String>,
 }
 
 #[derive(Serialize, Clone)]
@@ -43,6 +52,7 @@ struct Ask {
     id: u64,
     tool: Option<String>,
     detail: Option<String>,
+    questions: Option<Vec<AskQuestion>>,
 }
 
 #[derive(Serialize, Clone)]
@@ -105,20 +115,20 @@ fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     haystack.windows(needle.len()).position(|w| w == needle)
 }
 
-pub fn answer(id: u64, allow: bool) {
+pub fn answer(id: u64, allow: bool, choices: Vec<usize>) {
     let sender = PENDING.lock().ok().and_then(|mut map| map.as_mut().and_then(|m| m.remove(&id)));
     if let Some(sender) = sender {
-        let _ = sender.send(allow);
+        let _ = sender.send((allow, choices));
     }
 }
 
-fn wait_for_answer(stream: &mut TcpStream, id: u64, rx: &mpsc::Receiver<bool>) -> Option<bool> {
+fn wait_for_answer(stream: &mut TcpStream, id: u64, rx: &mpsc::Receiver<Decision>) -> Option<Decision> {
     let _ = stream.set_nonblocking(true);
     let mut waited = 0;
     while waited < ASK_WAIT {
-        if let Ok(allow) = rx.recv_timeout(Duration::from_secs(1)) {
+        if let Ok(decision) = rx.recv_timeout(Duration::from_secs(1)) {
             let _ = stream.set_nonblocking(false);
-            return Some(allow);
+            return Some(decision);
         }
         waited += 1;
         let mut probe = [0u8; 1];
@@ -202,7 +212,7 @@ fn handle(mut stream: TcpStream, app: &AppHandle, token: &str) {
                 name: clean(req.name, 48),
                 project: clean(req.project, 48),
                 window: req.window,
-                detail: clean(req.detail, 256),
+                detail: clean(req.detail, DETAIL_MAX),
                 ask: None,
                 cancelled: None,
             });
@@ -218,42 +228,57 @@ fn handle(mut stream: TcpStream, app: &AppHandle, token: &str) {
             if let Ok(mut map) = PENDING.lock() {
                 map.get_or_insert_with(HashMap::new).insert(id, tx);
             }
+            let (name, project, window) = (clean(req.name, 48), clean(req.project, 48), req.window);
             let activity = Activity {
                 state: "needs_input",
-                name: clean(req.name, 48),
-                project: clean(req.project, 48),
-                window: req.window,
-                detail: clean(req.detail.clone(), 256),
+                name: name.clone(),
+                project: project.clone(),
+                window,
+                detail: None,
                 ask: Some(Ask {
                     id,
                     tool: clean(req.tool, 48),
-                    detail: clean(req.detail, 512),
+                    detail: clean(req.detail, DETAIL_MAX),
+                    questions: req.questions.map(|list| {
+                        list.into_iter()
+                            .take(4)
+                            .filter_map(|q| {
+                                let question = clean(Some(q.question), DETAIL_MAX)?;
+                                Some(AskQuestion {
+                                    question,
+                                    options: q.options.into_iter().filter_map(|o| clean(Some(o), 80)).take(4).collect(),
+                                })
+                            })
+                            .collect()
+                    }),
                 }),
                 cancelled: None,
             };
             let _ = app.emit("agent-activity", Some(activity));
 
-            let decision = wait_for_answer(&mut stream, id, &rx);
-            let body = match decision {
-                Some(true) => serde_json::json!({ "decision": "allow" }).to_string(),
-                Some(false) => serde_json::json!({ "decision": "deny" }).to_string(),
+            match wait_for_answer(&mut stream, id, &rx) {
+                Some((true, choices)) if !choices.is_empty() => {
+                    let body = serde_json::json!({ "decision": "allow", "choices": choices }).to_string();
+                    reply_json(&mut stream, &body);
+                }
+                Some((true, _)) => reply_json(&mut stream, r#"{"decision":"allow"}"#),
+                Some((false, _)) => reply_json(&mut stream, r#"{"decision":"deny"}"#),
                 None => {
                     let _ = app.emit(
                         "agent-activity",
                         Some(Activity {
-                            state: "needs_input",
-                            name: None,
-                            project: None,
-                            window: None,
+                            state: "working",
+                            name,
+                            project,
+                            window,
                             detail: None,
                             ask: None,
                             cancelled: Some(id),
                         }),
                     );
-                    serde_json::json!({ "decision": "timeout" }).to_string()
+                    reply(&mut stream, "204 No Content");
                 }
-            };
-            reply_json(&mut stream, &body);
+            }
         }
         _ => reply(&mut stream, "404 Not Found"),
     }
@@ -524,35 +549,99 @@ fn send_with(args: &[String], detail: Option<String>) -> Option<()> {
     post("/activity", body, 2)?.starts_with("HTTP/1.1 204").then_some(())
 }
 
+fn parse_ask_user_questions(raw: &serde_json::Value) -> Option<Vec<(String, Vec<String>)>> {
+    let list = raw.as_array()?;
+    if list.is_empty() || list.len() > 4 {
+        return None;
+    }
+    let parsed: Vec<(String, Vec<String>)> = list
+        .iter()
+        .filter(|q| q["multiSelect"].as_bool() != Some(true))
+        .filter_map(|q| {
+            let labels: Vec<String> = q["options"]
+                .as_array()?
+                .iter()
+                .filter_map(|o| o["label"].as_str().map(str::to_string))
+                .collect();
+            let question = q["question"].as_str()?.to_string();
+            (2..=4).contains(&labels.len()).then_some((question, labels))
+        })
+        .collect();
+    (parsed.len() == list.len()).then_some(parsed)
+}
+
+fn build_ask_answer_output(
+    asked: &[(String, Vec<String>)],
+    raw_questions: &serde_json::Value,
+    decision: &serde_json::Value,
+) -> Option<serde_json::Value> {
+    let choices = decision["choices"].as_array()?;
+    if choices.len() != asked.len() {
+        return None;
+    }
+    let mut answers = serde_json::Map::new();
+    for ((question, labels), choice) in asked.iter().zip(choices) {
+        let label = choice.as_u64().and_then(|i| labels.get(i as usize))?;
+        answers.insert(question.clone(), serde_json::Value::String(label.clone()));
+    }
+    let updated = serde_json::json!({ "questions": raw_questions, "answers": answers });
+    Some(serde_json::json!({
+        "hookSpecificOutput": {
+            "hookEventName": "PermissionRequest",
+            "decision": { "behavior": "allow", "updatedInput": updated }
+        }
+    }))
+}
+
 fn ask(args: &[String]) {
     let (name, project) = flags(args);
     let mut input = String::new();
     let _ = std::io::stdin().read_to_string(&mut input);
     let event: serde_json::Value = serde_json::from_str(&input).unwrap_or_default();
     let tool_input = &event["tool_input"];
+    let detail: Option<String>;
+    let mut asked: Option<Vec<(String, Vec<String>)>> = None;
     if event["tool_name"].as_str() == Some("AskUserQuestion") {
-        let question = tool_input["questions"][0]["question"].as_str().map(str::to_string);
-        let mut forwarded = vec!["needs-input".to_string()];
-        forwarded.extend(args.iter().cloned());
-        let _ = send_with(&forwarded, question);
-        return;
+        let Some(parsed) = parse_ask_user_questions(&tool_input["questions"]) else {
+            let question = tool_input["questions"][0]["question"].as_str().map(str::to_string);
+            let mut forwarded = vec!["needs-input".to_string()];
+            forwarded.extend(args.iter().cloned());
+            let _ = send_with(&forwarded, question);
+            return;
+        };
+        detail = None;
+        asked = Some(parsed);
+    } else {
+        detail = ["command", "file_path", "url", "pattern", "description"]
+            .iter()
+            .find_map(|key| tool_input.get(*key).and_then(|v| v.as_str()))
+            .map(str::to_string)
+            .or_else(|| (!tool_input.is_null()).then(|| tool_input.to_string()));
     }
-    let detail = ["command", "file_path", "url", "pattern", "description"]
-        .iter()
-        .find_map(|key| tool_input.get(*key).and_then(|v| v.as_str()))
-        .map(str::to_string)
-        .or_else(|| (!tool_input.is_null()).then(|| tool_input.to_string()));
+    let detail = detail.map(|d| d.chars().take(DETAIL_MAX).collect::<String>());
+    let questions = asked
+        .as_ref()
+        .map(|list| list.iter().map(|(q, o)| serde_json::json!({ "question": q, "options": o })).collect::<Vec<_>>());
     let body = serde_json::json!({
         "name": name,
         "project": project,
         "window": ancestor_window(),
         "tool": event["tool_name"].as_str(),
         "detail": detail,
+        "questions": questions,
     })
     .to_string();
 
     let Some(response) = post("/ask", body, ASK_WAIT + 5) else { return };
     let decision = response.split("\r\n\r\n").nth(1).and_then(|b| serde_json::from_str::<serde_json::Value>(b).ok());
+    if let Some(asked) = asked {
+        if let Some(decision) = decision.as_ref() {
+            if let Some(out) = build_ask_answer_output(&asked, &tool_input["questions"], decision) {
+                println!("{}", out);
+            }
+        }
+        return;
+    }
     let behavior = match decision.as_ref().and_then(|d| d["decision"].as_str()) {
         Some("allow") => serde_json::json!({ "behavior": "allow" }),
         Some("deny") => serde_json::json!({ "behavior": "deny", "message": "Denied from Fern" }),
@@ -581,4 +670,63 @@ pub fn run_cli(args: &[String]) -> Option<i32> {
         return Some(0);
     }
     Some(if send(&args[2..]).is_some() { 0 } else { 1 })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{build_ask_answer_output, parse_ask_user_questions};
+
+    #[test]
+    fn parse_ask_user_questions_validates_bounds_and_multiselect() {
+        let valid = serde_json::json!([
+            { "question": "Color?", "options": [{ "label": "Red" }, { "label": "Blue" }] },
+            { "question": "Size?", "options": [{ "label": "S" }, { "label": "M" }, { "label": "L" }] }
+        ]);
+        assert_eq!(
+            parse_ask_user_questions(&valid),
+            Some(vec![
+                ("Color?".into(), vec!["Red".into(), "Blue".into()]),
+                ("Size?".into(), vec!["S".into(), "M".into(), "L".into()]),
+            ])
+        );
+
+        let multi = serde_json::json!([
+            { "question": "Pick", "multiSelect": true, "options": [{ "label": "A" }, { "label": "B" }] }
+        ]);
+        assert_eq!(parse_ask_user_questions(&multi), None);
+
+        let too_few_options = serde_json::json!([
+            { "question": "Only one", "options": [{ "label": "A" }] }
+        ]);
+        assert_eq!(parse_ask_user_questions(&too_few_options), None);
+
+        let too_many_questions = serde_json::json!([
+            { "question": "Q1", "options": [{ "label": "A" }, { "label": "B" }] },
+            { "question": "Q2", "options": [{ "label": "A" }, { "label": "B" }] },
+            { "question": "Q3", "options": [{ "label": "A" }, { "label": "B" }] },
+            { "question": "Q4", "options": [{ "label": "A" }, { "label": "B" }] },
+            { "question": "Q5", "options": [{ "label": "A" }, { "label": "B" }] }
+        ]);
+        assert_eq!(parse_ask_user_questions(&too_many_questions), None);
+    }
+
+    #[test]
+    fn build_ask_answer_output_maps_choices_to_answers() {
+        let asked = vec![
+            ("Color?".into(), vec!["Red".into(), "Blue".into()]),
+            ("Size?".into(), vec!["S".into(), "M".into()]),
+        ];
+        let raw_questions = serde_json::json!([
+            { "question": "Color?", "options": [{ "label": "Red" }, { "label": "Blue" }] },
+            { "question": "Size?", "options": [{ "label": "S" }, { "label": "M" }] }
+        ]);
+        let decision = serde_json::json!({ "decision": "allow", "choices": [1, 0] });
+        let out = build_ask_answer_output(&asked, &raw_questions, &decision).expect("valid answer map");
+        assert_eq!(out["hookSpecificOutput"]["decision"]["behavior"], "allow");
+        assert_eq!(out["hookSpecificOutput"]["decision"]["updatedInput"]["answers"]["Color?"], "Blue");
+        assert_eq!(out["hookSpecificOutput"]["decision"]["updatedInput"]["answers"]["Size?"], "S");
+
+        let out_of_range = serde_json::json!({ "decision": "allow", "choices": [1, 9] });
+        assert_eq!(build_ask_answer_output(&asked, &raw_questions, &out_of_range), None);
+    }
 }

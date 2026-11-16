@@ -662,7 +662,7 @@ img {
 /* Calendar & Timer Split View */
 .calendar-timer-content.split-view {
     width: 100%;
-    padding: 16px;
+    padding: 12px 16px 14px;
     display: flex;
     flex-direction: row;
     /* Side-by-Side */
@@ -685,7 +685,7 @@ img {
     min-width: 0;
     display: flex;
     flex-direction: column;
-    justify-content: center;
+    justify-content: flex-start;
     border-left: 1px solid var(--fern-border, rgba(255, 255, 255, 0.1));
     padding-left: 16px;
 }
@@ -695,13 +695,19 @@ img {
 }
 
 .calendar-header {
-    margin-bottom: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+    min-height: 22px;
+    margin-bottom: 6px;
 }
 
 .month-year {
     font-size: 13px;
     font-weight: 600;
     opacity: 0.9;
+    white-space: nowrap;
 }
 
 .calendar-grid {
@@ -715,11 +721,11 @@ img {
     font-weight: 600;
     opacity: 0.4;
     text-align: center;
-    padding-bottom: 2px;
+    padding: 2px 0 6px;
 }
 
 .calendar-day {
-    aspect-ratio: 1;
+    height: 26px;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -1172,7 +1178,7 @@ img {
 .timer-section-new {
     display: flex;
     flex-direction: column;
-    gap: 14px;
+    gap: 10px;
     align-items: center;
     width: 100%;
 }
@@ -1642,8 +1648,8 @@ img {
 }
 
 .cc-pill-icon-wrapper svg {
-    width: 14px;
-    height: 14px;
+    width: 16px;
+    height: 16px;
 }
 
 .cc-pill-info {
@@ -1679,7 +1685,7 @@ img {
 }
 
 .cc-pill-tile.active .cc-pill-icon-wrapper {
-    background: var(--fern-group-bg, rgba(0, 0, 0, 0.08));
+    background: color-mix(in srgb, var(--fern-on-highlight, var(--fern-bg-expanded, #000)) 14%, transparent);
     color: var(--fern-on-highlight, var(--fern-bg-expanded, #000));
 }
 
@@ -1688,8 +1694,14 @@ img {
     display: flex;
     justify-content: space-between;
     align-items: center;
+    gap: 8px;
     width: 100%;
     padding: 0 4px;
+}
+
+.cc-circular-btn svg {
+    width: 16px;
+    height: 16px;
 }
 
 .cc-circular-btn {
@@ -1756,8 +1768,7 @@ img {
 
 .cc-classic-slider-label svg {
     opacity: 0.7;
-    width: 12px;
-    height: 12px;
+    flex-shrink: 0;
 }
 
 .cc-classic-slider-track {
@@ -2435,13 +2446,13 @@ img {
 
 .shelf-row {
     display: flex;
-    justify-content: center;
-    gap: 12px;
+    gap: 10px;
     max-width: 100%;
     overflow-x: auto;
-    padding: 8px 12px 6px 12px;
-    flex: 0 0 auto;
+    padding: 14px 10px 6px;
 }
+
+.shelf-row.fits { overflow: visible; }
 
 .shelf-row::-webkit-scrollbar {
     display: none;
@@ -2449,26 +2460,37 @@ img {
 
 .shelf-item {
     position: relative;
-    flex: 0 0 56px;
+    flex: 0 0 60px;
     display: flex;
     flex-direction: column;
     align-items: center;
     gap: 4px;
-    cursor: pointer;
+    cursor: grab;
     user-select: none;
+    touch-action: none;
 }
 
-.shelf-thumb-wrap {
-    position: relative;
-    width: 48px;
-    height: 48px;
+.shelf-item:active {
+    cursor: grabbing;
+}
+
+.shelf-item:hover .shelf-thumb {
+    border-color: rgba(255, 255, 255, 0.22);
+    background: rgba(255, 255, 255, 0.12);
+    transform: translateY(-1px);
+    box-shadow: 0 8px 18px rgba(0, 0, 0, 0.4);
 }
 
 .shelf-thumb {
-    width: 48px;
-    height: 48px;
-    border-radius: 10px;
-    background: rgba(255, 255, 255, 0.1);
+    position: relative;
+    width: 58px;
+    height: 58px;
+    border-radius: 14px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    box-sizing: border-box;
+    transition: border-color 0.15s, background 0.15s, transform 0.15s, box-shadow 0.15s;
+    background: rgba(255, 255, 255, 0.07);
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -2481,50 +2503,85 @@ img {
     object-fit: cover;
 }
 
+.shelf-preview {
+    margin: 0;
+    width: 100%;
+    height: 100%;
+    padding: 4px 5px;
+    box-sizing: border-box;
+    overflow: hidden;
+    text-align: left;
+    white-space: pre-wrap;
+    word-break: break-all;
+    font: 7px/1.25 ui-monospace, Consolas, monospace;
+    color: rgba(255, 255, 255, 0.75);
+}
+
+.shelf-preview.short {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    font: 600 11px/1.2 system-ui, sans-serif;
+    color: rgba(255, 255, 255, 0.9);
+}
+
+.shelf-ext {
+    position: absolute;
+    left: 4px;
+    bottom: 3px;
+    padding: 1px 4px;
+    border-radius: 4px;
+    background: rgba(0, 0, 0, 0.45);
+    font-size: 8px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    color: rgba(255, 255, 255, 0.8);
+}
+
 .shelf-glyph {
     font-size: 20px;
     color: rgba(255, 255, 255, 0.7);
 }
 
 .shelf-name {
-    width: 56px;
+    width: 60px;
     overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    word-break: break-all;
+    line-height: 1.2;
     text-align: center;
-    font-size: 11px;
-    line-height: 1.3;
-    color: rgba(255, 255, 255, 0.85);
+    font-size: 10px;
+    color: rgba(255, 255, 255, 0.75);
 }
 
 .shelf-remove {
     position: absolute;
-    top: -5px;
-    right: -5px;
-    width: 18px;
-    height: 18px;
+    top: -4px;
+    right: 0;
+    width: 16px;
+    height: 16px;
     padding: 0;
-    border: 1px solid rgba(255, 255, 255, 0.25);
+    border: none;
     border-radius: 50%;
-    background: rgba(30, 32, 40, 0.95);
-    color: rgba(255, 255, 255, 0.9);
-    font-size: 13px;
-    font-weight: 600;
-    line-height: 16px;
+    background: rgba(0, 0, 0, 0.75);
+    color: #fff;
+    font-size: 12px;
+    line-height: 1;
     display: flex;
     align-items: center;
     justify-content: center;
     cursor: pointer;
     opacity: 0;
-    transition: opacity 0.15s ease, transform 0.15s ease, background-color 0.15s ease;
+    transition: opacity 0.12s;
     z-index: 4;
-    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.45);
 }
 
 .shelf-remove:hover {
     background: #ff3b30;
     color: #ffffff;
-    transform: scale(1.1);
 }
 
 .shelf-item:hover .shelf-remove {
@@ -2532,27 +2589,32 @@ img {
 }
 
 .shelf-clear {
-    border: none;
-    background: none;
-    color: rgba(255, 255, 255, 0.5);
-    font-size: 11px;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 3px 10px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.1);
+    color: rgba(255, 255, 255, 0.85);
+    font-size: 10.5px;
+    font-weight: 500;
     cursor: pointer;
-    padding: 2px 8px;
-    border-radius: 6px;
-    transition: all 0.15s ease;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
 }
 
 .shelf-clear:hover {
-    color: rgba(255, 255, 255, 0.9);
-    background: rgba(255, 255, 255, 0.08);
+    background: rgba(255, 255, 255, 0.18);
+    border-color: rgba(255, 255, 255, 0.2);
+    color: #fff;
 }
 
 .shelf-preview-trigger {
     position: absolute;
-    top: -5px;
-    left: -5px;
-    width: 18px;
-    height: 18px;
+    top: -4px;
+    left: 0;
+    width: 16px;
+    height: 16px;
     padding: 0;
     border: 1px solid rgba(255, 255, 255, 0.25);
     border-radius: 50%;
@@ -2848,12 +2910,17 @@ img {
     height: calc(100% - 36px);
     box-sizing: border-box;
     z-index: 2;
-    padding: 6px 16px 24px;
+    padding: 8px 16px 14px;
     display: flex;
     flex-direction: column;
-    justify-content: space-between;
+    justify-content: flex-start;
+    gap: 12px;
+    overflow-y: auto;
+    scrollbar-width: none;
     color: var(--fern-text, #fff);
 }
+
+.agent-panel::-webkit-scrollbar { display: none; }
 
 .agent-panel-head {
     display: flex;
@@ -2938,19 +3005,53 @@ img {
     background: var(--fern-group-bg, rgba(255, 255, 255, 0.08));
     border-radius: 6px;
     padding: 4px 7px;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: 7.5em;
+    overflow-y: auto;
 }
 
 .agent-ask-text {
     font-size: 12px;
-    line-height: 1.35;
+    line-height: 1.4;
     white-space: normal;
-    display: -webkit-box;
-    -webkit-line-clamp: 2;
-    -webkit-box-orient: vertical;
-    overflow: hidden;
+}
+
+.agent-options {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 6px;
+}
+
+.agent-option {
+    flex: none;
+    max-width: 100%;
+    min-height: 26px;
+    height: auto;
+    padding: 4px 12px;
+    border-radius: 13px;
+    font-size: 11.5px;
+    font-weight: 500;
+    line-height: 1.3;
+    text-align: left;
+    background: transparent;
+    box-shadow: inset 0 0 0 1px var(--fern-border, rgba(255, 255, 255, 0.22));
+    white-space: normal;
+    overflow-wrap: anywhere;
+}
+
+.agent-option:not(:disabled):hover {
+    background: var(--fern-text, #fff);
+    color: var(--fern-bg-expanded, #000);
+    filter: none;
+}
+
+.agent-step {
+    font-style: normal;
+    font-weight: 600;
+    margin-right: 6px;
+    color: var(--fern-text-muted, rgba(255, 255, 255, 0.6));
 }
 
 .volume-end-btn { display: flex; align-items: center; justify-content: center; border: 0; background: none; color: inherit; padding: 2px; border-radius: 6px; cursor: pointer; }

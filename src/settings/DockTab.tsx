@@ -10,6 +10,7 @@ import { Dropdown } from "./Dropdown";
 import type { MonitorInfo, MonitorMode } from "./types";
 import { usePerMonitor } from "./usePerMonitor";
 import { useT } from "../i18n";
+import { EdgeArea } from "./EdgeArea";
 
 const START_ICON_PRESETS = [
   { key: "default", src: "/fern.png", label: "Fern" },
@@ -82,6 +83,8 @@ interface DockTabProps {
   changeDockIndicator: (indicator: string) => void;
   dockShowEndTask: boolean;
   toggleDockShowEndTask: () => void;
+  dockStripDarkPlate: boolean;
+  toggleDockStripDarkPlate: () => void;
   dockMenuItems: string[];
   toggleDockMenuItem: (id: string) => void;
   monitors: MonitorInfo[];
@@ -139,6 +142,8 @@ export function DockTab({
   changeDockIndicator,
   dockShowEndTask,
   toggleDockShowEndTask,
+  dockStripDarkPlate,
+  toggleDockStripDarkPlate,
   dockMenuItems,
   toggleDockMenuItem,
   monitors,
@@ -232,6 +237,10 @@ export function DockTab({
                   ]}
                 />
               </SettingRow>
+            )}
+
+            {(dockMode !== "fixed" || (showPerMonitor && monitors.some((m) => (dockModeByMonitor[m.id] || dockMode) !== "fixed"))) && (
+              <EdgeArea settingKey="fern-dock-edge-area" />
             )}
 
             <SettingRow icon={MonitorCheck} label={t("common.showOn")} desc={t("dock.showOn.desc")}>
@@ -418,6 +427,13 @@ export function DockTab({
             <SettingRow icon={Circle} label={t("dock.iconOnly")} desc={t("dock.iconOnly.desc")}>
               <label className="toggle-switch">
                 <input type="checkbox" checked={dockIconOnly} onChange={toggleDockIconOnly} />
+                <span className="slider"></span>
+              </label>
+            </SettingRow>
+
+            <SettingRow icon={Sparkles} label={t("dock.stripDarkPlate")} desc={t("dock.stripDarkPlate.desc")}>
+              <label className="toggle-switch">
+                <input type="checkbox" checked={dockStripDarkPlate} onChange={toggleDockStripDarkPlate} />
                 <span className="slider"></span>
               </label>
             </SettingRow>

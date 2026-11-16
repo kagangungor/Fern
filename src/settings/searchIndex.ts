@@ -60,6 +60,14 @@ export const SETTINGS_SEARCH_INDEX: SearchableSetting[] = [
     keywords: ["memory", "ram", "bellek", "tasarruf", "saver"],
   },
   {
+    id: "general-webview-disable-gpu",
+    tab: "general",
+    sectionId: "general-system",
+    titleKey: "general.webviewDisableGpu",
+    descKey: "general.webviewDisableGpu.desc",
+    keywords: ["gpu", "webview", "hardware", "donanim", "ram", "memory", "bellek", "performance", "performans"],
+  },
+  {
     id: "general-low-battery",
     tab: "general",
     sectionId: "general-system",
@@ -93,12 +101,20 @@ export const SETTINGS_SEARCH_INDEX: SearchableSetting[] = [
     keywords: ["theme", "tema", "karanlık", "aydınlık", "light", "dark", "glass", "frosted", "liquid", "cam"],
   },
   {
+    id: "appearance-presets",
+    tab: "appearance",
+    sectionId: "appearance-theme",
+    titleKey: "appearance.presets",
+    descKey: "appearance.presets.desc",
+    keywords: ["preset", "palette", "hazır", "palet", "tema", "graphite", "midnight", "ocean", "forest", "plum", "rose", "ember", "latte", "mist"],
+  },
+  {
     id: "appearance-accent",
     tab: "appearance",
     sectionId: "appearance-theme",
     titleKey: "appearance.accent",
     descKey: "appearance.accent.desc",
-    keywords: ["accent", "vurgu", "renk", "color", "windows accent", "blue", "mor", "kırmızı"],
+    keywords: ["accent", "vurgu", "renk", "color", "windows accent", "mono", "monochrome", "blue", "mor", "kırmızı"],
   },
   {
     id: "appearance-scale",
@@ -125,6 +141,14 @@ export const SETTINGS_SEARCH_INDEX: SearchableSetting[] = [
     titleKey: "notch.mode",
     descKey: "notch.mode.desc",
     keywords: ["notch", "çentik", "ada", "island", "smart", "fixed", "peek", "otomatik gizle"],
+  },
+  {
+    id: "notch-edge-area",
+    tab: "notch",
+    sectionId: "notch-display",
+    titleKey: "edgeArea.label",
+    descKey: "edgeArea.notch.desc",
+    keywords: ["edge", "hover", "narrow", "full", "corner", "kenar", "tetikleme", "yakını", "alan"],
   },
   {
     id: "notch-panel-cc",
@@ -182,6 +206,14 @@ export const SETTINGS_SEARCH_INDEX: SearchableSetting[] = [
     descKey: "notch.weather.desc",
     keywords: ["weather", "hava", "durumu", "sıcaklık", "şehir", "city"],
   },
+  {
+    id: "notch-agent",
+    tab: "notch",
+    sectionId: "notch-agent",
+    titleKey: "notch.agent.enable",
+    descKey: "notch.agent.enable.desc",
+    keywords: ["agent", "ajan", "yapay zeka", "claude", "claude code", "ai", "ask", "soru", "hook", "mcp"],
+  },
 
   // Dock Tab
   {
@@ -191,6 +223,14 @@ export const SETTINGS_SEARCH_INDEX: SearchableSetting[] = [
     titleKey: "dock.mode",
     descKey: "dock.mode.desc",
     keywords: ["dock", "görev çubuğu", "taskbar", "smart", "fixed", "peek", "gizle"],
+  },
+  {
+    id: "dock-edge-area",
+    tab: "dock",
+    sectionId: "dock-main",
+    titleKey: "edgeArea.label",
+    descKey: "edgeArea.dock.desc",
+    keywords: ["edge", "hover", "narrow", "full", "corner", "kenar", "tetikleme", "yakını", "alan"],
   },
   {
     id: "dock-preview",
@@ -223,6 +263,14 @@ export const SETTINGS_SEARCH_INDEX: SearchableSetting[] = [
     titleKey: "dock.iconOnly",
     descKey: "dock.iconOnly.desc",
     keywords: ["icon only", "sadece simge", "minimal"],
+  },
+  {
+    id: "dock-strip-dark-plate",
+    tab: "dock",
+    sectionId: "dock-style",
+    titleKey: "dock.stripDarkPlate",
+    descKey: "dock.stripDarkPlate.desc",
+    keywords: ["dark", "plate", "background", "icon", "koyu", "plaka", "arka plan", "simge", "figma", "zen"],
   },
   {
     id: "dock-start-icon",

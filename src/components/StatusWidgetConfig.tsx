@@ -32,11 +32,14 @@ import {
 } from "lucide-react";
 import type { ComponentType, SVGProps } from "react";
 import { useT } from "../i18n";
+import {
+  MAX_WIDGETS_PER_ZONE,
+  normalizeWidgetConfig,
+  swapWidgetSide,
+  type WidgetConfig,
+} from "../widgetConfig";
 
-export interface WidgetConfig {
-  left: string[];
-  right: string[];
-}
+export type { WidgetConfig };
 
 interface WidgetDef {
   id: string;
@@ -58,7 +61,7 @@ const DEFAULT_CONFIG: WidgetConfig = {
   right: ["battery"],
 };
 
-const MAX_PER_ZONE = 2;
+const MAX_PER_ZONE = MAX_WIDGETS_PER_ZONE;
 
 /* ── Draggable pool chip ── */
 function PoolChip({ id }: { id: string }) {
@@ -84,6 +87,7 @@ function SortablePlacedChip({
   id,
   idx,
   total,
+  canSwap,
   onSwap,
   onRemove,
   onMove,
@@ -91,6 +95,7 @@ function SortablePlacedChip({
   id: string;
   idx: number;
   total: number;
+  canSwap: boolean;
   onSwap: (id: string) => void;
   onRemove: (id: string) => void;
   onMove: (id: string, dir: -1 | 1) => void;
@@ -132,7 +137,13 @@ function SortablePlacedChip({
             <ChevronDown size={9} />
           </button>
         )}
-        <button className="widget-pill-btn" title={t("widgets.swap")} onClick={() => onSwap(id)}>
+        <button
+          className="widget-pill-btn"
+          title={t("widgets.swap")}
+          disabled={!canSwap}
+          style={canSwap ? undefined : { opacity: 0.35, cursor: "not-allowed" }}
+          onClick={() => onSwap(id)}
+        >
           <ArrowLeftRight size={9} />
         </button>
         <button className="widget-pill-btn widget-pill-btn--x" title={t("widgets.remove")} onClick={() => onRemove(id)}>
@@ -148,6 +159,7 @@ function DropZone({
   id,
   side,
   items,
+  canSwap,
   onSwap,
   onRemove,
   onMove,
@@ -155,6 +167,7 @@ function DropZone({
   id: string;
   side: "left" | "right";
   items: string[];
+  canSwap: boolean;
   onSwap: (id: string) => void;
   onRemove: (id: string) => void;
   onMove: (id: string, dir: -1 | 1) => void;
@@ -176,6 +189,7 @@ function DropZone({
                   id={itemId}
                   idx={i}
                   total={items.length}
+                  canSwap={canSwap}
                   onSwap={onSwap}
                   onRemove={onRemove}
                   onMove={onMove}
@@ -199,10 +213,12 @@ export function StatusWidgetConfig({ value, onChange, hasBattery = true }: Statu
   const t = useT();
   const availableDefs = hasBattery ? WIDGET_DEFS : WIDGET_DEFS.filter((w) => w.id !== "battery");
 
-  const sanitize = (cfg: WidgetConfig): WidgetConfig =>
-    hasBattery
-      ? cfg
-      : { left: cfg.left.filter((id) => id !== "battery"), right: cfg.right.filter((id) => id !== "battery") };
+  const sanitize = (cfg: WidgetConfig): WidgetConfig => {
+    const normalized = normalizeWidgetConfig(cfg);
+    return hasBattery
+      ? normalized
+      : { left: normalized.left.filter((id) => id !== "battery"), right: normalized.right.filter((id) => id !== "battery") };
+  };
 
   const [config, setConfig] = useState<WidgetConfig>(() => sanitize(value || DEFAULT_CONFIG));
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -237,11 +253,7 @@ export function StatusWidgetConfig({ value, onChange, hasBattery = true }: Statu
   };
 
   const swapSide = (id: string) => {
-    if (config.left.includes(id)) {
-      emit({ left: config.left.filter((x) => x !== id), right: [...config.right, id] });
-    } else {
-      emit({ right: config.right.filter((x) => x !== id), left: [...config.left, id] });
-    }
+    emit(swapWidgetSide(config, id));
   };
 
   const moveInSide = (id: string, dir: -1 | 1) => {
@@ -360,6 +372,7 @@ export function StatusWidgetConfig({ value, onChange, hasBattery = true }: Statu
           id="zone-left"
           side="left"
           items={config.left}
+          canSwap={config.right.length < MAX_PER_ZONE}
           onSwap={swapSide}
           onRemove={remove}
           onMove={moveInSide}
@@ -368,6 +381,7 @@ export function StatusWidgetConfig({ value, onChange, hasBattery = true }: Statu
           id="zone-right"
           side="right"
           items={config.right}
+          canSwap={config.left.length < MAX_PER_ZONE}
           onSwap={swapSide}
           onRemove={remove}
           onMove={moveInSide}

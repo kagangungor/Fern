@@ -25,12 +25,24 @@ import {
   Volume2,
   Clock,
   Bot,
-  Layers,
-  Archive,
+  SlidersHorizontal,
+  Activity,
+  CalendarDays,
+  Inbox,
 } from "lucide-react";
+import type { ComponentType } from "react";
 import { DEFAULT_PANEL_ORDER, type CcLayout, type PanelId } from "../panelOrder";
 import { ControlCenterConfig } from "../components/ControlCenterConfig";
 import { OrderList } from "./OrderList";
+import { EdgeArea } from "./EdgeArea";
+
+const PANEL_ICONS: Record<string, ComponentType<{ size?: number; strokeWidth?: number }>> = {
+  "command-center": SlidersHorizontal,
+  status: Activity,
+  music: Music,
+  calendar: CalendarDays,
+  shelf: Inbox,
+};
 import { SettingRow } from "./SettingRow";
 import { SettingSection } from "./SettingSection";
 import { Dropdown } from "./Dropdown";
@@ -259,6 +271,10 @@ export function NotchTab({
           </>
         )}
 
+        {(notchMode !== "fixed" || (showPerMonitor && monitors.some((m) => (notchModeByMonitor[m.id] || notchMode) !== "fixed"))) && (
+          <EdgeArea settingKey="fern-notch-edge-area" />
+        )}
+
         <SettingRow icon={MonitorCheck} label={t("common.showOn")} desc={t("notch.showOn.desc")}>
           <Dropdown
             value={notchMonitorMode}
@@ -319,27 +335,6 @@ export function NotchTab({
 
       {/* ─── 2. PANELLER VE DENETİM MERKEZİ (PANELS & CONTROL CENTER) ─── */}
       <SettingSection id="notch-panels" title={t("notch.section.panels")}>
-        <SettingRow icon={Layers} label={t("notch.panelControlCenter")} desc={t("notch.panelControlCenter.desc")}>
-          <label className="toggle-switch">
-            <input type="checkbox" checked={panelControlCenter} onChange={togglePanelControlCenter} />
-            <span className="slider"></span>
-          </label>
-        </SettingRow>
-
-        <SettingRow icon={Archive} label={t("notch.panelShelf")} desc={t("notch.panelShelf.desc")}>
-          <label className="toggle-switch">
-            <input type="checkbox" checked={panelShelf} onChange={togglePanelShelf} />
-            <span className="slider"></span>
-          </label>
-        </SettingRow>
-
-        <SettingRow icon={Circle} label={t("notch.panelStatus")} desc={t("notch.panelStatus.desc")}>
-          <label className="toggle-switch">
-            <input type="checkbox" checked={panelStatus} onChange={togglePanelStatus} />
-            <span className="slider"></span>
-          </label>
-        </SettingRow>
-
         <SettingRow icon={Circle} label={t("notch.scrollDirection")} desc={t("notch.scrollDirection.desc")}>
           <Dropdown
             value={panelScrollDirection}
@@ -376,11 +371,33 @@ export function NotchTab({
           </label>
         </SettingRow>
 
-        <SettingRow icon={LayoutList} label={t("notch.panelOrder")} desc={t("notch.panelOrder.desc")} stacked>
+        <SettingRow icon={LayoutList} label={t("notch.panelOrder")} desc={t("notch.panelOrder.desc")} stacked divider={panelControlCenter}>
           <OrderList
             ids={panelOrder ?? DEFAULT_PANEL_ORDER}
             label={(id) => t(`panel.${id}`)}
+            icon={(id) => {
+              const Icon = PANEL_ICONS[id] ?? Circle;
+              return <Icon size={14} strokeWidth={2} />;
+            }}
             onReorder={(order) => reorderPanels(order as PanelId[])}
+            enabled={(id) =>
+              ({
+                "command-center": panelControlCenter,
+                status: panelStatus,
+                shelf: panelShelf,
+                music: musicModeEnabled,
+                calendar: calendarEnabled,
+              } as Record<string, boolean>)[id] ?? true
+            }
+            onToggle={(id) =>
+              ({
+                "command-center": togglePanelControlCenter,
+                status: togglePanelStatus,
+                shelf: togglePanelShelf,
+                music: toggleMusicMode,
+                calendar: toggleCalendar,
+              } as Record<string, () => void>)[id]?.()
+            }
             onReset={panelOrder ? resetPanelOrder : undefined}
             resetLabel={t("notch.panelOrder.reset")}
           />

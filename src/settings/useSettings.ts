@@ -6,13 +6,14 @@ import { listen, emit } from "@tauri-apps/api/event";
 import { getVersion } from "@tauri-apps/api/app";
 import type { UpdateCheckResult } from "../updater";
 import { useSettingsSync } from "../hooks/useSettingsSync";
-import { hexToHsl, STYLE_OPACITY } from "../theme";
+import { DEFAULT_ACCENT_COLOR, hexToHsl, STYLE_OPACITY, type ThemePreset } from "../theme";
 import { DEFAULT_DUAL_CLOCK_ZONE } from "../dualClock";
+import { normalizeWidgetConfig } from "../widgetConfig";
 import type { WidgetConfig, MonitorInfo, MonitorMode } from "./types";
 
 function saveSetting(key: string, value: string) {
   localStorage.setItem(key, value);
-  invoke("save_setting", { key, value }).catch(console.error);
+  return invoke("save_setting", { key, value }).catch(console.error);
 }
 
 function readBool(val: string | null): boolean {
@@ -134,6 +135,9 @@ export function useSettings() {
   const [memorySaver, setMemorySaver] = useState(
     () => localStorage.getItem("fern-memory-saver") === "true"
   );
+  const [webviewDisableGpu, setWebviewDisableGpu] = useState(
+    () => localStorage.getItem("fern-webview-disable-gpu") === "true"
+  );
   const [tempUnitFahrenheit, setTempUnitFahrenheit] = useState(false);
   const [cityName, setCityName] = useState("");
   const [cityQuery, setCityQuery] = useState("");
@@ -197,6 +201,7 @@ export function useSettings() {
   const [dockIndicator, setDockIndicator] = useState(() => localStorage.getItem("fern-dock-indicator") ?? "bar");
   const [dockMenuItems, setDockMenuItems] = useState<string[]>(() => parseMenuItems(localStorage.getItem("fern-dock-menu-items")));
   const [dockShowEndTask, setDockShowEndTask] = useState(() => localStorage.getItem("fern-dock-show-end-task") !== "false");
+  const [dockStripDarkPlate, setDockStripDarkPlate] = useState(() => localStorage.getItem("fern-dock-strip-dark-plate") !== "false");
   const [panelStatus, setPanelStatus] = useState(() => localStorage.getItem("fern-panel-status-enabled") !== "false");
   const readScrollDirection = (v: string | null) => (v === "inverted" ? "inverted" : "natural");
   const [panelScrollDirection, setPanelScrollDirection] = useState(() => readScrollDirection(localStorage.getItem("fern-notch-scroll-direction")));
@@ -241,7 +246,7 @@ export function useSettings() {
     () => localStorage.getItem("fern-theme-mode") || "dark"
   );
   const [themeColor, setThemeColor] = useState(
-    () => localStorage.getItem("fern-theme-color") || "#007aff"
+    () => localStorage.getItem("fern-theme-color") || "#161618"
   );
   const [themeOpacity, setThemeOpacity] = useState(() => {
     const val = localStorage.getItem("fern-theme-opacity");
@@ -251,10 +256,10 @@ export function useSettings() {
     const val = localStorage.getItem("fern-theme-saturation");
     return val !== null ? parseFloat(val) : 0.5;
   });
-  const [themeBrightness, setThemeBrightness] = useState(() => {
-    const val = localStorage.getItem("fern-theme-brightness");
-    return val !== null ? parseFloat(val) : 0.15;
-  });
+  const [themeAccent, setThemeAccent] = useState(() => localStorage.getItem("fern-theme-accent") || "mono");
+  const [themeAccentColor, setThemeAccentColor] = useState(
+    () => localStorage.getItem("fern-theme-accent-color") || DEFAULT_ACCENT_COLOR
+  );
   const [exportStatus, setExportStatus] = useState<"idle" | "exporting" | "success" | "error">("idle");
   const [importStatus, setImportStatus] = useState<"idle" | "importing" | "success" | "error">("idle");
   const [resetStatus, setResetStatus] = useState<"idle" | "confirm" | "resetting">("idle");
@@ -300,6 +305,7 @@ export function useSettings() {
       apply(getVal("fern-corners-enabled"), setCornersEnabled, readBool);
       apply(getVal("fern-time-format-24h"), setTimeFormat24h, readBool);
       apply(getVal("fern-memory-saver"), setMemorySaver, readBool);
+      apply(getVal("fern-webview-disable-gpu"), setWebviewDisableGpu, readBool);
       apply(getVal("fern-show-update-indicator"), setShowUpdateIndicator, readBool);
       apply(getVal("fern-auto-update"), setAutoUpdate, readBool);
       apply(getVal("fern-update-channel"), setPrereleaseChannel, (v) => v === "prerelease");
@@ -333,6 +339,7 @@ export function useSettings() {
       apply(getVal("fern-dock-indicator"), setDockIndicator, (v) => v ?? "bar");
       apply(getVal("fern-dock-menu-items"), setDockMenuItems, parseMenuItems);
       apply(getVal("fern-dock-show-end-task"), setDockShowEndTask, (v) => v !== "false");
+      apply(getVal("fern-dock-strip-dark-plate"), setDockStripDarkPlate, (v) => v !== "false");
       apply(getVal("fern-panel-status-enabled"), setPanelStatus, (v) => v !== "false");
       apply(getVal("fern-notch-scroll-direction"), setPanelScrollDirection, readScrollDirection);
       apply(getVal("fern-dock-drives"), setDockDrives, parseDrives);
@@ -371,17 +378,22 @@ export function useSettings() {
 
       apply(getVal("fern-theme-style"), setThemeStyle, (v) => v);
       apply(getVal("fern-theme-mode"), setThemeMode, (v) => v);
-      apply(getVal("fern-theme-color"), setThemeColor, (v) => v);
+      const savedColor = getVal("fern-theme-color");
+      const normalizedColor = getVal("fern-theme-brightness") !== undefined && savedColor?.toLowerCase() === "#8e8e93"
+        ? "#161618"
+        : savedColor;
+      apply(normalizedColor, setThemeColor, (v) => v);
       apply(getVal("fern-theme-opacity"), setThemeOpacity, parseFloat);
       apply(getVal("fern-theme-saturation"), setThemeSaturation, parseFloat);
-      apply(getVal("fern-theme-brightness"), setThemeBrightness, parseFloat);
+      apply(getVal("fern-theme-accent"), setThemeAccent, (v) => v);
+      apply(getVal("fern-theme-accent-color"), setThemeAccentColor, (v) => v);
 
       const widgetsVal = getVal("fern-status-widgets");
       if (widgetsVal) {
         try {
           const parsed = JSON.parse(widgetsVal);
           if (parsed && Array.isArray(parsed.left) && Array.isArray(parsed.right)) {
-            setStatusWidgets(parsed);
+            setStatusWidgets(normalizeWidgetConfig(parsed));
           }
         } catch {}
       }
@@ -483,6 +495,7 @@ export function useSettings() {
     "fern-time-format-24h": setTimeFormat24h,
     "fern-week-start": (v: string) => setWeekStart((v as "auto" | "sunday" | "monday") || "auto"),
     "fern-memory-saver": setMemorySaver,
+    "fern-webview-disable-gpu": (v) => setWebviewDisableGpu(v === true || v === "true"),
     "fern-low-battery-threshold": setLowBatteryThreshold,
     "fern-scale": setScale,
     "fern-temp-unit": (v) => setTempUnitFahrenheit(v === "fahrenheit"),
@@ -499,6 +512,7 @@ export function useSettings() {
     "fern-brightness-side": (v) => setBrightnessSide(v === "left" ? "left" : "right"),
     "fern-edge-delay": setEdgeDelay,
     "fern-dock-attention-enabled": (v) => setDockAttentionEnabled(v !== "false" && v !== false),
+    "fern-dock-strip-dark-plate": (v) => setDockStripDarkPlate(v !== "false" && v !== false),
     "fern-dock-hide-delay": setDockHideDelay,
     "fern-glass-wallpaper": (v) => setGlassWallpaperEnabled(v !== "false" && v !== false),
     "fern-theme-style": (v) => setThemeStyle(String(v)),
@@ -506,7 +520,8 @@ export function useSettings() {
     "fern-theme-color": setThemeColor,
     "fern-theme-opacity": setThemeOpacity,
     "fern-theme-saturation": setThemeSaturation,
-    "fern-theme-brightness": setThemeBrightness,
+    "fern-theme-accent": (v) => setThemeAccent(String(v)),
+    "fern-theme-accent-color": (v) => setThemeAccentColor(String(v)),
     "fern-weather-city": (v) => {
       setCityName(v || "");
       setCityQuery(v || "");
@@ -521,7 +536,6 @@ export function useSettings() {
         try {
           const hsl = hexToHsl(event.payload);
           setThemeSaturation(hsl.s / 100);
-          setThemeBrightness(hsl.l / 100);
         } catch (e) {
           console.error("Failed to parse system accent color change HSL:", e);
         }
@@ -854,6 +868,12 @@ export function useSettings() {
     saveSetting("fern-memory-saver", String(next));
   };
 
+  const toggleWebviewDisableGpu = () => {
+    const next = !webviewDisableGpu;
+    setWebviewDisableGpu(next);
+    saveSetting("fern-webview-disable-gpu", String(next));
+  };
+
   const toggleTempUnit = () => {
     const next = !tempUnitFahrenheit;
     setTempUnitFahrenheit(next);
@@ -983,6 +1003,13 @@ export function useSettings() {
     const next = !dockShowEndTask;
     setDockShowEndTask(next);
     saveSetting("fern-dock-show-end-task", String(next));
+  };
+
+  const toggleDockStripDarkPlate = async () => {
+    const next = !dockStripDarkPlate;
+    setDockStripDarkPlate(next);
+    await saveSetting("fern-dock-strip-dark-plate", String(next));
+    await invoke("clear_icon_cache").catch(console.error);
   };
 
   const togglePanelStatus = () => {
@@ -1119,8 +1146,9 @@ export function useSettings() {
   };
 
   const handleWidgetsChange = (config: WidgetConfig) => {
-    setStatusWidgets(config);
-    saveSetting("fern-status-widgets", JSON.stringify(config));
+    const normalized = normalizeWidgetConfig(config);
+    setStatusWidgets(normalized);
+    saveSetting("fern-status-widgets", JSON.stringify(normalized));
   };
 
   // ── Theme handlers ──
@@ -1134,8 +1162,6 @@ export function useSettings() {
         const hsl = hexToHsl(accentHex);
         setThemeSaturation(hsl.s / 100);
         saveSetting("fern-theme-saturation", String(hsl.s / 100));
-        setThemeBrightness(hsl.l / 100);
-        saveSetting("fern-theme-brightness", String(hsl.l / 100));
       } catch (e) {
         console.error("Failed to parse adaptive accent HSL:", e);
       }
@@ -1150,8 +1176,6 @@ export function useSettings() {
       const hsl = hexToHsl(color);
       setThemeSaturation(hsl.s / 100);
       saveSetting("fern-theme-saturation", String(hsl.s / 100));
-      setThemeBrightness(hsl.l / 100);
-      saveSetting("fern-theme-brightness", String(hsl.l / 100));
     } catch (e) {
       console.error("Failed to parse custom color HSL:", e);
     }
@@ -1167,11 +1191,6 @@ export function useSettings() {
     saveSetting("fern-theme-saturation", String(value));
   };
 
-  const handleBrightnessChange = (value: number) => {
-    setThemeBrightness(value);
-    saveSetting("fern-theme-brightness", String(value));
-  };
-
   const handleThemeStyleChange = (style: string) => {
     setThemeStyle(style);
     saveSetting("fern-theme-style", style);
@@ -1181,6 +1200,29 @@ export function useSettings() {
       setThemeOpacity(opacity);
       saveSetting("fern-theme-opacity", String(opacity));
     }
+  };
+
+  const handleAccentChange = (accent: string) => {
+    setThemeAccent(accent);
+    saveSetting("fern-theme-accent", accent);
+  };
+
+  const handleAccentColorChange = (color: string) => {
+    setThemeAccentColor(color);
+    saveSetting("fern-theme-accent-color", color);
+  };
+
+  const applyThemePreset = (preset: ThemePreset) => {
+    setThemeMode("custom");
+    setThemeColor(preset.color);
+    setThemeSaturation(preset.saturation);
+    setThemeAccent("custom");
+    setThemeAccentColor(preset.accent);
+    saveSetting("fern-theme-mode", "custom");
+    saveSetting("fern-theme-color", preset.color);
+    saveSetting("fern-theme-saturation", String(preset.saturation));
+    saveSetting("fern-theme-accent", "custom");
+    saveSetting("fern-theme-accent-color", preset.accent);
   };
 
 
@@ -1308,6 +1350,8 @@ export function useSettings() {
     changeWeekStart,
     memorySaver,
     toggleMemorySaver,
+    webviewDisableGpu,
+    toggleWebviewDisableGpu,
     showUpdateIndicator,
     toggleUpdateIndicator,
     scale,
@@ -1326,8 +1370,11 @@ export function useSettings() {
     handleOpacityChange,
     themeSaturation,
     handleSaturationChange,
-    themeBrightness,
-    handleBrightnessChange,
+    themeAccent,
+    handleAccentChange,
+    themeAccentColor,
+    handleAccentColorChange,
+    applyThemePreset,
     glassWallpaperEnabled,
     toggleGlassWallpaper,
 
@@ -1452,6 +1499,8 @@ export function useSettings() {
     toggleDockMenuItem,
     dockShowEndTask,
     toggleDockShowEndTask,
+    dockStripDarkPlate,
+    toggleDockStripDarkPlate,
     panelStatus,
     togglePanelStatus,
     panelScrollDirection,

@@ -31,7 +31,11 @@ fn gpu_disabled_in(settings_json: &str) -> bool {
     let Ok(settings) = serde_json::from_str::<serde_json::Value>(settings_json) else {
         return false;
     };
-    settings.get(DISABLE_GPU_SETTING).and_then(|v| v.as_str()) == Some("true")
+    match settings.get(DISABLE_GPU_SETTING) {
+        Some(serde_json::Value::Bool(b)) => *b,
+        Some(serde_json::Value::String(s)) => s == "true",
+        _ => false,
+    }
 }
 
 fn gpu_disabled() -> bool {
@@ -79,6 +83,8 @@ mod tests {
         assert!(!gpu_disabled_in("{}"));
         assert!(!gpu_disabled_in("not json"));
         assert!(!gpu_disabled_in(r#"{"fern-webview-disable-gpu":"false"}"#));
+        assert!(!gpu_disabled_in(r#"{"fern-webview-disable-gpu":false}"#));
         assert!(gpu_disabled_in(r#"{"fern-webview-disable-gpu":"true"}"#));
+        assert!(gpu_disabled_in(r#"{"fern-webview-disable-gpu":true}"#));
     }
 }

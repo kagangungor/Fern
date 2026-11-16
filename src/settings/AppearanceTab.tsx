@@ -1,10 +1,15 @@
 import { WindowsAccentSync } from "./WindowsAccentSync";
-import { Palette, Droplet, Contrast, Droplets, Sun, Square, Maximize2, Layers } from "lucide-react";
+import { Palette, Droplet, Contrast, Droplets, Square, Maximize2, Layers, SwatchBook, Highlighter } from "lucide-react";
 import { SettingRow } from "./SettingRow";
 import { SettingSection } from "./SettingSection";
 import { Dropdown } from "./Dropdown";
 import { useT } from "../i18n";
-import { THEME_STYLES } from "../theme";
+import { THEME_PRESETS, THEME_STYLES, hexToHsl, hslToHex, type ThemePreset } from "../theme";
+
+function presetBackground(preset: ThemePreset): string {
+  const hsl = hexToHsl(preset.color);
+  return hslToHex(hsl.h, preset.saturation * 100, hsl.l);
+}
 
 interface AppearanceTabProps {
   themeStyle: string;
@@ -17,8 +22,11 @@ interface AppearanceTabProps {
   handleOpacityChange: (val: number) => void;
   themeSaturation: number;
   handleSaturationChange: (val: number) => void;
-  themeBrightness: number;
-  handleBrightnessChange: (val: number) => void;
+  themeAccent: string;
+  handleAccentChange: (accent: string) => void;
+  themeAccentColor: string;
+  handleAccentColorChange: (color: string) => void;
+  applyThemePreset: (preset: ThemePreset) => void;
   cornersEnabled: boolean;
   toggleCorners: () => void;
   scale: number;
@@ -38,8 +46,11 @@ export function AppearanceTab({
   handleOpacityChange,
   themeSaturation,
   handleSaturationChange,
-  themeBrightness,
-  handleBrightnessChange,
+  themeAccent,
+  handleAccentChange,
+  themeAccentColor,
+  handleAccentColorChange,
+  applyThemePreset,
   cornersEnabled,
   toggleCorners,
   scale,
@@ -52,6 +63,12 @@ export function AppearanceTab({
   // Material You builds the whole palette from one color, so these don't apply there.
   const isMaterial = themeStyle === "material";
   const showAdvancedSliders = !isMaterial && (themeMode === "custom" || themeMode === "adaptive");
+  const isActivePreset = (preset: ThemePreset) =>
+    themeMode === "custom" &&
+    themeColor.toLowerCase() === preset.color.toLowerCase() &&
+    Math.abs(themeSaturation - preset.saturation) < 0.01;
+  const effectiveWindowsSyncColor = themeAccent === "custom" ? themeAccentColor : themeColor;
+  const showWindowsAccentSync = themeAccent === "custom" || themeMode === "custom";
 
   return (
     <>
@@ -92,6 +109,7 @@ export function AppearanceTab({
             value={themeMode}
             onChange={handleThemeModeChange}
             options={[
+              { value: "auto", label: t("appearance.mode.auto") },
               { value: "dark", label: t("appearance.mode.dark") },
               { value: "light", label: t("appearance.mode.light") },
               { value: "custom", label: t("appearance.mode.custom") },
@@ -100,9 +118,60 @@ export function AppearanceTab({
           />
         </SettingRow>
 
-        <WindowsAccentSync accentColor={themeColor} />
+        <SettingRow icon={SwatchBook} label={t("appearance.presets")} desc={t("appearance.presets.desc")}>
+          <div className="preset-swatches">
+            {THEME_PRESETS.map((preset) => {
+              const name = t(`appearance.preset.${preset.name.toLowerCase()}`);
+              return (
+                <button
+                  key={preset.name}
+                  type="button"
+                  className={`preset-swatch${isActivePreset(preset) ? " active" : ""}`}
+                  style={{ background: presetBackground(preset) }}
+                  onClick={() => applyThemePreset(preset)}
+                  title={name}
+                  aria-label={name}
+                >
+                  <span style={{ background: preset.accent }} />
+                </button>
+              );
+            })}
+          </div>
+        </SettingRow>
 
-            {showCustomColor && (
+        <SettingRow
+          icon={Highlighter}
+          label={t("appearance.accent")}
+          desc={isMaterial ? t("appearance.accent.descMaterial") : t("appearance.accent.desc")}
+        >
+          <Dropdown
+            value={isMaterial && themeAccent === "mono" ? "system" : themeAccent}
+            onChange={handleAccentChange}
+            options={[
+              ...(isMaterial ? [] : [{ value: "mono", label: t("appearance.accent.mono") }]),
+              { value: "system", label: t("appearance.accent.system") },
+              { value: "custom", label: t("appearance.accent.custom") },
+            ]}
+          />
+        </SettingRow>
+
+        {themeAccent === "custom" && (
+          <SettingRow icon={Droplet} label={t("appearance.accentColor")} desc={t("appearance.accentColor.desc")}>
+            <div className="color-picker-row">
+              <input
+                type="color"
+                value={themeAccentColor}
+                onChange={(e) => handleAccentColorChange(e.target.value)}
+                className="color-picker-input"
+              />
+              <span className="color-picker-label">{themeAccentColor.toUpperCase()}</span>
+            </div>
+          </SettingRow>
+        )}
+
+        {showWindowsAccentSync && <WindowsAccentSync accentColor={effectiveWindowsSyncColor} />}
+
+        {showCustomColor && (
           <SettingRow icon={Droplet} label={t("appearance.color")} desc={t("appearance.color.desc")}>
             <div className="color-picker-row">
               <input
@@ -134,40 +203,22 @@ export function AppearanceTab({
         </SettingRow>
 
         {showAdvancedSliders && (
-          <>
-            <SettingRow
-              icon={Droplets}
-              label={t("appearance.saturation")}
-              desc={t("appearance.saturation.desc", { percent: Math.round(themeSaturation * 100) })}
-            >
-              <input
-                type="range"
-                min="0.0"
-                max="1.0"
-                step="0.02"
-                value={themeSaturation}
-                onChange={(e) => handleSaturationChange(parseFloat(e.target.value))}
-                className="settings-slider"
-              />
-            </SettingRow>
-
-            <SettingRow
-              icon={Sun}
-              label={t("appearance.brightness")}
-              desc={t("appearance.brightness.desc", { percent: Math.round(themeBrightness * 100) })}
-              divider={false}
-            >
-              <input
-                type="range"
-                min="0.0"
-                max="1.0"
-                step="0.02"
-                value={themeBrightness}
-                onChange={(e) => handleBrightnessChange(parseFloat(e.target.value))}
-                className="settings-slider"
-              />
-            </SettingRow>
-          </>
+          <SettingRow
+            icon={Droplets}
+            label={t("appearance.saturation")}
+            desc={t("appearance.saturation.desc", { percent: Math.round(themeSaturation * 100) })}
+            divider={false}
+          >
+            <input
+              type="range"
+              min="0.0"
+              max="1.0"
+              step="0.02"
+              value={themeSaturation}
+              onChange={(e) => handleSaturationChange(parseFloat(e.target.value))}
+              className="settings-slider"
+            />
+          </SettingRow>
         )}
       </SettingSection>
 

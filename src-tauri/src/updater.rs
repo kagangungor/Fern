@@ -16,6 +16,7 @@ const CHECK_TIMEOUT_SECS: u64 = 10;
 const MIN_AUTO_INSTALL_AGE_SECS: i64 = 24 * 60 * 60;
 const STATE_FILE: &str = "update-state.json";
 const RELEASES_API: &str = "https://api.github.com/repos/kagangungor/Fern/releases?per_page=10";
+const RELEASES_PAGE: &str = "https://github.com/kagangungor/Fern/releases/latest";
 
 /// Serializes manifest requests so concurrent callers share a single network hit.
 static CHECK_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
@@ -212,6 +213,12 @@ pub async fn check(app: &AppHandle, force: bool) -> Result<UpdateCheckResult, St
 /// launches the NSIS installer and terminates this process, which then
 /// relaunches the app; on other platforms this returns after restarting.
 pub async fn install(app: &AppHandle) -> Result<(), String> {
+    if !is_installed_copy() {
+        crate::diagnostics::log("update: this copy is not installed (portable or development build), opening the release page instead of running the installer");
+        let _ = tauri_plugin_opener::open_url(RELEASES_PAGE, None::<&str>);
+        let _ = app.emit("auto-update-status", serde_json::json!({ "status": "done" }));
+        return Ok(());
+    }
     if UPDATE_BUSY.swap(true, Ordering::SeqCst) {
         return Err("an update is already in progress".to_string());
     }
@@ -221,6 +228,15 @@ pub async fn install(app: &AppHandle) -> Result<(), String> {
         crate::diagnostics::log(&format!("update install failed: {e}"));
     }
     result
+}
+
+fn is_installed_dir(dir: Option<&std::path::Path>) -> bool {
+    dir.is_some_and(|d| crate::uninstall_registry::install_scope(d).is_some())
+}
+
+fn is_installed_copy() -> bool {
+    let exe_dir = std::env::current_exe().ok().and_then(|p| p.parent().map(PathBuf::from));
+    is_installed_dir(exe_dir.as_deref())
 }
 
 fn installer_scope_args() -> Vec<String> {
@@ -328,7 +344,10 @@ pub async fn run_startup_check(app: AppHandle) {
         return;
     }
 
-    if auto_update && ready_to_install(&result) && install_needs_unavailable_elevation() {
+    if auto_update && ready_to_install(&result) && !is_installed_copy() {
+        crate::diagnostics::log("auto-update: skipping silent install, this copy is not installed (portable or development build); leaving update available");
+        let _ = app.emit("auto-update-status", serde_json::json!({ "status": "done" }));
+    } else if auto_update && ready_to_install(&result) && install_needs_unavailable_elevation() {
         crate::diagnostics::log("auto-update: skipping silent install, all-users install needs elevation this process doesn't have; leaving update available for manual install");
         let _ = app.emit("auto-update-status", serde_json::json!({ "status": "done" }));
     } else if auto_update && ready_to_install(&result) {
@@ -397,7 +416,20 @@ fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{days_from_civil, parse_rfc3339_utc};
+    use super::{days_from_civil, is_installed_dir, parse_rfc3339_utc};
+
+    #[test]
+    fn is_installed_dir_detects_installed_vs_portable_copy() {
+        assert!(!is_installed_dir(None));
+        let portable = std::env::temp_dir().join(format!("fern_portable_test_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&portable);
+        assert!(!is_installed_dir(Some(&portable)));
+
+        let scope = portable.join(".install-scope");
+        std::fs::write(&scope, "user").unwrap();
+        assert!(is_installed_dir(Some(&portable)));
+        let _ = std::fs::remove_dir_all(&portable);
+    }
 
     #[test]
     fn parses_tauri_action_pub_date() {

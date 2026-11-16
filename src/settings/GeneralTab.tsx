@@ -1,4 +1,4 @@
-import { Power, Download, Clock, CalendarDays, BatteryWarning, RefreshCw, LogOut, Languages, MemoryStick } from "lucide-react";
+import { Power, Download, Clock, CalendarDays, BatteryWarning, RefreshCw, LogOut, Languages, MemoryStick, Cpu } from "lucide-react";
 import { SettingRow } from "./SettingRow";
 import { SettingSection } from "./SettingSection";
 import { Dropdown } from "./Dropdown";
@@ -13,6 +13,8 @@ interface GeneralTabProps {
   toggleTimeFormat24h: () => void;
   memorySaver: boolean;
   toggleMemorySaver: () => void;
+  webviewDisableGpu: boolean;
+  toggleWebviewDisableGpu: () => void;
   showUpdateIndicator: boolean;
   toggleUpdateIndicator: () => void;
   lowBatteryThreshold: number;
@@ -31,6 +33,8 @@ export function GeneralTab({
   toggleTimeFormat24h,
   memorySaver,
   toggleMemorySaver,
+  webviewDisableGpu,
+  toggleWebviewDisableGpu,
   showUpdateIndicator,
   toggleUpdateIndicator,
   lowBatteryThreshold,
@@ -65,7 +69,6 @@ export function GeneralTab({
           <Dropdown value={getLanguagePreference()} options={languageOptions} onChange={setLanguagePreference} />
         </SettingRow>
 
-        
         <SettingRow icon={CalendarDays} label={t("general.weekStart")} desc={t("general.weekStart.desc")}>
           <Dropdown
             value={weekStart}
@@ -89,10 +92,21 @@ export function GeneralTab({
           icon={MemoryStick}
           label={t("general.memorySaver")}
           desc={t("general.memorySaver.desc")}
-          divider={hasBattery}
         >
           <label className="toggle-switch">
             <input type="checkbox" checked={memorySaver} onChange={toggleMemorySaver} />
+            <span className="slider"></span>
+          </label>
+        </SettingRow>
+
+        <SettingRow
+          icon={Cpu}
+          label={t("general.webviewDisableGpu")}
+          desc={t("general.webviewDisableGpu.desc")}
+          divider={hasBattery}
+        >
+          <label className="toggle-switch">
+            <input type="checkbox" checked={webviewDisableGpu} onChange={toggleWebviewDisableGpu} />
             <span className="slider"></span>
           </label>
         </SettingRow>

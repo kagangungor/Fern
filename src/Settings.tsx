@@ -157,6 +157,8 @@ function SettingsApp() {
               toggleTimeFormat24h={settings.toggleTimeFormat24h}
               memorySaver={settings.memorySaver}
               toggleMemorySaver={settings.toggleMemorySaver}
+              webviewDisableGpu={settings.webviewDisableGpu}
+              toggleWebviewDisableGpu={settings.toggleWebviewDisableGpu}
               showUpdateIndicator={settings.showUpdateIndicator}
               toggleUpdateIndicator={settings.toggleUpdateIndicator}
               lowBatteryThreshold={settings.lowBatteryThreshold}
@@ -178,8 +180,11 @@ function SettingsApp() {
               handleOpacityChange={settings.handleOpacityChange}
               themeSaturation={settings.themeSaturation}
               handleSaturationChange={settings.handleSaturationChange}
-              themeBrightness={settings.themeBrightness}
-              handleBrightnessChange={settings.handleBrightnessChange}
+              themeAccent={settings.themeAccent}
+              handleAccentChange={settings.handleAccentChange}
+              themeAccentColor={settings.themeAccentColor}
+              handleAccentColorChange={settings.handleAccentColorChange}
+              applyThemePreset={settings.applyThemePreset}
               cornersEnabled={settings.cornersEnabled}
               toggleCorners={settings.toggleCorners}
               scale={settings.scale}
@@ -332,6 +337,8 @@ function SettingsApp() {
               changeDockIndicator={settings.changeDockIndicator}
               dockShowEndTask={settings.dockShowEndTask}
               toggleDockShowEndTask={settings.toggleDockShowEndTask}
+              dockStripDarkPlate={settings.dockStripDarkPlate}
+              toggleDockStripDarkPlate={settings.toggleDockStripDarkPlate}
               dockMenuItems={settings.dockMenuItems}
               toggleDockMenuItem={settings.toggleDockMenuItem}
             />

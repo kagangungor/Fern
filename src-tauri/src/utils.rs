@@ -443,12 +443,59 @@ pub unsafe fn icon_to_base64(hicon: HICON) -> Option<String> {
     Some(format!("data:image/png;base64,{}", base64_str))
 }
 
+// Drops a near-black plate behind an icon (e.g. Figma, Zen).
+pub(crate) fn strip_dark_plate(img: &mut image::RgbaImage) {
+    let (w, h) = img.dimensions();
+    if w < 8 || h < 8 { return; }
+    let mut minx = w; let mut miny = h; let mut maxx = 0; let mut maxy = 0;
+    for y in 0..h { for x in 0..w {
+        if img.get_pixel(x, y)[3] > 200 {
+            minx = minx.min(x); maxx = maxx.max(x); miny = miny.min(y); maxy = maxy.max(y);
+        }
+    } }
+    if maxx <= minx + 4 || maxy <= miny + 4 { return; }
+    let mut ring: Vec<(u32, u32)> = Vec::new();
+    for x in minx..=maxx { ring.push((x, miny + 1)); ring.push((x, maxy - 1)); }
+    for y in miny..=maxy { ring.push((minx + 1, y)); ring.push((maxx - 1, y)); }
+    let mut counts: std::collections::HashMap<[u8; 3], usize> = std::collections::HashMap::new();
+    for &(x, y) in &ring {
+        let p = img.get_pixel(x, y);
+        if p[3] > 200 { *counts.entry([p[0], p[1], p[2]]).or_insert(0) += 1; }
+    }
+    let Some((&bg, &n)) = counts.iter().max_by_key(|(_, c)| **c) else { return };
+    let luma = (bg[0] as u32 * 299 + bg[1] as u32 * 587 + bg[2] as u32 * 114) / 1000;
+    if luma > 55 || n * 100 < ring.len() * 70 { return; }
+    let near = |p: &image::Rgba<u8>| {
+        (0..3).all(|i| (p[i] as i32 - bg[i] as i32).abs() <= 8)
+    };
+    let mut stack: Vec<(u32, u32)> = ring;
+    let mut seen = vec![false; (w * h) as usize];
+    while let Some((x, y)) = stack.pop() {
+        let idx = (y * w + x) as usize;
+        if seen[idx] { continue; }
+        seen[idx] = true;
+        let p = *img.get_pixel(x, y);
+        if p[3] == 0 || !near(&p) { continue; }
+        img.put_pixel(x, y, image::Rgba([0, 0, 0, 0]));
+        if x > 0 { stack.push((x - 1, y)); }
+        if y > 0 { stack.push((x, y - 1)); }
+        if x + 1 < w { stack.push((x + 1, y)); }
+        if y + 1 < h { stack.push((x, y + 1)); }
+    }
+}
+
 fn normalize_icon_padding(png_bytes: &[u8]) -> Option<Vec<u8>> {
     const TARGET_FILL_RATIO: f64 = 0.82;
 
     let img = image::load_from_memory(png_bytes).ok()?;
-    let rgba = img.to_rgba8();
+    let mut rgba = img.to_rgba8();
+    for px in rgba.pixels_mut() {
+        if px[3] < 40 { *px = image::Rgba([0, 0, 0, 0]); }
+    }
     let (w, h) = rgba.dimensions();
+    if setting_flag_default_true("fern-dock-strip-dark-plate") {
+        strip_dark_plate(&mut rgba);
+    }
 
     let mut minx = w;
     let mut miny = h;
@@ -538,6 +585,17 @@ pub fn get_setting_str(_app: &tauri::AppHandle, key: &str) -> Option<String> {
 }
 
 /// Read a boolean setting directly from cache without an AppHandle.
+/// Like `setting_flag`, but defaults to `true` unless the setting is explicitly `false` / `"false"`.
+pub fn setting_flag_default_true(key: &str) -> bool {
+    let Some(cache) = crate::state::SETTINGS_CACHE.get() else { return true };
+    let Ok(guard) = cache.lock() else { return true };
+    match guard.get(key) {
+        Some(serde_json::Value::Bool(b)) => *b,
+        Some(serde_json::Value::String(s)) => s != "false",
+        _ => true,
+    }
+}
+
 pub fn setting_flag(key: &str) -> bool {
     let Some(cache) = crate::state::SETTINGS_CACHE.get() else { return false };
     let Ok(guard) = cache.lock() else { return false };
@@ -1128,5 +1186,30 @@ mod tests {
         assert_eq!(resolve_executable_path("C:\\Windows\\notepad.exe"), None);
         assert_eq!(resolve_executable_path("fern-definitely-not-installed"), None);
         assert_eq!(resolve_executable_path(""), None);
+    }
+
+    #[test]
+    fn strip_dark_plate_removes_dark_uniform_border_and_keeps_center() {
+        let mut img = image::RgbaImage::from_pixel(16, 16, image::Rgba([20, 20, 24, 255]));
+        for y in 5..11 {
+            for x in 5..11 {
+                img.put_pixel(x, y, image::Rgba([64, 160, 255, 255]));
+            }
+        }
+        super::strip_dark_plate(&mut img);
+        assert_eq!(img.get_pixel(0, 0)[3], 0);
+        assert_eq!(img.get_pixel(8, 8), &image::Rgba([64, 160, 255, 255]));
+    }
+
+    #[test]
+    fn strip_dark_plate_preserves_light_backgrounds() {
+        let mut img = image::RgbaImage::from_pixel(16, 16, image::Rgba([232, 236, 242, 255]));
+        for y in 5..11 {
+            for x in 5..11 {
+                img.put_pixel(x, y, image::Rgba([30, 30, 30, 255]));
+            }
+        }
+        super::strip_dark_plate(&mut img);
+        assert_eq!(img.get_pixel(0, 0), &image::Rgba([232, 236, 242, 255]));
     }
 }
