@@ -204,8 +204,8 @@ bun run tauri dev
 - [ ] **Built-in Search Provider (PowerToys-Free)** — Open-source, standalone Dock/Notch quick launcher and file/app search without relying on PowerToys Run or Command Palette
 
 #### Dock, Tray & Web Apps
-- [ ] **Background Tray Apps & Native Tray Menus in Dock** — Keep tray-only apps in the dock with a gray indicator dot, invoke default tray actions on click, and open real Windows 11 native tray context menus via UI Automation (`ShowContextMenu`)
-- [ ] **Full Web App (PWA) Support in Dock** — List installed Chromium/Firefox web apps in **Add App**, resolve stable `AppsFolder` names and `.url` icons, and repair legacy browser-pinned PWA entries to their real app IDs
+- [x] **Background Tray Apps & Native Tray Menus in Dock** — Keep tray-only apps in the dock with a gray indicator dot, invoke default tray actions on click, and open real Windows 11 native tray context menus via UI Automation (`ShowContextMenu`)
+- [x] **Full Web App (PWA) Support in Dock** — List installed Chromium/Firefox web apps in **Add App**, resolve stable `AppsFolder` names and `.url` icons, and repair legacy browser-pinned PWA entries to their real app IDs
 
 #### Notch, Media, Hardware & Island UX
 - [x] **In-Notch Bluetooth Pairing & Rich Battery Tooltip** — Wire existing `bluetooth.rs` and `battery.rs` backend capabilities into the UI for in-notch Bluetooth connect/disconnect, nearby discovery, PIN/confirm pairing, and status-bar tooltips showing battery health %, time remaining, time to full, and Windows power mode
@@ -215,7 +215,7 @@ bun run tauri dev
 - [x] **Hardware Brightness Key Interception (`0x216` / `0x217`)** — Intercept keyboard brightness keys and suppress native Windows OSD in favor of Fern's brightness HUD
 
 #### AI Agents, Settings, Appearance & Localization
-- [ ] **Multi-Agent Support (Claude Code + Codex + OpenCode v1/v2)** — Dedicated Integrations tab with live connection/verification state, non-blocking async hooks with launch timestamps, PID + start-time owner tracking to auto-clear crashed/closed sessions, and `SHQueryUserNotificationState` quiet gating
+- [x] **Multi-Agent Support (Claude Code + Codex + OpenCode v1/v2)** — Dedicated Integrations tab with live connection/verification state, non-blocking async hooks with launch timestamps, PID + start-time owner tracking to auto-clear crashed/closed sessions, and `SHQueryUserNotificationState` quiet gating
 - [x] **Interactive Settings Feature Preview** — Live in-Settings preview simulating clock, battery alert, theme, resting notch, device popups, music player, dock, and volume/brightness HUDs
 - [x] **In-App Announcement Channel** — Fetch and display dismissible release/critical notice cards via `announcements.json`
 - [ ] **Settings & UI Polish** — Inline row-level settings search (`SettingsSearchBox`), extended `HideDelay` options (up to 3h), growing `"bar"` running indicator, `AgentIntro` onboarding card, `--autoplay-policy=no-user-gesture-required`, `strip = true` release binary stripping, and i18n cleanup for hardcoded Turkish strings in `launchers.rs` / `DockTab.tsx`
