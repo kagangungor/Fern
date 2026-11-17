@@ -190,41 +190,25 @@ bun run tauri dev
 
 ## Roadmap
 
-### Shipped highlights
-- [x] **Live Synchronized Lyrics (Karaoke Mode)** — Real-time synced lyrics with click-to-seek inside the music notch
-- [x] **Per-App Audio Scroll Mixer** — Fluid per-application volume control directly from Dock icons
-- [x] **Universal Meeting & Privacy HUD** — Camera/mic Privacy Aura and system-wide Mic Mute hotkey
-- [x] **Connected Hardware & Fernie Agent API** — Split TWS earbud battery levels, USB/jack popups, and Claude Code notch integration
+### Shipped highlights (v1.6.0 – v1.6.1)
 
 #### Dock, Tray & Web Apps
-- [x] **Background Tray Apps & Native Tray Menus in Dock** — Keep tray-only apps in the dock with a gray indicator dot, invoke default tray actions on click, and open real Windows 11 native tray context menus via UI Automation (`ShowContextMenu`)
-- [x] **Full Web App (PWA) Support in Dock** — List installed Chromium/Firefox web apps in **Add App**, resolve stable `AppsFolder` names and `.url` icons, and repair legacy browser-pinned PWA entries to their real app IDs
+- [x] **Background Tray & Native Menus** — Tray-only apps in the dock with status dots, click actions, and native Windows 11 tray context menus (`ShowContextMenu`)
+- [x] **Full Web App (PWA) Support** — Installed Chromium/Firefox PWAs in **Add App** with `AppsFolder` names, `.url` icons, and legacy pin repair
 
-#### Notch, Media, Hardware & Island UX
-- [x] **In-Notch Bluetooth Pairing & Rich Battery Tooltip** — Wire existing `bluetooth.rs` and `battery.rs` backend capabilities into the UI for in-notch Bluetooth connect/disconnect, nearby discovery, PIN/confirm pairing, and status-bar tooltips showing battery health %, time remaining, time to full, and Windows power mode
-- [x] **Notch Panel Memory** — Remember the last active notch panel across collapses and restarts (`fern-notch-remember-mode`)
-- [x] **Rich Shelf File Previews & Type Icons** — Generate previews for images, PDF page 1 (`Windows.Data.Pdf`), Office/OpenDocument thumbnails + text snippets, Shell thumbnails, and file-type fallback icons
-- [x] **Flip-Clock Odometer Pomodoro Timer** — Click-to-edit right-to-left odometer digit display (`130` → `1:30`) with Web Audio completion chime
-- [x] **Hardware Brightness Key Interception (`0x216` / `0x217`)** — Intercept keyboard brightness keys and suppress native Windows OSD in favor of Fern's brightness HUD
+#### Notch, Hardware & UX
+- [x] **In-Notch Bluetooth & Rich Battery** — Connect/disconnect, discovery, PIN/confirm pairing, and detailed battery health/time/power-mode tooltips
+- [x] **Shelf Previews, Panel Memory & Odometer Pomodoro** — Image/PDF/Office/Shell previews in Shelf, persistent last active panel, and click-to-edit flip-clock timer
+- [x] **Hardware Brightness Keys** — Intercept `0x216`/`0x217` keys and replace the native Windows OSD with Fern's brightness HUD
 
-#### AI Agents, Settings, Appearance & Localization
-- [x] **Multi-Agent Support (Claude Code + Codex + OpenCode v1/v2)** — Dedicated Integrations tab with live connection/verification state, non-blocking async hooks with launch timestamps, PID + start-time owner tracking to auto-clear crashed/closed sessions, and `SHQueryUserNotificationState` quiet gating
-- [x] **Interactive Settings Feature Preview** — Live in-Settings preview simulating clock, battery alert, theme, resting notch, device popups, music player, dock, and volume/brightness HUDs
-- [x] **In-App Announcement Channel** — Fetch and display dismissible release/critical notice cards via `announcements.json`
-- [x] **Community Translation Infrastructure** — Automated `i18n-check` validation, translation reference generator, and key-level English fallback engine
+#### AI Agents, Settings & Localization
+- [x] **Multi-Agent Support (Claude Code, Codex, OpenCode)** — Dedicated Integrations tab with live status, async hooks, PID owner tracking, and quiet gating
+- [x] **Interactive Feature Preview, Announcements & i18n** — Live Settings previewer, dismissible `announcements.json` notices, and `i18n-check` translation tooling
 
-#### Stability, Windows Shell & Bug Fixes
-- [x] **Taskbar Recovery Watchdog (`--taskbar-watchdog`)** — Spawn a lightweight watchdog process that immediately restores the native Windows taskbar if `fern.exe` is force-killed or crashes
-- [x] **Show Parked UAC Prompts (`consent.exe`) in Dock** — Use `CreateToolhelp32Snapshot` fallback when `OpenProcess` fails on elevated `SYSTEM` windows so background UAC prompts remain accessible
-- [x] **Squirrel App Numeric Versioning & Icon Recovery (`moved_squirrel_exe`)** — Fix lexicographical `app-*` folder sorting and resolve updated Squirrel executable icons in `get_app_icon`
-- [x] **Fix Same-Process Window Minimize & Multi-Monitor Off-Screen Restore** — Only minimize when the target window or an owned (`GW_OWNER`) popup is foreground, and convert restore rects using each monitor's own `work_area` offset
-- [x] **Fix Start Menu Double-Click Reopen & Direct Shell Launch** — Track Start state on low-level mouse down so a second click closes rather than reopens Start, and invoke Start via Explorer directly
-- [x] **Fix Smart Dock Overlap Geometry & Office/Updater Hardening** — Measure smart-hide overlap independently of the hidden animated pill and harden archive/updater paths
-- [x] **Fix Add App Blur on File Picker (`isPickingProgramRef`)** — Prevent `AddAppPopup` `handleBlur` from closing when opening the OS "Browse for a program..." file dialog
-- [x] **Fix Broken/Half-Wired Notch Settings & SMTC Artwork Loop** — Wire or clean up `fern-notch-scroll-direction` and `fern-media-artwork-theme`, and restore `art_attempts.1 += 1` backoff so tracks without album art do not poll SMTC thumbnails every 400 ms
-- [x] **Fix Fixed-Mode Notch Click-Through & Menu Guard** — Check `!= "fixed"` in `notch_suppressed` and `!MENU_IS_OPEN` in `final_ignore` so Fixed notches stay interactive over fullscreen apps
-- [x] **Clean Glass Texture, Glow Clipping & Startup Performance Fixes** — Remove dotted `--surface-grain` texture, add `.panel-open` glass readability opacity, clip `.notch-ambient-glow` inside `<SurfaceShape>`, fetch initial `get_media_info` on mount, isolate `<TimeDisplay>` to stop 1 s full-`App` re-renders, and scale `battery.low` width dynamically with localized string length
-- [x] **Notch Opacity Sync, SMTC Session Selection, Mic Capture & Settings Polish (v1.6.1)** — Sync notch/overlay flare opacity transitions, prioritize active Windows SMTC sessions (`GetCurrentSession` + `LastUpdatedTime`) and align media controls, add `HKLM` + Core Audio (`eCapture`) microphone detection, persist per-style background opacity (`0%–100%`), fix color picker hex alignment, add Settings maximize button & `8px` DWM corner matching, preserve custom Settings window size on scale changes, and include Settings/Calendar in Smart-mode overlap hiding
+#### Stability, Shell & v1.6.1 Fixes
+- [x] **Taskbar Watchdog & Elevated/Updater Apps** — `--taskbar-watchdog` crash recovery, parked UAC (`consent.exe`) visibility, and Squirrel app versioning/icon recovery
+- [x] **Windowing, Start Menu & Smart-Hide** — Same-process minimize/multi-monitor restore fixes, Start Menu double-click toggle, Smart Dock overlap geometry, and Fixed-mode click-through
+- [x] **Performance, Glass & Media/Settings Polish (v1.6.1)** — Faster startup (`<TimeDisplay>` isolation, SMTC artwork backoff), clean glass opacity, synced notch flare, active SMTC session priority, `eCapture` mic detection, and Settings maximize/corner/scale fixes
 
 ### Upcoming milestones
 
@@ -234,7 +218,7 @@ bun run tauri dev
 - [ ] **Built-in Search Provider (PowerToys-Free)** — Open-source, standalone Dock/Notch quick launcher and file/app search without relying on PowerToys Run or Command Palette
 
 #### Settings & UI Polish
-- [ ] **Settings & UI Polish** — Inline row-level settings search (`SettingsSearchBox`), extended `HideDelay` options (up to 3h), growing `"bar"` running indicator, `AgentIntro` onboarding card, `--autoplay-policy=no-user-gesture-required`, `strip = true` release binary stripping, and i18n cleanup for hardcoded Turkish strings in `launchers.rs` / `DockTab.tsx`
+- [ ] **Settings & UI Polish** — Inline row-level settings search (`SettingsSearchBox`)
 
 See the [open issues](https://github.com/kagangungor/Fern/issues) for feature requests and known bugs.
 
