@@ -232,6 +232,7 @@ bun run tauri dev
 - [x] **Fix Broken/Half-Wired Notch Settings & SMTC Artwork Loop** — Wire or clean up `fern-notch-scroll-direction` and `fern-media-artwork-theme`, and restore `art_attempts.1 += 1` backoff so tracks without album art do not poll SMTC thumbnails every 400 ms
 - [x] **Fix Fixed-Mode Notch Click-Through & Menu Guard** — Check `!= "fixed"` in `notch_suppressed` and `!MENU_IS_OPEN` in `final_ignore` so Fixed notches stay interactive over fullscreen apps
 - [x] **Clean Glass Texture, Glow Clipping & Startup Performance Fixes** — Remove dotted `--surface-grain` texture, add `.panel-open` glass readability opacity, clip `.notch-ambient-glow` inside `<SurfaceShape>`, fetch initial `get_media_info` on mount, isolate `<TimeDisplay>` to stop 1 s full-`App` re-renders, and scale `battery.low` width dynamically with localized string length
+- [x] **Notch Opacity Sync, SMTC Session Selection, Mic Capture & Settings Polish (v1.6.1)** — Sync notch/overlay flare opacity transitions, prioritize active Windows SMTC sessions (`GetCurrentSession` + `LastUpdatedTime`) and align media controls, add `HKLM` + Core Audio (`eCapture`) microphone detection, persist per-style background opacity (`0%–100%`), fix color picker hex alignment, add Settings maximize button & `8px` DWM corner matching, preserve custom Settings window size on scale changes, and include Settings/Calendar in Smart-mode overlap hiding
 
 See the [open issues](https://github.com/kagangungor/Fern/issues) for feature requests and known bugs.
 
