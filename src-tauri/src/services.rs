@@ -162,8 +162,30 @@ unsafe extern "system" fn keyboard_hook_proc(code: i32, wparam: windows::Win32::
             if is_down { handle_volume_key_event(vk_code); }
             return windows::Win32::Foundation::LRESULT(1);
         }
+        if (vk_code.0 == 0x216 || vk_code.0 == 0x217)
+            && hook_overlay_enabled("fern-brightness-overlay-enabled")
+        {
+            if is_down { handle_brightness_key_event(vk_code); }
+            return windows::Win32::Foundation::LRESULT(1);
+        }
     }
     windows::Win32::UI::WindowsAndMessaging::CallNextHookEx(None, code, wparam, lparam)
+}
+
+fn brightness_key_command(vk_code: u16) -> Option<SystemCommand> {
+    match vk_code {
+        0x216 => Some(SystemCommand::BrightnessDown),
+        0x217 => Some(SystemCommand::BrightnessUp),
+        _ => None,
+    }
+}
+
+fn handle_brightness_key_event(vk_code: windows::Win32::UI::Input::KeyboardAndMouse::VIRTUAL_KEY) {
+    if let Some(sender) = crate::state::COMMAND_SENDER.get() {
+        if let Some(cmd) = brightness_key_command(vk_code.0) {
+            let _ = sender.send(cmd);
+        }
+    }
 }
 
 fn handle_volume_key_event(vk_code: windows::Win32::UI::Input::KeyboardAndMouse::VIRTUAL_KEY) {
@@ -934,6 +956,23 @@ pub fn setup_system_worker(app_handle: AppHandle) -> Sender<SystemCommand> {
                                     hide_osd("fern-volume-overlay-enabled");
                                 }
                             }
+                            SystemCommand::BrightnessUp => {
+                                let new_val = (CURRENT_BRIGHTNESS.load(Ordering::Relaxed) + 10).min(100);
+                                CURRENT_BRIGHTNESS.store(new_val, Ordering::Relaxed);
+                                LAST_BRIGHTNESS_CHANGE.store(get_now_ms(), Ordering::Relaxed);
+                                let _ = handle_system.emit("brightness-change", BrightnessChangeEvent { brightness: new_val });
+                                if let Some(tx) = BRIGHTNESS_SENDER.get() { let _ = tx.send(new_val); }
+                                hide_osd("fern-brightness-overlay-enabled");
+                            }
+                            SystemCommand::BrightnessDown => {
+                                let current = CURRENT_BRIGHTNESS.load(Ordering::Relaxed);
+                                let new_val = current.saturating_sub(10);
+                                CURRENT_BRIGHTNESS.store(new_val, Ordering::Relaxed);
+                                LAST_BRIGHTNESS_CHANGE.store(get_now_ms(), Ordering::Relaxed);
+                                let _ = handle_system.emit("brightness-change", BrightnessChangeEvent { brightness: new_val });
+                                if let Some(tx) = BRIGHTNESS_SENDER.get() { let _ = tx.send(new_val); }
+                                hide_osd("fern-brightness-overlay-enabled");
+                            }
                             SystemCommand::MediaPlayPause => { if let Some(ref mgr) = manager { if let Ok(session) = media_control_session(mgr) { let _ = session.TryTogglePlayPauseAsync(); MEDIA_REFRESH.store(true, Ordering::Relaxed); media_burst_until = Some(std::time::Instant::now() + std::time::Duration::from_millis(1500)); } } }
                             SystemCommand::MediaNext => { if let Some(ref mgr) = manager { if let Ok(session) = media_control_session(mgr) { let _ = session.TrySkipNextAsync(); MEDIA_REFRESH.store(true, Ordering::Relaxed); media_burst_until = Some(std::time::Instant::now() + std::time::Duration::from_millis(1500)); } } }
                             SystemCommand::MediaPrevious => { if let Some(ref mgr) = manager { if let Ok(session) = media_control_session(mgr) { let _ = session.TrySkipPreviousAsync(); MEDIA_REFRESH.store(true, Ordering::Relaxed); media_burst_until = Some(std::time::Instant::now() + std::time::Duration::from_millis(1500)); } } }
@@ -1020,7 +1059,7 @@ pub fn setup_system_worker(app_handle: AppHandle) -> Sender<SystemCommand> {
                                             }
                                             if let Some((ref last_title, ref last_artist, _, _, ref last_art, _, _)) = last_emitted_info {
                                                 // A track whose artwork failed to load is retried every poll at first, then every 15th poll, the player may not have it ready yet
-                                                let retry_due = art_attempts.1 < 8 || (art_attempts.1 - 8) % 15 == 0;
+                                                let retry_due = should_retry_artwork(art_attempts.1);
                                                 if last_title == &title && last_artist == &artist && (last_art.is_some() || !retry_due) {
                                                     artwork = last_art.as_ref().map(|art| vec![art.clone()]);
                                                     got_art_from_cache = true;
@@ -1047,6 +1086,9 @@ pub fn setup_system_worker(app_handle: AppHandle) -> Sender<SystemCommand> {
                                                     if all_bytes.is_empty() { return None; }
                                                     Some(vec![format!("data:{};base64,{}", content_type, general_purpose::STANDARD.encode(all_bytes))])
                                                 })();
+                                                if artwork.is_none() {
+                                                    art_attempts.1 += 1;
+                                                }
                                             }
 
                                             // Extract timeline properties for progress bar
@@ -1091,6 +1133,9 @@ pub fn setup_system_worker(app_handle: AppHandle) -> Sender<SystemCommand> {
                         // For position: emit if >1s difference (avoid spamming on every poll)
                         (*pos - current.position_ms).abs() > 1000
                     }) {
+                        if let Ok(mut guard) = crate::state::LAST_MEDIA.lock() {
+                            *guard = Some(current.clone());
+                        }
                         let _ = handle_system.emit("media-update", current.clone());
                         ANY_MEDIA_PLAYING.store(current.is_playing, Ordering::Relaxed);
                         last_emitted_info = Some((current.title, current.artist, current.is_playing, current.has_media, art_str, current.position_ms, current.duration_ms));
@@ -1296,7 +1341,7 @@ pub fn setup_system_worker(app_handle: AppHandle) -> Sender<SystemCommand> {
                                         should_maximized = is_maximized && !current_is_fs;
                                     } else {
                                         should_overlap = false;
-                                        if let Some(dr) = crate::state::dock_rects().lock().ok().and_then(|m| m.get("dock").copied()) {
+                                        if let Some(dr) = dock_overlap_rect("dock") {
                                             should_overlap = rect_overlaps_dock(screen_rect.left, screen_rect.bottom, rect, dr, cached_scale);
                                         }
 
@@ -1409,7 +1454,7 @@ pub fn setup_system_worker(app_handle: AppHandle) -> Sender<SystemCommand> {
                             if covers {
                                 true
                             } else if is_dock {
-                                crate::state::dock_rects().lock().ok().and_then(|m| m.get(&label).copied()).is_some_and(|dr| {
+                                dock_overlap_rect(&label).is_some_and(|dr| {
                                     rect_overlaps_dock(mx, screen.bottom, rect, dr, cached_scale)
                                 })
                             } else {
@@ -2113,6 +2158,7 @@ unsafe extern "system" fn mouse_hook_proc(code: i32, wparam: WPARAM, lparam: LPA
         }
     }
     if code >= 0 && wparam.0 == WM_LBUTTONDOWN as usize && !SHUTTING_DOWN.load(Ordering::Relaxed) {
+        crate::state::START_OPEN_AT_PRESS.store(crate::commands::is_start_menu_open(), Ordering::Relaxed);
         let pt = (*(lparam.0 as *const MSLLHOOKSTRUCT)).pt;
         if in_show_desktop_corner(pt.x, pt.y) {
             std::thread::spawn(|| crate::commands::send_win_chord(windows::Win32::UI::Input::KeyboardAndMouse::VK_D));
@@ -2145,9 +2191,26 @@ fn in_show_desktop_corner(x: i32, y: i32) -> bool {
     x >= right - CORNER && x < right && y >= bottom - CORNER && y < bottom
 }
 
-/// Notches stay hidden while a fullscreen window covers their monitor.
-fn notch_suppressed(_app_handle: &AppHandle, label: &str) -> bool {
+fn should_retry_artwork(attempts: u32) -> bool {
+    attempts < 8 || (attempts - 8) % 15 == 0
+}
+
+fn should_suppress_notch_for_mode(mode: &str) -> bool {
+    mode != "fixed"
+}
+
+fn should_ignore_notch_cursor(suppressed: bool, interactive: bool, menu_open: bool) -> bool {
+    suppressed || (!interactive && !menu_open)
+}
+
+/// Smart and Peek notches stay hidden while a fullscreen window covers their monitor.
+fn notch_suppressed(app_handle: &AppHandle, label: &str) -> bool {
     crate::state::get_flag(crate::state::notch_fullscreen(), label)
+        && should_suppress_notch_for_mode(&crate::monitors::resolve_mode_for_label(
+            app_handle,
+            crate::types::WindowKind::Notch,
+            label,
+        ))
 }
 
 fn dock_edge_hover_allowed(fullscreen_on_dock: bool, at_bottom_edge: bool, dock_hovered: bool) -> bool {
@@ -2459,7 +2522,11 @@ unsafe fn process_mouse_move(app_handle: &AppHandle, cursor: windows::Win32::Fou
                             scale, dbg_box, is_click_interactive, at_top_edge, MH_LAST_MAIN_IGNORE.load(Ordering::Relaxed),
                         ));
 
-                        let final_ignore = notch_fs || !is_click_interactive;
+                        let final_ignore = should_ignore_notch_cursor(
+                            notch_fs,
+                            is_click_interactive,
+                            MENU_IS_OPEN.load(Ordering::Relaxed),
+                        );
                         let prev_ignore = MH_LAST_MAIN_IGNORE.load(Ordering::Relaxed);
                         let new_ignore = if final_ignore { 1 } else { 0 };
                         if prev_ignore != new_ignore {
@@ -2911,7 +2978,11 @@ fn hit_test_extra_notch_windows(app_handle: &AppHandle, cursor: windows::Win32::
             crate::state::set_i32(crate::state::notch_extra_last_edge_hover(), &label, new_hover);
         }
 
-        let final_ignore = notch_fs || !is_click_interactive;
+        let final_ignore = should_ignore_notch_cursor(
+            notch_fs,
+            is_click_interactive,
+            MENU_IS_OPEN.load(Ordering::Relaxed),
+        );
         let prev_ignore = crate::state::get_i32(crate::state::notch_extra_last_ignore(), &label, -1);
         let new_ignore = if final_ignore { 1 } else { 0 };
         if prev_ignore != new_ignore {
@@ -3073,11 +3144,18 @@ fn collect_shortcuts(dir: &std::path::Path, apps: &mut Vec<AppInfo>, depth: i32)
                 // Keep the .lnk itself, its args identify PWAs and must be passed on launch.
                 // The target goes in as the exe name so pins still match running windows.
                 let path_str = path.to_string_lossy().to_string();
-                let executable = crate::utils::resolve_shortcut(&path_str).and_then(|(target, _args)| {
-                    let file = std::path::Path::new(&target).file_name().and_then(|n| n.to_str())?.to_string();
-                    // UWP shortcuts launch explorer.exe with shell:AppsFolder, storing that would match File Explorer windows.
-                    if file.eq_ignore_ascii_case("explorer.exe") { None } else { Some(file) }
-                });
+                let resolved = crate::utils::resolve_shortcut(&path_str);
+                let args = resolved.as_ref().map(|(_, a)| a.trim().to_string()).filter(|a| !a.is_empty());
+                let is_pwa = args.as_deref().is_some_and(|a| a.contains("--app-id=") || a.contains("--app="));
+                let executable = if is_pwa {
+                    None
+                } else {
+                    resolved.and_then(|(target, _args)| {
+                        let file = std::path::Path::new(&target).file_name().and_then(|n| n.to_str())?.to_string();
+                        // UWP shortcuts launch explorer.exe with shell:AppsFolder, storing that would match File Explorer windows.
+                        if file.eq_ignore_ascii_case("explorer.exe") { None } else { Some(file) }
+                    })
+                };
 
                 if !apps.iter().any(|a| a.name == name || a.path == path_str) {
                     apps.push(AppInfo {
@@ -3087,6 +3165,22 @@ fn collect_shortcuts(dir: &std::path::Path, apps: &mut Vec<AppInfo>, depth: i32)
                         is_running: false,
                         hwnd: None,
                         executable,
+                        all_hwnds: None,
+                        args,
+                    });
+                }
+            } else if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("url")) {
+                let name = path.file_stem().unwrap().to_string_lossy().to_string();
+                if is_helper_name(&name) || name.starts_with("Install") { continue; }
+                let path_str = path.to_string_lossy().to_string();
+                if !apps.iter().any(|a| a.name == name || a.path == path_str) {
+                    apps.push(AppInfo {
+                        name,
+                        path: path_str,
+                        icon: None,
+                        is_running: false,
+                        hwnd: None,
+                        executable: None,
                         all_hwnds: None,
                         args: None,
                     });
@@ -3501,10 +3595,55 @@ pub unsafe extern "system" fn enum_windows_proc(hwnd: HWND, lparam: LPARAM) -> B
                     }
                 }
                 let _ = CloseHandle(process_handle);
+            } else if process_exe_name(process_id).is_some_and(|exe| exe.eq_ignore_ascii_case("consent.exe")) {
+                // Parked UAC prompt (consent.exe runs as SYSTEM so OpenProcess fails).
+                if !apps.iter().any(|a| a.hwnd == Some(hwnd.0 as isize)) {
+                    let system_root = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".into());
+                    let window_title = if title.trim().is_empty() { "User Account Control".to_string() } else { title.clone() };
+                    apps.push(AppInfo {
+                        name: window_title.clone(),
+                        path: format!(r"{system_root}\System32\consent.exe"),
+                        icon: None,
+                        is_running: true,
+                        hwnd: Some(hwnd.0 as isize),
+                        executable: Some("consent.exe".into()),
+                        all_hwnds: Some(vec![(hwnd.0 as isize, window_title)]),
+                        args: None,
+                    });
+                }
             }
         }
     }
     true.into()
+}
+
+/// Returns the executable file name of a process (including elevated SYSTEM processes
+/// that cannot be opened with `OpenProcess`) via `CreateToolhelp32Snapshot`.
+unsafe fn process_exe_name(process_id: u32) -> Option<String> {
+    use windows::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
+        TH32CS_SNAPPROCESS,
+    };
+    let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0).ok()?;
+    let mut entry = PROCESSENTRY32W {
+        dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32,
+        ..Default::default()
+    };
+    let mut found = None;
+    if Process32FirstW(snapshot, &mut entry).is_ok() {
+        loop {
+            if entry.th32ProcessID == process_id {
+                let len = entry.szExeFile.iter().position(|&c| c == 0).unwrap_or(entry.szExeFile.len());
+                found = Some(String::from_utf16_lossy(&entry.szExeFile[..len]));
+                break;
+            }
+            if Process32NextW(snapshot, &mut entry).is_err() {
+                break;
+            }
+        }
+    }
+    let _ = CloseHandle(snapshot);
+    found
 }
 
 pub fn unregister_appbar_native(hwnd: HWND) {
@@ -3850,6 +3989,19 @@ unsafe extern "system" fn display_monitor_proc(
     }
 }
 
+fn dock_overlap_rect(label: &str) -> Option<crate::types::IntRect> {
+    crate::state::dock_expanded_rects()
+        .lock()
+        .ok()
+        .and_then(|m| m.get(label).copied())
+        .or_else(|| {
+            crate::state::dock_rects()
+                .lock()
+                .ok()
+                .and_then(|m| m.get(label).copied())
+        })
+}
+
 fn rect_overlaps_dock(
     monitor_left: i32,
     monitor_bottom: i32,
@@ -4185,5 +4337,47 @@ mod tests {
         assert!(!edge_area_allows_x(true, Some((700, 1220)), 639, 60));
         assert!(!edge_area_allows_x(true, Some((700, 1220)), 1281, 60));
         assert!(edge_area_allows_x(true, None, 0, 60));
+    }
+
+    #[test]
+    fn smtc_artwork_retry_backs_off_after_eight_attempts() {
+        use super::should_retry_artwork;
+        for a in 0..8 {
+            assert!(should_retry_artwork(a), "attempt {a} should retry");
+        }
+        assert!(should_retry_artwork(8));
+        for a in 9..23 {
+            assert!(!should_retry_artwork(a), "attempt {a} should skip");
+        }
+        assert!(should_retry_artwork(23));
+    }
+
+    #[test]
+    fn notch_suppression_keeps_fixed_mode_interactive() {
+        use super::{should_ignore_notch_cursor, should_suppress_notch_for_mode};
+        assert!(!should_suppress_notch_for_mode("fixed"));
+        assert!(should_suppress_notch_for_mode("smart"));
+        assert!(should_suppress_notch_for_mode("peek"));
+
+        assert!(should_ignore_notch_cursor(true, true, true));
+        assert!(!should_ignore_notch_cursor(false, false, true));
+        assert!(should_ignore_notch_cursor(false, false, false));
+        assert!(!should_ignore_notch_cursor(false, true, false));
+    }
+
+    #[test]
+    fn names_a_process_from_the_process_list() {
+        let own = std::env::current_exe().unwrap();
+        let expected = own.file_name().unwrap().to_string_lossy().to_string();
+        let found = unsafe { super::process_exe_name(std::process::id()) };
+        assert_eq!(found.as_deref(), Some(expected.as_str()));
+    }
+
+    #[test]
+    fn brightness_key_maps_0x216_and_0x217() {
+        use crate::types::SystemCommand;
+        assert!(matches!(super::brightness_key_command(0x216), Some(SystemCommand::BrightnessDown)));
+        assert!(matches!(super::brightness_key_command(0x217), Some(SystemCommand::BrightnessUp)));
+        assert!(super::brightness_key_command(0x215).is_none());
     }
 }

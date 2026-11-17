@@ -5,6 +5,7 @@ import { startDrag } from "@crabnebula/tauri-plugin-drag";
 import { AnimatePresence, Reorder } from "framer-motion";
 import { Eye, Trash2 } from "lucide-react";
 import { useT } from "../i18n";
+import { ShelfTypeIcon } from "./ShelfTypeIcon";
 
 export type ShelfItem = {
   id: string;
@@ -292,7 +293,9 @@ export function NotchShelf({ items, onReorder, onRemove, onClear, onDragOutStart
                       ) : text ? (
                         <pre className={`shelf-preview${text.length < 24 ? " short" : ""}`}>{text}</pre>
                       ) : (
-                        <span className="shelf-glyph">{item.kind === "text" ? "T" : "▤"}</span>
+                        <span className="shelf-glyph">
+                          <ShelfTypeIcon kind={item.kind} name={item.name} />
+                        </span>
                       )}
                       {ext && !item.thumb && <span className="shelf-ext">{ext}</span>}
                     </div>

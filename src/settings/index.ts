@@ -7,6 +7,7 @@ export { AgentSounds } from "./AgentSounds";
 export { CalendarSyncPage } from "./CalendarSyncPage";
 export { DockTab } from "./DockTab";
 export { OverlaysTab } from "./OverlaysTab";
+export { IntegrationsTab } from "./IntegrationsTab";
 export { ProcessesTab } from "./ProcessesTab";
 export { DiagnosticsTab } from "./DiagnosticsTab";
 export { AboutTab } from "./AboutTab";

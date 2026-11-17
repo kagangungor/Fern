@@ -36,6 +36,8 @@ pub enum SystemCommand {
     VolumeUp,
     VolumeDown,
     SetVolume(f32),
+    BrightnessUp,
+    BrightnessDown,
     MediaPlayPause,
     MediaNext,
     MediaPrevious,

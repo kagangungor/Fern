@@ -219,7 +219,7 @@ fn pin_shortcuts() -> &'static Vec<(String, PathBuf)> {
     })
 }
 
-fn expand_env(s: &str) -> String {
+pub(crate) fn expand_env(s: &str) -> String {
     let mut out = String::new();
     let mut rest = s;
     while let Some(start) = rest.find('%') {

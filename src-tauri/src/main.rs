@@ -28,6 +28,7 @@ mod audio_devices;
 mod wallpaper;
 mod i18n;
 mod shelf;
+mod shelf_preview;
 mod on_demand_windows;
 mod memory_saver;
 mod webview_args;
@@ -64,6 +65,16 @@ unsafe extern "system" fn ctrl_handler(ctrl_type: u32) -> BOOL {
 }
 
 fn main() {
+    let mut os_args = std::env::args_os();
+    if os_args.nth(1).as_deref() == Some(std::ffi::OsStr::new("--taskbar-watchdog")) {
+        if let (Some(pid), Some(marker)) = (os_args.next(), os_args.next()) {
+            if let Ok(pid) = pid.to_string_lossy().parse::<u32>() {
+                utils::run_taskbar_watchdog(pid, marker.into());
+            }
+        }
+        return;
+    }
+
     let args: Vec<String> = std::env::args().collect();
     if let Some(code) = agent_api::run_cli(&args) {
         std::process::exit(code);
@@ -167,6 +178,8 @@ fn main() {
             hide_overlay,
             set_splash_fullscreen,
             sync_overlay_position,
+            get_media_info,
+            update_dock_expanded_rect,
             select_media_session,
             media_play_pause,
             media_next,
@@ -187,6 +200,10 @@ fn main() {
             update_notch_rect,
             focus_agent_window,
             agent_answer,
+            get_agent_integrations_status,
+            sync_agent_integration,
+            get_tray_app_names,
+            trigger_tray_app,
             pick_agent_sound,
             reset_agent_sound,
             agent_sound_data,

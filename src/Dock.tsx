@@ -468,6 +468,7 @@ const Dock = memo(function Dock() {
   }, []);
 
   const [pinnedApps, setPinnedApps] = useState<AppInfo[]>([]);
+  const [trayAppNames, setTrayAppNames] = useState<string[]>([]);
   const [activeApps, setActiveApps] = useState<AppInfo[]>([]);
   const iconsRef = useRef<Record<string, string>>({});
   const [, setIconsTick] = useState(0); 
@@ -848,6 +849,16 @@ const Dock = memo(function Dock() {
         if (key === lastSent) return;
         lastSent = key;
         invoke('update_dock_rect', { rect: next }).catch(() => { lastSent = ""; });
+        if (isExpanded && !isHidden && !hasPreview && rect.width > 120) {
+          invoke('update_dock_expanded_rect', {
+            rect: {
+              x: Math.round(rect.x),
+              y: Math.round(rect.y),
+              width: Math.round(rect.width),
+              height: Math.round(rect.height),
+            },
+          }).catch(() => {});
+        }
       }
       // The bar's size animates without re-rendering, this is what sees it grow.
       updateDockRegionRef.current();
@@ -1194,6 +1205,22 @@ const Dock = memo(function Dock() {
     }
   };
 
+  const isTrayOnly = (app: AppInfo) => {
+    if (app.is_running || !app.name) return false;
+    const needle = app.name.trim().toLowerCase();
+    return trayAppNames.some((label) => {
+      const l = label.trim().toLowerCase();
+      return l === needle || l.includes(needle) || needle.includes(l);
+    });
+  };
+
+  useEffect(() => {
+    const pollTray = () => invoke<string[]>('get_tray_app_names').then(setTrayAppNames).catch(() => {});
+    pollTray();
+    const id = setInterval(pollTray, 5000);
+    return () => clearInterval(id);
+  }, []);
+
   const handleAppClick = async (app: AppInfo) => {
     tourDockAction();
     try {
@@ -1204,6 +1231,11 @@ const Dock = memo(function Dock() {
         await invoke('focus_app_windows', { hwnds: app.all_hwnds.map(([hwnd]) => hwnd) });
       } else if (app.hwnd) {
         await invoke('focus_window', { hwnd: app.hwnd });
+      } else if (isTrayOnly(app)) {
+        const triggered = await invoke<boolean>('trigger_tray_app', { name: app.name, contextMenu: false });
+        if (!triggered) {
+          await invoke('open_app', { appName: app.path, args: app.args ?? null });
+        }
       } else {
         await invoke('open_app', { appName: app.path, args: app.args ?? null });
       }
@@ -1592,6 +1624,7 @@ const Dock = memo(function Dock() {
 
   useEffect(() => {
     const handleBlur = () => {
+      if (isPickingProgramRef.current) return;
       closeMenu();
       closePopup();
     };
@@ -2174,7 +2207,11 @@ const Dock = memo(function Dock() {
                     />
                   )}
                 </motion.div>
-                  {app.is_running && <WindowDots count={app.all_hwnds?.length ?? 1} mode={windowIndicator} />}
+                  {app.is_running ? (
+                    <WindowDots count={app.all_hwnds?.length ?? 1} mode={windowIndicator} />
+                  ) : isTrayOnly(app) ? (
+                    <div className="window-dots"><span className="window-dot tray-only" /></div>
+                  ) : null}
                     </motion.div>
                   </Reorder.Item>
                 ))}
@@ -2292,7 +2329,11 @@ const Dock = memo(function Dock() {
                             />
                           )}
                         </motion.div>
-                        {app.is_running && <WindowDots count={app.all_hwnds?.length ?? 1} mode={windowIndicator} />}
+                        {app.is_running ? (
+                    <WindowDots count={app.all_hwnds?.length ?? 1} mode={windowIndicator} />
+                  ) : isTrayOnly(app) ? (
+                    <div className="window-dots"><span className="window-dot tray-only" /></div>
+                  ) : null}
                       </motion.div>
                     </Reorder.Item>
                   ))}
@@ -2404,7 +2445,11 @@ const Dock = memo(function Dock() {
                           />
                         )}
                       </motion.div>
-                      {app.is_running && <WindowDots count={app.all_hwnds?.length ?? 1} mode={windowIndicator} />}
+                      {app.is_running ? (
+                    <WindowDots count={app.all_hwnds?.length ?? 1} mode={windowIndicator} />
+                  ) : isTrayOnly(app) ? (
+                    <div className="window-dots"><span className="window-dot tray-only" /></div>
+                  ) : null}
                     </motion.div>
                   </Reorder.Item>
                 ))}
@@ -2551,6 +2596,18 @@ const Dock = memo(function Dock() {
                 {t("dockmenu.addApp")}
               </div>
               {fernOptionsMenu()}
+              {!contextMenu.app.is_running && isTrayOnly(contextMenu.app) && (
+                <>
+                  <div className="menu-divider" />
+                  <div className="menu-item" onClick={async () => {
+                    const name = contextMenu.app!.name;
+                    closeMenu();
+                    await invoke('trigger_tray_app', { name, contextMenu: true });
+                  }}>
+                    {t("dockmenu.trayMenu")}
+                  </div>
+                </>
+              )}
               {contextMenu.app.is_running && (
                 <>
                   <div className="menu-divider" />
@@ -2815,7 +2872,9 @@ function AddAppPopup({
         onClose();
       }
     };
-    const handleBlur = () => onClose();
+    const handleBlur = () => {
+      if (!isPickingProgramRef?.current) onClose();
+    };
     window.addEventListener("keydown", handleKeyDown);
     window.addEventListener("blur", handleBlur);
     document.addEventListener("mousedown", handleMouseDown, true);
@@ -2824,7 +2883,7 @@ function AddAppPopup({
       window.removeEventListener("blur", handleBlur);
       document.removeEventListener("mousedown", handleMouseDown, true);
     };
-  }, [onClose, containerRef, flat, selectedIndex, onAdd, pinned]);
+  }, [onClose, containerRef, flat, selectedIndex, onAdd, pinned, isPickingProgramRef]);
 
   // Fetch icons in parallel and apply them as one batch, one at a time looked like the list
   // shifting. Boxes are fixed size and images fade in.

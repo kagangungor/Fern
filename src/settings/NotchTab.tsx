@@ -53,6 +53,7 @@ import { zoneOffsetLabel } from "../dualClock";
 import type { WidgetConfig, MonitorInfo, MonitorMode } from "./types";
 import { usePerMonitor } from "./usePerMonitor";
 import { useT } from "../i18n";
+import { AgentIntro } from "./AgentIntro";
 import { AgentSounds } from "./AgentSounds";
 
 interface NotchTabProps {
@@ -451,14 +452,12 @@ export function NotchTab({
               </label>
             </SettingRow>
 
-            {!artworkThemeEnabled && (
-              <SettingRow icon={Sparkles} label={t("notch.ambientGlow")} desc={t("notch.ambientGlow.desc")}>
-                <label className="toggle-switch">
-                  <input type="checkbox" checked={mediaAmbienceEnabled} onChange={toggleAmbience} />
-                  <span className="slider"></span>
-                </label>
-              </SettingRow>
-            )}
+            <SettingRow icon={Sparkles} label={t("notch.ambientGlow")} desc={t("notch.ambientGlow.desc")}>
+              <label className="toggle-switch">
+                <input type="checkbox" checked={mediaAmbienceEnabled} onChange={toggleAmbience} />
+                <span className="slider"></span>
+              </label>
+            </SettingRow>
 
             <SettingRow icon={Circle} label={t("notch.compactGlow")} desc={t("notch.compactGlow.desc")}>
               <label className="toggle-switch">
@@ -667,6 +666,7 @@ export function NotchTab({
             </SettingRow>
 
             {agentSoundsEnabled && <AgentSounds />}
+            <AgentIntro enabled={agentApiEnabled} />
           </>
         )}
       </SettingSection>

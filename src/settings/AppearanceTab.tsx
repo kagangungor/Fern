@@ -1,4 +1,5 @@
 import { WindowsAccentSync } from "./WindowsAccentSync";
+import { FeaturePreview } from "./FeaturePreview";
 import { Palette, Droplet, Contrast, Droplets, Square, Maximize2, Layers, SwatchBook, Highlighter } from "lucide-react";
 import { SettingRow } from "./SettingRow";
 import { SettingSection } from "./SettingSection";
@@ -72,6 +73,7 @@ export function AppearanceTab({
 
   return (
     <>
+      <FeaturePreview themeStyle={themeStyle} themeMode={themeMode} />
       <SettingSection id="appearance-theme" title={t("appearance.theme.group")} defaultOpen>
         <SettingRow icon={Layers} label={t("appearance.style")} desc={t("appearance.style.desc")} divider={false} />
         <div className="style-tiles" role="radiogroup" aria-label={t("appearance.style")}>

@@ -197,9 +197,41 @@ bun run tauri dev
 - [x] **Connected Hardware & Fernie Agent API** — Split TWS earbud battery levels, USB/jack popups, and Claude Code notch integration
 
 ### Upcoming milestones
+
+#### Core Vision & Productivity
 - [ ] **Developer & Terminal Ambient HUD** — Visual notch progress line for long-running CLI tasks (`cargo build`, `npm install`, `docker`, test suites) and active Git branch / dirty-file context when an IDE or terminal is focused
 - [ ] **Pro Clipboard & Smart Inspector** — Fast island clipboard history with live color token previews (`#hex`, `rgb`, `hsl`), Tailwind/CSS conversion, and quick JSON/Base64/regex actions
 - [ ] **Built-in Search Provider (PowerToys-Free)** — Open-source, standalone Dock/Notch quick launcher and file/app search without relying on PowerToys Run or Command Palette
+
+#### Dock, Tray & Web Apps
+- [ ] **Background Tray Apps & Native Tray Menus in Dock** — Keep tray-only apps in the dock with a gray indicator dot, invoke default tray actions on click, and open real Windows 11 native tray context menus via UI Automation (`ShowContextMenu`)
+- [ ] **Full Web App (PWA) Support in Dock** — List installed Chromium/Firefox web apps in **Add App**, resolve stable `AppsFolder` names and `.url` icons, and repair legacy browser-pinned PWA entries to their real app IDs
+
+#### Notch, Media, Hardware & Island UX
+- [x] **In-Notch Bluetooth Pairing & Rich Battery Tooltip** — Wire existing `bluetooth.rs` and `battery.rs` backend capabilities into the UI for in-notch Bluetooth connect/disconnect, nearby discovery, PIN/confirm pairing, and status-bar tooltips showing battery health %, time remaining, time to full, and Windows power mode
+- [x] **Notch Panel Memory** — Remember the last active notch panel across collapses and restarts (`fern-notch-remember-mode`)
+- [x] **Rich Shelf File Previews & Type Icons** — Generate previews for images, PDF page 1 (`Windows.Data.Pdf`), Office/OpenDocument thumbnails + text snippets, Shell thumbnails, and file-type fallback icons
+- [x] **Flip-Clock Odometer Pomodoro Timer** — Click-to-edit right-to-left odometer digit display (`130` → `1:30`) with Web Audio completion chime
+- [x] **Hardware Brightness Key Interception (`0x216` / `0x217`)** — Intercept keyboard brightness keys and suppress native Windows OSD in favor of Fern's brightness HUD
+
+#### AI Agents, Settings, Appearance & Localization
+- [ ] **Multi-Agent Support (Claude Code + Codex + OpenCode v1/v2)** — Dedicated Integrations tab with live connection/verification state, non-blocking async hooks with launch timestamps, PID + start-time owner tracking to auto-clear crashed/closed sessions, and `SHQueryUserNotificationState` quiet gating
+- [x] **Interactive Settings Feature Preview** — Live in-Settings preview simulating clock, battery alert, theme, resting notch, device popups, music player, dock, and volume/brightness HUDs
+- [x] **In-App Announcement Channel** — Fetch and display dismissible release/critical notice cards via `announcements.json`
+- [ ] **Settings & UI Polish** — Inline row-level settings search (`SettingsSearchBox`), extended `HideDelay` options (up to 3h), growing `"bar"` running indicator, `AgentIntro` onboarding card, `--autoplay-policy=no-user-gesture-required`, `strip = true` release binary stripping, and i18n cleanup for hardcoded Turkish strings in `launchers.rs` / `DockTab.tsx`
+- [x] **Community Translation Infrastructure** — Automated `i18n-check` validation, translation reference generator, and key-level English fallback engine
+
+#### Stability, Windows Shell & Bug Fixes
+- [x] **Taskbar Recovery Watchdog (`--taskbar-watchdog`)** — Spawn a lightweight watchdog process that immediately restores the native Windows taskbar if `fern.exe` is force-killed or crashes
+- [x] **Show Parked UAC Prompts (`consent.exe`) in Dock** — Use `CreateToolhelp32Snapshot` fallback when `OpenProcess` fails on elevated `SYSTEM` windows so background UAC prompts remain accessible
+- [x] **Squirrel App Numeric Versioning & Icon Recovery (`moved_squirrel_exe`)** — Fix lexicographical `app-*` folder sorting and resolve updated Squirrel executable icons in `get_app_icon`
+- [x] **Fix Same-Process Window Minimize & Multi-Monitor Off-Screen Restore** — Only minimize when the target window or an owned (`GW_OWNER`) popup is foreground, and convert restore rects using each monitor's own `work_area` offset
+- [x] **Fix Start Menu Double-Click Reopen & Direct Shell Launch** — Track Start state on low-level mouse down so a second click closes rather than reopens Start, and invoke Start via Explorer directly
+- [x] **Fix Smart Dock Overlap Geometry & Office/Updater Hardening** — Measure smart-hide overlap independently of the hidden animated pill and harden archive/updater paths
+- [x] **Fix Add App Blur on File Picker (`isPickingProgramRef`)** — Prevent `AddAppPopup` `handleBlur` from closing when opening the OS "Browse for a program..." file dialog
+- [x] **Fix Broken/Half-Wired Notch Settings & SMTC Artwork Loop** — Wire or clean up `fern-notch-scroll-direction` and `fern-media-artwork-theme`, and restore `art_attempts.1 += 1` backoff so tracks without album art do not poll SMTC thumbnails every 400 ms
+- [x] **Fix Fixed-Mode Notch Click-Through & Menu Guard** — Check `!= "fixed"` in `notch_suppressed` and `!MENU_IS_OPEN` in `final_ignore` so Fixed notches stay interactive over fullscreen apps
+- [x] **Clean Glass Texture, Glow Clipping & Startup Performance Fixes** — Remove dotted `--surface-grain` texture, add `.panel-open` glass readability opacity, clip `.notch-ambient-glow` inside `<SurfaceShape>`, fetch initial `get_media_info` on mount, isolate `<TimeDisplay>` to stop 1 s full-`App` re-renders, and scale `battery.low` width dynamically with localized string length
 
 See the [open issues](https://github.com/kagangungor/Fern/issues) for feature requests and known bugs.
 

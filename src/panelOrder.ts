@@ -54,3 +54,33 @@ export function resolveCcLayout(layout: CcLayout): Record<CcKind, string[]> {
     sliders: layout.sliders ?? [...CC_SLIDERS],
   };
 }
+
+export type ScrollDirection = "natural" | "inverted";
+
+export function parseScrollDirection(raw: string | null | undefined): ScrollDirection {
+  return raw === "inverted" ? "inverted" : "natural";
+}
+
+export function panelScrollStep(accumDelta: number, direction: ScrollDirection): 1 | -1 {
+  const step = accumDelta > 0 ? 1 : -1;
+  return direction === "inverted" ? (step === 1 ? -1 : 1) : step;
+}
+
+const LAST_PANEL_KEY = "fern-notch-last-panel";
+
+export function readRememberedPanel(available: readonly PanelId[]): PanelId | null {
+  try {
+    const raw = localStorage.getItem(LAST_PANEL_KEY);
+    if (!raw) return null;
+    return available.includes(raw as PanelId) ? (raw as PanelId) : null;
+  } catch {
+    return null;
+  }
+}
+
+export function saveRememberedPanel(panel: string): void {
+  if (!(DEFAULT_PANEL_ORDER as readonly string[]).includes(panel)) return;
+  try {
+    localStorage.setItem(LAST_PANEL_KEY, panel);
+  } catch { /* storage unavailable */ }
+}

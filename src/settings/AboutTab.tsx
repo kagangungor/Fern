@@ -1,5 +1,6 @@
 import { emit } from "@tauri-apps/api/event";
 import { Compass, Download, FlaskConical, RefreshCw, FileDown, Upload, RotateCcw, Trash2 } from "lucide-react";
+import { AnnouncementsBanner } from "./AnnouncementsBanner";
 import { SettingRow } from "./SettingRow";
 import { useT } from "../i18n";
 
@@ -139,6 +140,8 @@ export function AboutTab({
           {getPillLabel()}
         </button>
       </div>
+
+      <AnnouncementsBanner />
 
       <div className="setting-group-label">{t("about.updates.group")}</div>
       <div className="setting-group">

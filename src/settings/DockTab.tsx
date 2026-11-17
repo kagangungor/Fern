@@ -343,9 +343,9 @@ export function DockTab({
                   onChange={setDockSearchLauncherValue}
                   options={[
                     { value: "windows", label: "Windows (Win + S)" },
-                    { value: "powertoys", label: "PowerToys Run (Alt + Boşluk)" },
-                    { value: "raycast", label: "Raycast (Alt + Boşluk)" },
-                    { value: "flow", label: "Flow Launcher (Alt + Boşluk)" },
+                    { value: "powertoys", label: `PowerToys Run (${t("dock.searchLauncher.altSpace")})` },
+                    { value: "raycast", label: `Raycast (${t("dock.searchLauncher.altSpace")})` },
+                    { value: "flow", label: `Flow Launcher (${t("dock.searchLauncher.altSpace")})` },
                     { value: "everything", label: "Everything" },
                     { value: "listary", label: "Listary" },
                   ]}

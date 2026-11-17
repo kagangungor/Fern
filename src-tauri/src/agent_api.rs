@@ -19,8 +19,18 @@ static ACTIVE: AtomicUsize = AtomicUsize::new(0);
 static NEXT_ASK: AtomicU64 = AtomicU64::new(1);
 static STARTED: AtomicBool = AtomicBool::new(false);
 static ENABLED: AtomicBool = AtomicBool::new(false);
+static WATCHDOG_STARTED: AtomicBool = AtomicBool::new(false);
 type Decision = (bool, Vec<usize>);
 static PENDING: Mutex<Option<HashMap<u64, mpsc::Sender<Decision>>>> = Mutex::new(None);
+
+#[derive(Clone)]
+struct OwnerTrack {
+    pid: u32,
+    start_time: u64,
+}
+
+static ACTIVE_OWNER: Mutex<Option<OwnerTrack>> = Mutex::new(None);
+static LAST_TS: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Deserialize)]
 struct Incoming {
@@ -29,6 +39,9 @@ struct Incoming {
     project: Option<String>,
     window: Option<u64>,
     detail: Option<String>,
+    ts: Option<u64>,
+    owner_pid: Option<u32>,
+    owner_start: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -64,6 +77,16 @@ struct Activity {
     detail: Option<String>,
     ask: Option<Ask>,
     cancelled: Option<u64>,
+    quiet: Option<bool>,
+}
+
+#[derive(Serialize, Clone)]
+pub struct IntegrationStatus {
+    pub id: &'static str,
+    pub name: &'static str,
+    pub detected: bool,
+    pub hooks_installed: bool,
+    pub config_path: Option<String>,
 }
 
 pub fn data_dir() -> Option<PathBuf> {
@@ -109,6 +132,92 @@ fn reply(stream: &mut TcpStream, status: &str) {
 
 fn reply_json(stream: &mut TcpStream, body: &str) {
     let _ = write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+}
+
+fn is_stale_timestamp(incoming: Option<u64>, last: u64) -> bool {
+    matches!(incoming, Some(ts) if ts > 0 && ts < last)
+}
+
+fn now_epoch_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+fn process_start_time(pid: u32) -> Option<u64> {
+    use windows::Win32::Foundation::{CloseHandle, FILETIME};
+    use windows::Win32::System::Threading::{GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
+
+    if pid == 0 {
+        return None;
+    }
+    unsafe {
+        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
+        let (mut created, mut exited, mut kernel, mut user) = (
+            FILETIME::default(),
+            FILETIME::default(),
+            FILETIME::default(),
+            FILETIME::default(),
+        );
+        let ok = GetProcessTimes(handle, &mut created, &mut exited, &mut kernel, &mut user).is_ok();
+        let _ = CloseHandle(handle);
+        if !ok {
+            return None;
+        }
+        Some(((created.dwHighDateTime as u64) << 32) | (created.dwLowDateTime as u64))
+    }
+}
+
+fn is_owner_alive(track: &OwnerTrack) -> bool {
+    process_start_time(track.pid).is_some_and(|st| st == track.start_time)
+}
+
+fn is_user_quiet() -> bool {
+    use windows::Win32::UI::Shell::{
+        SHQueryUserNotificationState, QUNS_BUSY, QUNS_PRESENTATION_MODE, QUNS_RUNNING_D3D_FULL_SCREEN,
+    };
+    unsafe {
+        match SHQueryUserNotificationState() {
+            Ok(state) => state == QUNS_BUSY || state == QUNS_RUNNING_D3D_FULL_SCREEN || state == QUNS_PRESENTATION_MODE,
+            Err(_) => false,
+        }
+    }
+}
+
+fn record_activity_owner(state: Option<&'static str>, owner_pid: Option<u32>, owner_start: Option<u64>) {
+    if let Ok(mut guard) = ACTIVE_OWNER.lock() {
+        if state.is_none() || state == Some("done") {
+            *guard = None;
+        } else if let (Some(pid), Some(start_time)) = (owner_pid, owner_start) {
+            *guard = Some(OwnerTrack { pid, start_time });
+        }
+    }
+}
+
+fn start_owner_watchdog(app: AppHandle) {
+    if WATCHDOG_STARTED.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    std::thread::spawn(move || loop {
+        std::thread::sleep(Duration::from_secs(3));
+        let should_clear = ACTIVE_OWNER
+            .lock()
+            .ok()
+            .and_then(|mut guard| {
+                if let Some(track) = guard.as_ref() {
+                    if !is_owner_alive(track) {
+                        *guard = None;
+                        return Some(());
+                    }
+                }
+                None
+            })
+            .is_some();
+        if should_clear {
+            let _ = app.emit("agent-activity", None::<Activity>);
+        }
+    });
 }
 
 fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
@@ -207,6 +316,15 @@ fn handle(mut stream: TcpStream, app: &AppHandle, token: &str) {
             let Some(state) = state_of(&req.state) else {
                 return reply(&mut stream, "400 Bad Request");
             };
+            let last_ts = LAST_TS.load(Ordering::SeqCst);
+            if is_stale_timestamp(req.ts, last_ts) {
+                return reply(&mut stream, "204 No Content");
+            }
+            let ts = req.ts.unwrap_or_else(now_epoch_ms);
+            LAST_TS.store(ts, Ordering::SeqCst);
+            record_activity_owner(state, req.owner_pid, req.owner_start);
+
+            let quiet = is_user_quiet();
             let activity = state.map(|s| Activity {
                 state: s,
                 name: clean(req.name, 48),
@@ -215,6 +333,7 @@ fn handle(mut stream: TcpStream, app: &AppHandle, token: &str) {
                 detail: clean(req.detail, DETAIL_MAX),
                 ask: None,
                 cancelled: None,
+                quiet: quiet.then_some(true),
             });
             let _ = app.emit("agent-activity", activity);
             reply(&mut stream, "204 No Content");
@@ -229,6 +348,7 @@ fn handle(mut stream: TcpStream, app: &AppHandle, token: &str) {
                 map.get_or_insert_with(HashMap::new).insert(id, tx);
             }
             let (name, project, window) = (clean(req.name, 48), clean(req.project, 48), req.window);
+            let quiet = is_user_quiet();
             let activity = Activity {
                 state: "needs_input",
                 name: name.clone(),
@@ -253,6 +373,7 @@ fn handle(mut stream: TcpStream, app: &AppHandle, token: &str) {
                     }),
                 }),
                 cancelled: None,
+                quiet: quiet.then_some(true),
             };
             let _ = app.emit("agent-activity", Some(activity));
 
@@ -274,6 +395,7 @@ fn handle(mut stream: TcpStream, app: &AppHandle, token: &str) {
                             detail: None,
                             ask: None,
                             cancelled: Some(id),
+                            quiet: None,
                         }),
                     );
                     reply(&mut stream, "204 No Content");
@@ -377,15 +499,198 @@ fn sync_claude_hooks(enable: bool) {
     }
 }
 
+fn codex_config_path() -> Option<PathBuf> {
+    std::env::var_os("USERPROFILE").map(|d| PathBuf::from(d).join(".codex").join("config.toml"))
+}
+
+fn opencode_plugin_paths() -> Vec<PathBuf> {
+    let Some(home) = std::env::var_os("USERPROFILE").map(PathBuf::from) else {
+        return Vec::new();
+    };
+    vec![
+        home.join(".config").join("opencode").join("plugin").join("fern.js"),
+        home.join(".config").join("opencode").join("plugins").join("fern.js"),
+    ]
+}
+
+fn opencode_plugin_script(exe: &str) -> String {
+    let escaped = exe.replace('\\', "\\\\").replace('"', "\\\"");
+    format!(
+        r#"// Auto-managed by Fern — do not edit manually
+import {{ spawn }} from "node:child_process";
+
+const FERN_EXE = "{escaped}";
+
+function notify(state, detail) {{
+  try {{
+    const args = ["agent", state, "--name", "OpenCode"];
+    if (detail) args.push("--detail", String(detail).slice(0, 200));
+    const child = spawn(FERN_EXE, args, {{ detached: true, stdio: "ignore", windowsHide: true }});
+    child.unref();
+  }} catch {{}}
+}}
+
+export const FernPlugin = async () => ({{
+  event: async ({{ event }}) => {{
+    if (!event?.type) return;
+    if (event.type === "session.idle") notify("done");
+    else if (event.type === "session.error") notify("error", event?.properties?.error?.message);
+    else if (event.type === "permission.asked" || event.type === "permission.updated") notify("needs-input");
+    else if (event.type === "session.status" && event?.properties?.status?.type === "busy") notify("working");
+  }},
+  "tool.execute.before": async (input) => {{
+    notify("tool", input?.tool);
+  }},
+}});
+"#
+    )
+}
+
+fn sync_codex_hooks_at(path: &PathBuf, exe: &str, enable: bool) {
+    let text = std::fs::read_to_string(path).unwrap_or_default();
+    let escaped = exe.replace('\\', "\\\\").replace('"', "\\\"");
+    let notify_line = format!(r#"notify = ["{escaped}", "agent", "codex-notify"]"#);
+
+    let mut lines: Vec<String> = text
+        .lines()
+        .filter(|l| !(l.trim_start().starts_with("notify") && l.contains("fern") && l.contains("agent")))
+        .map(String::from)
+        .collect();
+
+    if enable {
+        let has_other_notify = lines.iter().any(|l| l.trim_start().starts_with("notify ="));
+        if !has_other_notify {
+            // Insert at top (before any [table] header) so notify stays top-level in TOML
+            let insert_at = lines.iter().position(|l| l.trim_start().starts_with('[')).unwrap_or(lines.len());
+            lines.insert(insert_at, notify_line);
+        }
+    }
+
+    let mut out = lines.join("\n");
+    if !out.is_empty() && !out.ends_with('\n') {
+        out.push('\n');
+    }
+    if out == text {
+        return;
+    }
+    if !text.is_empty() {
+        let backup = path.with_file_name("config.toml.fern-backup");
+        if !backup.exists() {
+            let _ = std::fs::write(&backup, &text);
+        }
+    }
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let _ = std::fs::write(path, out);
+}
+
+fn sync_opencode_hooks_at(paths: &[PathBuf], exe: &str, enable: bool) {
+    let script = opencode_plugin_script(exe);
+    for path in paths {
+        if enable {
+            if let Some(parent) = path.parent() {
+                if parent.is_dir() || path == &paths[0] {
+                    let _ = std::fs::create_dir_all(parent);
+                    let _ = std::fs::write(path, &script);
+                }
+            }
+        } else if path.exists() {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+}
+
+pub fn integrations_status() -> Vec<IntegrationStatus> {
+    let home = std::env::var_os("USERPROFILE").map(PathBuf::from);
+    let claude_dir = home.as_ref().map(|h| h.join(".claude"));
+    let claude_settings = claude_dir.as_ref().map(|d| d.join("settings.json"));
+    let claude_installed = claude_settings
+        .as_ref()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+        .and_then(|v| v.get("hooks")?.as_object().cloned())
+        .is_some_and(|hooks| {
+            hooks.values().any(|ev| {
+                ev.as_array()
+                    .is_some_and(|arr| arr.iter().any(is_ours))
+            })
+        });
+
+    let codex_cfg = codex_config_path();
+    let codex_detected = home.as_ref().is_some_and(|h| h.join(".codex").is_dir());
+    let codex_installed = codex_cfg
+        .as_ref()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .is_some_and(|t| t.lines().any(|l| l.trim_start().starts_with("notify") && l.contains("fern")));
+
+    let opencode_dir = home.as_ref().map(|h| h.join(".config").join("opencode"));
+    let opencode_detected = opencode_dir.as_ref().is_some_and(|d| d.is_dir());
+    let opencode_paths = opencode_plugin_paths();
+    let opencode_installed = opencode_paths.iter().any(|p| p.exists());
+
+    vec![
+        IntegrationStatus {
+            id: "claude",
+            name: "Claude Code",
+            detected: claude_dir.as_ref().is_some_and(|d| d.is_dir()),
+            hooks_installed: claude_installed,
+            config_path: claude_settings.map(|p| p.to_string_lossy().into_owned()),
+        },
+        IntegrationStatus {
+            id: "codex",
+            name: "Codex CLI",
+            detected: codex_detected,
+            hooks_installed: codex_installed,
+            config_path: codex_cfg.map(|p| p.to_string_lossy().into_owned()),
+        },
+        IntegrationStatus {
+            id: "opencode",
+            name: "OpenCode (v1/v2)",
+            detected: opencode_detected,
+            hooks_installed: opencode_installed,
+            config_path: opencode_paths.first().map(|p| p.to_string_lossy().into_owned()),
+        },
+    ]
+}
+
+pub fn sync_single_integration(id: &str, enable: bool) {
+    let Some(exe) = std::env::current_exe().ok().map(|p| p.to_string_lossy().into_owned()) else {
+        return;
+    };
+    match id {
+        "claude" => sync_claude_hooks(enable),
+        "codex" => {
+            if let Some(cfg) = codex_config_path() {
+                sync_codex_hooks_at(&cfg, &exe, enable);
+            }
+        }
+        "opencode" => {
+            sync_opencode_hooks_at(&opencode_plugin_paths(), &exe, enable);
+        }
+        _ => {}
+    }
+}
+
 pub fn set_hooks(enable: bool) {
     let is_build_output = std::env::current_exe().is_ok_and(|p| p.components().any(|c| c.as_os_str() == "target"));
     if cfg!(debug_assertions) || is_build_output {
         return;
     }
-    if enable && !std::env::var_os("USERPROFILE").is_some_and(|d| PathBuf::from(d).join(".claude").is_dir()) {
+    let Some(exe) = std::env::current_exe().ok().map(|p| p.to_string_lossy().into_owned()) else {
         return;
+    };
+    if !enable || std::env::var_os("USERPROFILE").is_some_and(|d| PathBuf::from(d).join(".claude").is_dir()) {
+        sync_claude_hooks(enable);
     }
-    sync_claude_hooks(enable);
+    if !enable || std::env::var_os("USERPROFILE").is_some_and(|d| PathBuf::from(d).join(".codex").is_dir()) {
+        if let Some(cfg) = codex_config_path() {
+            sync_codex_hooks_at(&cfg, &exe, enable);
+        }
+    }
+    if !enable || std::env::var_os("USERPROFILE").is_some_and(|d| PathBuf::from(d).join(".config").join("opencode").is_dir()) {
+        sync_opencode_hooks_at(&opencode_plugin_paths(), &exe, enable);
+    }
 }
 
 pub fn set_enabled(app: &AppHandle, enable: bool) {
@@ -402,6 +707,7 @@ pub fn start(app: AppHandle) {
     if !enabled {
         return;
     }
+    start_owner_watchdog(app.clone());
     std::thread::spawn(|| set_hooks(true));
     if STARTED.swap(true, Ordering::SeqCst) {
         return;
@@ -456,7 +762,7 @@ fn project_name() -> Option<String> {
     dir.file_name().map(|n| n.to_string_lossy().into_owned())
 }
 
-fn ancestor_window() -> Option<u64> {
+fn ancestor_owner() -> (Option<u64>, Option<u32>, Option<u64>) {
     use windows::core::BOOL;
     use windows::Win32::Foundation::{HWND, LPARAM};
     use windows::Win32::System::Diagnostics::ToolHelp::{CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS};
@@ -464,7 +770,9 @@ fn ancestor_window() -> Option<u64> {
 
     let mut parents: HashMap<u32, (u32, String)> = HashMap::new();
     unsafe {
-        let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0).ok()?;
+        let Ok(snapshot) = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) else {
+            return (None, None, None);
+        };
         let mut entry = PROCESSENTRY32W { dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32, ..Default::default() };
         let mut more = Process32FirstW(snapshot, &mut entry).is_ok();
         while more {
@@ -504,20 +812,28 @@ fn ancestor_window() -> Option<u64> {
     unsafe {
         let _ = EnumWindows(Some(visit), LPARAM(&mut search as *mut Search as isize));
     }
-    search.found.into_iter().min_by_key(|(rank, _)| *rank).map(|(_, hwnd)| hwnd)
+    let hwnd = search.found.into_iter().min_by_key(|(rank, _)| *rank).map(|(_, hwnd)| hwnd);
+    let owner_pid = search.chain.first().copied();
+    let owner_start = owner_pid.and_then(process_start_time);
+    (hwnd, owner_pid, owner_start)
 }
 
-fn flags(args: &[String]) -> (Option<String>, Option<String>) {
-    let (mut name, mut project) = (None, None);
+fn ancestor_window() -> Option<u64> {
+    ancestor_owner().0
+}
+
+fn flags(args: &[String]) -> (Option<String>, Option<String>, Option<String>) {
+    let (mut name, mut project, mut detail) = (None, None, None);
     let mut rest = args.iter();
     while let Some(flag) = rest.next() {
         match flag.as_str() {
             "--name" | "-n" => name = rest.next().cloned(),
             "--project" | "-p" => project = rest.next().cloned(),
+            "--detail" | "-d" => detail = rest.next().cloned(),
             _ => {}
         }
     }
-    (name, project.or_else(project_name))
+    (name, project.or_else(project_name), detail)
 }
 
 fn post(path: &str, body: String, wait: u64) -> Option<String> {
@@ -544,8 +860,19 @@ fn send(args: &[String]) -> Option<()> {
 
 fn send_with(args: &[String], detail: Option<String>) -> Option<()> {
     let state = args.first()?.clone();
-    let (name, project) = flags(&args[1..]);
-    let body = serde_json::json!({ "state": state, "name": name, "project": project, "window": ancestor_window(), "detail": detail }).to_string();
+    let (name, project, flag_detail) = flags(&args[1..]);
+    let (window, owner_pid, owner_start) = ancestor_owner();
+    let body = serde_json::json!({
+        "state": state,
+        "name": name,
+        "project": project,
+        "window": window,
+        "owner_pid": owner_pid,
+        "owner_start": owner_start,
+        "ts": now_epoch_ms(),
+        "detail": detail.or(flag_detail),
+    })
+    .to_string();
     post("/activity", body, 2)?.starts_with("HTTP/1.1 204").then_some(())
 }
 
@@ -594,7 +921,7 @@ fn build_ask_answer_output(
 }
 
 fn ask(args: &[String]) {
-    let (name, project) = flags(args);
+    let (name, project, _) = flags(args);
     let mut input = String::new();
     let _ = std::io::stdin().read_to_string(&mut input);
     let event: serde_json::Value = serde_json::from_str(&input).unwrap_or_default();
@@ -650,6 +977,29 @@ fn ask(args: &[String]) {
     println!("{}", serde_json::json!({ "hookSpecificOutput": { "hookEventName": "PermissionRequest", "decision": behavior } }));
 }
 
+fn parse_codex_notify(raw: &str) -> Option<(String, Option<String>, Option<String>)> {
+    let val: serde_json::Value = serde_json::from_str(raw).ok()?;
+    let event_type = val.get("type").and_then(|v| v.as_str()).unwrap_or("");
+    let state = match event_type {
+        "agent-turn-complete" | "turn.completed" => "done",
+        "turn.failed" | "error" => "error",
+        "approval-requested" => "needs-input",
+        _ => "done",
+    }
+    .to_string();
+    let project = val
+        .get("cwd")
+        .and_then(|v| v.as_str())
+        .and_then(|p| std::path::Path::new(p).file_name())
+        .map(|n| n.to_string_lossy().into_owned());
+    let detail = val
+        .get("last-assistant-message")
+        .or_else(|| val.get("message"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.chars().take(DETAIL_MAX).collect());
+    Some((state, project, detail))
+}
+
 pub fn run_cli(args: &[String]) -> Option<i32> {
     if args.get(1).map(String::as_str) != Some("agent") {
         return None;
@@ -661,6 +1011,18 @@ pub fn run_cli(args: &[String]) -> Option<i32> {
         }
         Some("remove-hooks") => {
             set_hooks(false);
+            return Some(0);
+        }
+        Some("codex-notify") => {
+            let raw = args.get(3).map(String::as_str).unwrap_or("");
+            if let Some((state, project, detail)) = parse_codex_notify(raw) {
+                let mut fwd = vec![state, "--name".into(), "Codex".into()];
+                if let Some(p) = project {
+                    fwd.push("--project".into());
+                    fwd.push(p);
+                }
+                let _ = send_with(&fwd, detail);
+            }
             return Some(0);
         }
         _ => {}
@@ -728,5 +1090,48 @@ mod tests {
 
         let out_of_range = serde_json::json!({ "decision": "allow", "choices": [1, 9] });
         assert_eq!(build_ask_answer_output(&asked, &raw_questions, &out_of_range), None);
+    }
+
+    #[test]
+    fn codex_notify_parses_turn_complete_and_cwd() {
+        let raw = r#"{"type":"agent-turn-complete","cwd":"D:\\CODING\\Nectar-main","last-assistant-message":"All tests passed."}"#;
+        let (state, project, detail) = super::parse_codex_notify(raw).expect("valid codex notify");
+        assert_eq!(state, "done");
+        assert_eq!(project.as_deref(), Some("Nectar-main"));
+        assert_eq!(detail.as_deref(), Some("All tests passed."));
+    }
+
+    #[test]
+    fn stale_timestamp_is_rejected_and_newer_accepted() {
+        assert!(super::is_stale_timestamp(Some(100), 200));
+        assert!(!super::is_stale_timestamp(Some(200), 200));
+        assert!(!super::is_stale_timestamp(Some(250), 200));
+        assert!(!super::is_stale_timestamp(None, 200));
+    }
+
+    #[test]
+    fn codex_and_opencode_hooks_roundtrip_in_temp_dir() {
+        let dir = std::env::temp_dir().join(format!("fern-agent-hooks-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let codex_cfg = dir.join("config.toml");
+        std::fs::write(&codex_cfg, "model = \"o3\"\n[tui]\ntheme = \"dark\"\n").unwrap();
+
+        super::sync_codex_hooks_at(&codex_cfg, "C:\\Program Files\\Fern\\fern.exe", true);
+        let enabled = std::fs::read_to_string(&codex_cfg).unwrap();
+        assert!(enabled.contains("notify = ["));
+        assert!(enabled.contains("codex-notify"));
+
+        super::sync_codex_hooks_at(&codex_cfg, "C:\\Program Files\\Fern\\fern.exe", false);
+        let disabled = std::fs::read_to_string(&codex_cfg).unwrap();
+        assert!(!disabled.contains("codex-notify"));
+        assert!(disabled.contains("model = \"o3\""));
+
+        let opencode_p = dir.join("plugin").join("fern.js");
+        super::sync_opencode_hooks_at(&[opencode_p.clone()], "C:\\Fern\\fern.exe", true);
+        assert!(opencode_p.exists());
+        super::sync_opencode_hooks_at(&[opencode_p.clone()], "C:\\Fern\\fern.exe", false);
+        assert!(!opencode_p.exists());
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

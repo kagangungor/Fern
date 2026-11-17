@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState, type CSSProperties } from "react";
+import { useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 
 export type SurfaceEdge = "top" | "bottom" | "left" | "right";
 
@@ -10,6 +10,7 @@ interface Props {
   radius?: number;
   // Radius of the corners on the screen-edge side when there is no flare (a floating surface)
   edgeRadius?: number;
+  children?: ReactNode;
 }
 
 const INSET = 0.5;
@@ -58,7 +59,7 @@ function silhouette(edge: SurfaceEdge, w: number, h: number, f: number, r: numbe
   return { closed: false, d: `M ${P(w, -f)} ${arc(f, 1, w - f, i)} H ${X(rr)} ${arc(a, 0, i, rr)} V ${Y(h - rr)} ${arc(a, 0, rr, h - i)} H ${X(w - f)} ${arc(f, 1, w, h + f)}` };
 }
 
-export function SurfaceShape({ edge, flare, radius = 18, edgeRadius = 0 }: Props) {
+export function SurfaceShape({ edge, flare, radius = 18, edgeRadius = 0, children }: Props) {
   const ref = useRef<SVGSVGElement>(null);
   const [size, setSize] = useState({ w: 0, h: 0 });
 
@@ -93,6 +94,11 @@ export function SurfaceShape({ edge, flare, radius = 18, edgeRadius = 0 }: Props
   return (
     <>
       <div className="surface-fill" style={fillStyle} aria-hidden="true" />
+      {children !== undefined && children !== null && (
+        <div className="surface-clip" style={fillStyle} aria-hidden="true">
+          {children}
+        </div>
+      )}
       <svg ref={ref} className="edge-outline" aria-hidden="true">
         {line && <path d={line.d} />}
       </svg>

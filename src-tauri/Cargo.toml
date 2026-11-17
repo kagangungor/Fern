@@ -1,6 +1,6 @@
 [package]
 name = "fern"
-version = "1.5.0"
+version = "1.6.0"
 description = ""
 authors = ["Kağan Güngör"]
 edition = "2021"
@@ -48,6 +48,8 @@ windows = { version = "0.61", features = [
   "Win32_System_Power",
   "Win32_System_SystemServices",
   "Storage_Streams",
+  "Storage",
+  "Data_Pdf",
   "Win32_System_Console",
   "Graphics_Imaging",
   "Win32_Graphics_Imaging",
@@ -101,8 +103,12 @@ tauri-plugin-dialog = "2"
 rustfft = "6"
 reqwest = { version = "0.12", default-features = false, features = ["native-tls"] }
 roxmltree = "0.20"
+zip = { version = "4", default-features = false, features = ["deflate"] }
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 keyring = { version = "3", features = ["windows-native"] }
 rrule = "0.14"
 chrono-tz = "0.10"
+
+[profile.release]
+strip = true
 

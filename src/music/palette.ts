@@ -141,6 +141,55 @@ export function themeFromBuckets(buckets: Bucket[]): ArtTheme {
   return finish(bg.color, distinct.filter((b) => b !== bg).map((b) => b.color));
 }
 
+export function accentFromBuckets(buckets: Bucket[], lightSurface = false): string {
+  if (buckets.length === 0) return "";
+
+  const distinct: Bucket[] = [];
+  for (const b of buckets) {
+    if (distinct.every((d) => yuvDistance(d.color, b.color) >= DISTINCT)) {
+      distinct.push(b);
+      if (distinct.length === 5) break;
+    }
+  }
+
+  const baseL = luminance(lightSurface ? [245, 245, 247] : NEUTRAL);
+  const target = lightSurface ? BLACK : WHITE;
+  const candidates = distinct.filter((b) => !isBlack(b.color));
+  const pool = candidates.length > 0 ? candidates : distinct;
+
+  const picked = pool
+    .map((b) => {
+      let value = b.color;
+      let steps = 0;
+      while (steps < 12 && contrast(luminance(value), baseL) < MIN_CONTRAST) {
+        value = mix(value, target, 0.15);
+        steps++;
+      }
+      return contrast(luminance(value), baseL) >= MIN_CONTRAST
+        ? { value, steps, vividness: chroma(b.color) }
+        : null;
+    })
+    .filter((c): c is NonNullable<typeof c> => c !== null)
+    .sort((a, b) => b.vividness - a.vividness || a.steps - b.steps)[0];
+
+  return picked ? css(picked.value) : "";
+}
+
+export async function artAccent(art: string, lightSurface = false): Promise<string> {
+  try {
+    const img = new Image();
+    img.src = art;
+    await img.decode();
+    const canvas = new OffscreenCanvas(SIZE, SIZE);
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+    if (!ctx) return "";
+    ctx.drawImage(img, 0, 0, SIZE, SIZE);
+    return accentFromBuckets(tallyPixels(ctx.getImageData(0, 0, SIZE, SIZE).data), lightSurface);
+  } catch {
+    return "";
+  }
+}
+
 export async function artTheme(art: string): Promise<ArtTheme> {
   try {
     const img = new Image();

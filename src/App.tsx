@@ -1,5 +1,5 @@
 import { motion, AnimatePresence, useAnimation } from "framer-motion";
-import { useEffect, useState, useCallback, useRef, useMemo, memo } from "react";
+import { useEffect, useState, useCallback, useRef, useMemo, memo, type CSSProperties } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
@@ -31,6 +31,7 @@ import { playAgentSound } from "./agentSounds";
 import { AgentLeft, AgentPanel, shouldAgentAutoOpen, type AgentActivity } from "./components/AgentStatus";
 import { PlayIcon, PauseIcon, SkipBackIcon, SkipForwardIcon, VolumeLowIcon, VolumeHighIcon, VolumeLevelIcon, MusicNoteIcon } from "./icons";
 import { CompactMediaPlayer } from "./CompactMediaPlayer";
+import { artAccent } from "./music/palette";
 import { SyncedLyricsView } from "./components/SyncedLyricsView";
 import { useLyrics } from "./hooks/useLyrics";
 import { useMediaPosition } from "./hooks/useMediaPosition";
@@ -45,7 +46,18 @@ import { NotchTour, TOUR_STEPS } from "./components/NotchTour";
 import { useStopwatch } from "./hooks/useStopwatch";
 import { t as translate, useT } from "./i18n";
 import { NotchShelf, useShelf } from "./components/NotchShelf";
-import { parseCcLayout, parsePanelOrder, resolveCcLayout, type CcKind } from "./panelOrder";
+import {
+  parseCcLayout,
+  parsePanelOrder,
+  parseScrollDirection,
+  panelScrollStep,
+  readRememberedPanel,
+  resolveCcLayout,
+  saveRememberedPanel,
+  type CcKind,
+  type PanelId,
+  type ScrollDirection,
+} from "./panelOrder";
 import { NotchProgressBorder } from "./components/NotchProgressBorder";
 import { computeWidgetsRowWidth, normalizeWidgetConfig, type WidgetConfig } from "./widgetConfig";
 import {
@@ -150,11 +162,44 @@ function formatDuration(seconds: number): string {
   return h > 0 ? `${h}h ${m}m` : `${m}m`;
 }
 
-function batteryTooltip(charging: boolean, level: number, secondsLeft: number | null): string {
-  if (charging && level >= 100) return translate("battery.full");
-  const state = translate(charging ? "battery.charging" : "battery.onBattery");
-  if (secondsLeft === null || secondsLeft <= 0) return translate("battery.status", { state, level });
-  return translate(charging ? "battery.untilFull" : "battery.left", { state, level, duration: formatDuration(secondsLeft) });
+interface BatteryDetails {
+  present: boolean;
+  percent: number | null;
+  plugged_in: boolean;
+  charging: boolean;
+  seconds_left: number | null;
+  seconds_to_full: number | null;
+  health_percent: number | null;
+  power_mode: string | null;
+}
+
+function batteryTooltip(
+  charging: boolean,
+  level: number,
+  secondsLeft: number | null,
+  details?: BatteryDetails | null
+): string {
+  const parts: string[] = [];
+  if (charging && level >= 100) {
+    parts.push(translate("battery.full"));
+  } else {
+    const state = translate(charging ? "battery.charging" : "battery.onBattery");
+    const effectiveSecs = charging
+      ? (details?.seconds_to_full ?? secondsLeft)
+      : (details?.seconds_left ?? secondsLeft);
+    if (effectiveSecs === null || effectiveSecs <= 0) {
+      parts.push(translate("battery.status", { state, level }));
+    } else {
+      parts.push(translate(charging ? "battery.untilFull" : "battery.left", { state, level, duration: formatDuration(effectiveSecs) }));
+    }
+  }
+  if (details?.health_percent != null) {
+    parts.push(translate("battery.health", { percent: details.health_percent }));
+  }
+  if (details?.power_mode) {
+    parts.push(details.power_mode);
+  }
+  return parts.join(" · ");
 }
 
 function EthernetIcon() {
@@ -473,15 +518,48 @@ function DeviceBudsBattery({ buds }: { buds: BudsBattery }) {
   );
 }
 
+function formatLocalClock(date: Date, hour12: boolean): string {
+  return date.toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12,
+  });
+}
+
+function msUntilNextMinute(now = new Date()): number {
+  return Math.max(250, 60_000 - (now.getSeconds() * 1000 + now.getMilliseconds()) + 50);
+}
+
+const TimeDisplay = memo(function TimeDisplay({ hour12 }: { hour12: boolean }) {
+  const [text, setText] = useState(() => formatLocalClock(new Date(), hour12));
+
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const sync = () => {
+      const now = new Date();
+      setText(formatLocalClock(now, hour12));
+      timer = setTimeout(sync, msUntilNextMinute(now));
+    };
+    sync();
+    return () => {
+      if (timer) clearTimeout(timer);
+    };
+  }, [hour12]);
+
+  return <>{text}</>;
+});
+
 function App() {
   const t = useT();
   useEffect(() => {
     return initTheme({ backdrop: true });
   }, []);
 
-  const [time, setTime] = useState("");
-  const [dualTime, setDualTime] = useState("");
-  const [dualDayShift, setDualDayShift] = useState(0);
+  const [dualClock, setDualClock] = useState<{ main: string; dual: string; shift: number }>({
+    main: "",
+    dual: "",
+    shift: 0,
+  });
   const [isHovered, setIsHovered] = useState(false);
   const isHoveredRef = useRef(isHovered);
   isHoveredRef.current = isHovered;
@@ -499,6 +577,7 @@ function App() {
   const [batteryLevel, setBatteryLevel] = useState(100);
   const [isCharging, setIsCharging] = useState(false);
   const [batterySecondsLeft, setBatterySecondsLeft] = useState<number | null>(null);
+  const [batteryDetails, setBatteryDetails] = useState<BatteryDetails | null>(null);
   const [widgetTip, setWidgetTip] = useState<string | null>(null);
   const [hasBattery, setHasBattery] = useState(() => localStorage.getItem("fern-has-battery") !== "false");
   const [showPowerPulse, setShowPowerPulse] = useState(false);
@@ -564,6 +643,8 @@ function App() {
   });
   const [albumArtUrl, setAlbumArtUrl] = useState<string | null>(null);
   const [albumArtKey, setAlbumArtKey] = useState(0);
+  const [musicAccent, setMusicAccent] = useState("");
+  const musicAccentCache = useRef(new Map<string, string>());
   const [volume, setVolume] = useState(0.5);
   const [isMuted, setIsMuted] = useState(false);
   // Sliders show 0 while muted, like the overlay.
@@ -575,6 +656,7 @@ function App() {
   const [bluetoothEnabled, setBluetoothEnabled] = useState(true);
   const [settingsLegacyMode, setSettingsLegacyMode] = useState(() => localStorage.getItem("fern-legacy-mode") === "true");
   const [ccView, setCcView] = useState<'main' | 'wifi' | 'bluetooth' | 'audio' | 'devices'>('main');
+  const [connectionsHeight, setConnectionsHeight] = useState(220);
   const showConnections = !settingsLegacyMode && ccView !== 'main';
   const [lanStatus, setLanStatus] = useState<{ present: boolean; connected: boolean; name: string } | null>(null);
   const showLan = !settingsLegacyMode && !!lanStatus?.connected && !(wifiStatus?.enabled && wifiStatus.connected);
@@ -979,6 +1061,9 @@ function App() {
   }, [windowLabel, showDeviceAlert]);
 
   const [settingsScrollVolume, setSettingsScrollVolume] = useState(() => localStorage.getItem("fern-notch-scroll-volume") === "true");
+  const [settingsScrollDirection, setSettingsScrollDirection] = useState<ScrollDirection>(() =>
+    parseScrollDirection(localStorage.getItem("fern-notch-scroll-direction"))
+  );
   const [settingsShelfPersist, setSettingsShelfPersist] = useState(() => localStorage.getItem("fern-shelf-persist") === "true");
   const [settingsShelfKeepOpen, setSettingsShelfKeepOpen] = useState(() => localStorage.getItem("fern-shelf-keep-open") === "true");
   const [settingsRememberMode, setSettingsRememberMode] = useState(() => localStorage.getItem("fern-notch-remember-mode") === "true");
@@ -992,10 +1077,11 @@ function App() {
     const index = ccResolved[kind].indexOf(id);
     return index < 0 ? { display: 'none' as const } : { order: index };
   };
-  const rememberedModeRef = useRef<"command-center" | "calendar" | null>(null);
+  const rememberedModeRef = useRef<PanelId | null>(null);
   const [settingsVisualizerEnabled, setSettingsVisualizerEnabled] = useState(() => localStorage.getItem("fern-visualizer-enabled") !== "false");
   const [settingsAlbumArtEnabled, setSettingsAlbumArtEnabled] = useState(() => localStorage.getItem("fern-media-album-art-enabled") !== "false");
   const [settingsAmbienceEnabled, setSettingsAmbienceEnabled] = useState(() => localStorage.getItem("fern-media-ambience-enabled") !== "false");
+  const [settingsArtworkTheme, setSettingsArtworkTheme] = useState(() => localStorage.getItem("fern-media-artwork-theme") !== "false");
   const [settingsCompactGlowEnabled, setSettingsCompactGlowEnabled] = useState(() => localStorage.getItem("fern-media-compact-glow-enabled") !== "false");
   const [settingsCornersEnabled, setSettingsCornersEnabled] = useState(() => localStorage.getItem("fern-corners-enabled") === "true");
   const [mediaLayout, setMediaLayout] = useState<'classic' | 'compact'>(() => (localStorage.getItem("fern-media-layout") as 'classic' | 'compact') || 'compact');
@@ -1070,6 +1156,7 @@ function App() {
       setSettingsVisualizerEnabled(viz !== "false");
       setSettingsAlbumArtEnabled(getVal("fern-media-album-art-enabled", "true") !== "false");
       setSettingsAmbienceEnabled(getVal("fern-media-ambience-enabled", "true") !== "false");
+      setSettingsArtworkTheme(getVal("fern-media-artwork-theme", "true") !== "false");
       setSettingsCompactGlowEnabled(getVal("fern-media-compact-glow-enabled", "true") !== "false");
       setSettingsCornersEnabled(getVal("fern-corners-enabled", "false") === "true");
       setTimeFormat24h(getVal("fern-time-format-24h") === "true");
@@ -1077,6 +1164,9 @@ function App() {
       const scrollVolume = getVal("fern-notch-scroll-volume") === "true";
       localStorage.setItem("fern-notch-scroll-volume", String(scrollVolume));
       setSettingsScrollVolume(scrollVolume);
+      const scrollDir = parseScrollDirection(getVal("fern-notch-scroll-direction"));
+      localStorage.setItem("fern-notch-scroll-direction", scrollDir);
+      setSettingsScrollDirection(scrollDir);
 
       const thresholdStr = getVal("fern-low-battery-threshold", "20");
       if (thresholdStr) setLowBatteryThreshold(parseInt(thresholdStr as string));
@@ -1248,6 +1338,7 @@ function App() {
       "fern-music-mode-enabled": setSettingsMusicModeEnabled,
       "fern-music-compact-notch": setSettingsMusicCompactNotch,
       "fern-notch-scroll-volume": setSettingsScrollVolume,
+      "fern-notch-scroll-direction": (v) => setSettingsScrollDirection(parseScrollDirection(v === null ? null : String(v))),
       "fern-shelf-persist": setSettingsShelfPersist,
       "fern-shelf-keep-open": setSettingsShelfKeepOpen,
       "fern-notch-remember-mode": setSettingsRememberMode,
@@ -1260,6 +1351,7 @@ function App() {
       "fern-visualizer-enabled": setSettingsVisualizerEnabled,
       "fern-media-album-art-enabled": setSettingsAlbumArtEnabled,
       "fern-media-ambience-enabled": setSettingsAmbienceEnabled,
+      "fern-media-artwork-theme": setSettingsArtworkTheme,
       "fern-media-compact-glow-enabled": setSettingsCompactGlowEnabled,
       "fern-lyrics-enabled": setSettingsLyricsEnabled,
       "fern-lyrics-seek-enabled": setSettingsLyricsSeekEnabled,
@@ -1475,7 +1567,7 @@ function App() {
     wheelIdleTimeoutRef.current = setTimeout(() => { wheelAccumRef.current = 0; }, WHEEL_IDLE_RESET_MS);
 
     if (Math.abs(wheelAccumRef.current) < WHEEL_STEP_THRESHOLD) return;
-    const direction = wheelAccumRef.current > 0 ? 1 : -1;
+    const direction = panelScrollStep(wheelAccumRef.current, settingsScrollDirection);
     wheelAccumRef.current = 0;
 
     const availableModes = availableNotchModes();
@@ -1641,41 +1733,40 @@ function App() {
     }
   }, [settingsMusicModeEnabled, settingsMusicCompactNotch, mediaInfo.has_media, isPlaying, fernMode, isHovered]);
 
-  // Update time
+  // Dual clock updates at minute boundaries only when enabled
   useEffect(() => {
-    const updateTime = () => {
-      const now = new Date();
-      setTime(
-        now.toLocaleTimeString([], {
-          hour: "2-digit",
-          minute: "2-digit",
-          hour12: !timeFormat24h,
-        })
-      );
-      if (settingsDualClockEnabled) {
-        setDualTime(formatZoneTime(now, dualClockZone, !timeFormat24h));
-        setDualDayShift(zoneDayShift(now, dualClockZone));
-      }
-    };
-
-    updateTime();
-    const interval = setInterval(updateTime, 1000);
-
-    // Toggle compact timer view every 5 seconds if running
-    let timerToggleInterval: any;
-    if ((isTimerRunning || stopwatch.running) && fernMode !== 'calendar') {
-      timerToggleInterval = setInterval(() => {
-        setIsCompactTimerVisible(prev => !prev);
-      }, 5000);
-    } else {
-      setIsCompactTimerVisible(false);
+    if (!settingsDualClockEnabled || settingsLegacyMode) {
+      setDualClock((prev) => (prev.dual === "" ? prev : { main: "", dual: "", shift: 0 }));
+      return;
     }
 
-    return () => {
-      clearInterval(interval);
-      if (timerToggleInterval) clearInterval(timerToggleInterval);
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const sync = () => {
+      const now = new Date();
+      setDualClock({
+        main: formatLocalClock(now, !timeFormat24h),
+        dual: formatZoneTime(now, dualClockZone, !timeFormat24h),
+        shift: zoneDayShift(now, dualClockZone),
+      });
+      timer = setTimeout(sync, msUntilNextMinute(now));
     };
-  }, [isTimerRunning, stopwatch.running, fernMode, timeFormat24h, settingsDualClockEnabled, dualClockZone]);
+
+    sync();
+    return () => {
+      if (timer) clearTimeout(timer);
+    };
+  }, [timeFormat24h, settingsDualClockEnabled, settingsLegacyMode, dualClockZone]);
+
+  // Toggle compact timer view every 5 seconds if running
+  useEffect(() => {
+    if ((isTimerRunning || stopwatch.running) && fernMode !== 'calendar') {
+      const timerToggleInterval = setInterval(() => {
+        setIsCompactTimerVisible(prev => !prev);
+      }, 5000);
+      return () => clearInterval(timerToggleInterval);
+    }
+    setIsCompactTimerVisible(false);
+  }, [isTimerRunning, stopwatch.running, fernMode]);
 
   // Battery API
   useEffect(() => {
@@ -1776,6 +1867,9 @@ function App() {
       if ((window as any).__fernFakeBattery) return;
       setHasBattery(present);
       localStorage.setItem("fern-has-battery", String(present));
+      if (present) {
+        invoke<BatteryDetails>("get_battery_details").then(setBatteryDetails).catch(() => {});
+      }
     }).catch(() => { });
     invoke<{ volume: number; is_muted: boolean }>("get_volume_state")
       .then((state) => { setVolume(state.volume); setIsMuted(state.is_muted); })
@@ -1788,6 +1882,11 @@ function App() {
     }, 5000);
     return () => clearInterval(interval);
   }, []);
+
+  useEffect(() => {
+    if (!hasBattery) return;
+    invoke<BatteryDetails>("get_battery_details").then(setBatteryDetails).catch(() => {});
+  }, [hasBattery, batteryLevel, isCharging, batterySaverEnabled]);
 
   // Poll system metrics for status widgets
   useEffect(() => {
@@ -1819,7 +1918,7 @@ function App() {
       clearTimeout(clear);
       const next = event.payload;
       const key = next ? `${next.state}:${next.ask?.id ?? ""}` : "";
-      if (windowLabelRef.current === 'main' && next && key !== lastAgentKey.current && (next.state === 'needs_input' || next.state === 'done' || next.state === 'error')) {
+      if (windowLabelRef.current === 'main' && next && !next.quiet && key !== lastAgentKey.current && (next.state === 'needs_input' || next.state === 'done' || next.state === 'error')) {
         playAgentSound(next.state);
       }
       lastAgentKey.current = key;
@@ -1835,10 +1934,35 @@ function App() {
   const mediaInfoRef = useRef(mediaInfo);
   mediaInfoRef.current = mediaInfo;
 
+  useEffect(() => {
+    if (!settingsArtworkTheme || !albumArtUrl) {
+      setMusicAccent("");
+      return;
+    }
+    const isLight = document.documentElement.classList.contains("light-mode");
+    const cacheKey = `${isLight ? "L" : "D"}:${albumArtUrl}`;
+    const cached = musicAccentCache.current.get(cacheKey);
+    if (cached !== undefined) {
+      setMusicAccent(cached);
+      return;
+    }
+    let cancelled = false;
+    artAccent(albumArtUrl, isLight).then((accent) => {
+      if (musicAccentCache.current.size >= 32) {
+        const firstKey = musicAccentCache.current.keys().next().value;
+        if (firstKey) musicAccentCache.current.delete(firstKey);
+      }
+      musicAccentCache.current.set(cacheKey, accent);
+      if (!cancelled) setMusicAccent(accent);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [albumArtUrl, settingsArtworkTheme]);
+
   // Native Windows Media Controls - Listen for updates from background worker
   useEffect(() => {
-    const unlisten = listen<MediaInfo>("media-update", (event) => {
-      const info = event.payload;
+    const applyMedia = (info: MediaInfo | null) => {
       if (!info) return;
 
       const prev = mediaInfoRef.current;
@@ -1871,7 +1995,10 @@ function App() {
       } else {
         setAlbumArtUrl(null);
       }
-    });
+    };
+
+    const unlisten = listen<MediaInfo>("media-update", (event) => applyMedia(event.payload));
+    invoke<MediaInfo | null>("get_media_info").then(applyMedia).catch(() => {});
 
     return () => {
       unlisten.then(fn => fn());
@@ -2107,7 +2234,7 @@ function App() {
       case "battery":
         if (!hasBattery) return null;
         return (
-          <div className="passive-feature" key="battery" {...tip(batteryTooltip(isCharging, batteryLevel, batterySecondsLeft))}>
+          <div className="passive-feature" key="battery" {...tip(batteryTooltip(isCharging, batteryLevel, batterySecondsLeft, batteryDetails))}>
             <BatteryIcon charging={isCharging} level={batteryLevel} threshold={lowBatteryThreshold} />
             <span className="label">{batteryLevel}%</span>
           </div>
@@ -2203,17 +2330,23 @@ function App() {
   // Music mode shows any time we have media info (playing or paused) and music mode setting is enabled
   const isMusicMode = mediaInfo.has_media && fernMode === 'music' && settingsMusicModeEnabled;
 
+  // Keep Fern's smooth dark/glass surface + ambient glow intact; only tint the accent bar/visualizer.
+  const musicTint =
+    isMusicMode && settingsArtworkTheme && musicAccent
+      ? ({ "--music-accent": musicAccent } as CSSProperties)
+      : undefined;
+
   // Second clock beside the time
-  const showDualClock = settingsDualClockEnabled && !settingsLegacyMode && dualTime !== "";
+  const showDualClock = settingsDualClockEnabled && !settingsLegacyMode && dualClock.dual !== "";
   const dualClockSize = useMemo(
-    () => (showDualClock ? measureDualClock(time, dualClockLabel, dualTime, dualDayShift) : null),
-    [showDualClock, time, dualClockLabel, dualTime, dualDayShift]
+    () => (showDualClock ? measureDualClock(dualClock.main, dualClockLabel, dualClock.dual, dualClock.shift) : null),
+    [showDualClock, dualClock, dualClockLabel]
   );
   const dualClockExtra = dualClockSize?.extra ?? 0;
   const dualClockTooltip = useMemo(
     () => (showDualClock ? [dualClockLabel, zoneOffsetLabel(dualClockZone), zoneDifferenceLabel(dualClockZone)].filter(Boolean).join(" · ") : ""),
-    // dualTime changes every minute, which picks up DST changes in either zone.
-    [showDualClock, dualClockLabel, dualClockZone, dualTime]
+    // dualClock.dual changes every minute, which picks up DST changes in either zone.
+    [showDualClock, dualClockLabel, dualClockZone, dualClock.dual]
   );
 
   // Privacy HUD states
@@ -2338,7 +2471,7 @@ function App() {
     if (fernMode === 'calendar') return settingsCalendarEnabled ? (caldav.connected ? 350 : 284) : 262;
     if (fernMode === 'command-center') {
       if (!isHovered) return 36;
-      if (showConnections) return 320;
+      if (showConnections) return Math.min(340, Math.max(132, connectionsHeight));
       const tileRows = Math.ceil(ccResolved.tiles.length / 2);
       const tilesH = tileRows ? tileRows * 42 + (tileRows - 1) * 10 + 14 : 0;
       const buttonsH = ccResolved.buttons.length ? 44 : 0;
@@ -2426,9 +2559,12 @@ function App() {
           clearTimeout(shelfCollapseTimer.current);
           setIsHovered(true);
           if (!tourActive && !shouldPreserveModeOnHover(fernMode)) {
-            const remembered = settingsRememberMode ? rememberedModeRef.current : null;
+            const available = availableNotchModes();
+            const remembered = settingsRememberMode
+              ? (rememberedModeRef.current ?? readRememberedPanel(available))
+              : null;
             if (agentNeedsYou) setFernMode('agent');
-            else if (remembered && availableNotchModes().includes(remembered)) setFernMode(remembered);
+            else if (remembered && available.includes(remembered)) setFernMode(remembered);
             else setFernMode(mediaInfo.has_media && isPlaying ? 'music' : 'status');
           }
         }}
@@ -2439,7 +2575,16 @@ function App() {
             return;
           }
           setIsHovered(false);
-          if (fernMode === 'command-center' || fernMode === 'calendar') rememberedModeRef.current = fernMode;
+          if (
+            fernMode === 'command-center' ||
+            fernMode === 'status' ||
+            fernMode === 'music' ||
+            fernMode === 'calendar' ||
+            fernMode === 'shelf'
+          ) {
+            rememberedModeRef.current = fernMode;
+            if (settingsRememberMode) saveRememberedPanel(fernMode);
+          }
           const targetMode = mediaInfo.has_media && isPlaying && settingsMusicCompactNotch ? 'music' : 'status';
           if (fernMode === 'music') {
             setFernMode(targetMode);
@@ -2447,7 +2592,7 @@ function App() {
             setFernMode(targetMode);
           }
         }}
-        style={{ originY: 0 }}
+        style={{ originY: 0, ...musicTint }}
         transition={{
           width: { type: "spring", stiffness: 400, damping: 31 },
           height: { type: "spring", stiffness: 450, damping: 29 },
@@ -2471,30 +2616,6 @@ function App() {
 
         {widgetTip && isHovered && <div className="widget-tip">{widgetTip}</div>}
 
-        <AnimatePresence>
-          {isMusicMode && settingsAmbienceEnabled && albumArtUrl && isHovered && !isCalendarMode && (
-            <motion.div
-              className="notch-ambient-glow"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              transition={{ duration: 0.15 }}
-            >
-              <AnimatePresence mode="wait">
-                <motion.img
-                  key={albumArtUrl}
-                  src={albumArtUrl}
-                  alt=""
-                  draggable={false}
-                  initial={{ opacity: 0, scale: 1.1 }}
-                  animate={{ opacity: 1, scale: 1.8 }}
-                  exit={{ opacity: 0 }}
-                  transition={{ duration: 0.3 }}
-                />
-              </AnimatePresence>
-            </motion.div>
-          )}
-        </AnimatePresence>
         <AnimatePresence mode="wait">
           {isExpanded && (
             <motion.div
@@ -2503,7 +2624,7 @@ function App() {
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
               transition={{ duration: 0.1 }}
-              style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', position: 'relative', borderRadius: 'inherit' }}
+              style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', position: 'relative', zIndex: 1, borderRadius: 'inherit' }}
             >
               {/* Faster Waiting Transition Area */}
               <AnimatePresence mode="wait">
@@ -2815,7 +2936,7 @@ function App() {
                               <div
                                 className="time-flip-container"
                                 onClick={toggleCalendarMode}
-                                style={batteryLow ? { minWidth: Math.max(96, dualClockSize?.main ?? 0) } : dualClockSize ? { minWidth: dualClockSize.main } : undefined}
+                                style={batteryLow ? { minWidth: Math.max(96, Math.ceil(t("battery.low").length * 10), dualClockSize?.main ?? 0) } : dualClockSize ? { minWidth: dualClockSize.main } : undefined}
                               >
                                 <AnimatePresence initial={false}>
                                   {isCompactTimerVisible || isTimerFinished ? (
@@ -2851,7 +2972,7 @@ function App() {
                                       exit={{ rotateX: 90, opacity: 0 }}
                                       transition={{ type: "spring", stiffness: 600, damping: 30 }}
                                     >
-                                      {time}
+                                      <TimeDisplay hour12={!timeFormat24h} />
                                     </motion.span>
                                   )}
                                 </AnimatePresence>
@@ -2859,13 +2980,13 @@ function App() {
                               {showDualClock && (
                                 <div className="time-secondary" onClick={toggleCalendarMode} data-tooltip={dualClockTooltip}>
                                   <span className="time-secondary-label">{dualClockLabel}</span>
-                                  <span className="time-secondary-value">{dualTime}</span>
-                                  {dualDayShift !== 0 && <span className="time-secondary-shift">{dayShiftLabel(dualDayShift)}</span>}
+                                  <span className="time-secondary-value">{dualClock.dual}</span>
+                                  {dualClock.shift !== 0 && <span className="time-secondary-shift">{dayShiftLabel(dualClock.shift)}</span>}
                                 </div>
                               )}
                             </div>
 
-                            {/* Right: album art (music) or battery (command-center, calendar) */}
+                              {/* Right: album art (music) or battery (command-center, calendar) */}
                             <div className="side-content right">
                               {isMusicMode && settingsAlbumArtEnabled ? (
                                 <AnimatePresence mode="wait">
@@ -3018,6 +3139,7 @@ function App() {
                       <ConnectionsView
                         kind={ccView as "wifi" | "bluetooth" | "audio"}
                         onBack={() => setCcView('main')}
+                        onContentHeight={setConnectionsHeight}
                         tip={tip}
                         onOpenWindowsSettings={() => { invoke(ccView === 'wifi' ? 'open_wifi_settings' : ccView === 'audio' ? 'open_sound_settings' : 'open_bluetooth_settings'); }}
                       />
@@ -3160,7 +3282,7 @@ function App() {
                           {...(settingsLegacyMode ? {} : tip(t('cc.outputDevice')))}
                           onClick={settingsLegacyMode ? undefined : (e) => { e.stopPropagation(); setCcView('audio'); }}
                         >
-                          <VolumeLevelIcon level={displayVolume} style={{ opacity: 0.5 }} />
+                          <VolumeLevelIcon level={displayVolume} size={14} style={{ opacity: 0.5 }} />
                           <span>{t("cc.volume")}</span>
                           {!settingsLegacyMode && <span className="cc-label-more">›</span>}
                         </div>
@@ -3385,7 +3507,32 @@ function App() {
           )}
         </AnimatePresence>
 
-        <SurfaceShape edge="top" flare={isImpacted ? 13 : 0} radius={isCalendarMode ? 28 : 18} edgeRadius={18} />
+        <SurfaceShape edge="top" flare={isImpacted ? 13 : 0} radius={isCalendarMode ? 28 : 18} edgeRadius={18}>
+          <AnimatePresence>
+            {isMusicMode && settingsAmbienceEnabled && albumArtUrl && isHovered && !isCalendarMode && (
+              <motion.div
+                className="notch-ambient-glow"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                transition={{ duration: 0.15 }}
+              >
+                <AnimatePresence mode="wait">
+                  <motion.img
+                    key={albumArtUrl}
+                    src={albumArtUrl}
+                    alt=""
+                    draggable={false}
+                    initial={{ opacity: 0, scale: 1.1 }}
+                    animate={{ opacity: 1, scale: 1.8 }}
+                    exit={{ opacity: 0 }}
+                    transition={{ duration: 0.3 }}
+                  />
+                </AnimatePresence>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </SurfaceShape>
 
         {showTimerProgressBar && (
           <NotchProgressBorder

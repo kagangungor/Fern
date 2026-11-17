@@ -16,6 +16,7 @@ export interface AgentActivity {
   detail?: string;
   ask?: { id: number; tool?: string; detail?: string; questions?: AskQuestion[] };
   cancelled?: number;
+  quiet?: boolean;
 }
 
 export function shouldAgentAutoOpen(activity: AgentActivity | null): boolean {

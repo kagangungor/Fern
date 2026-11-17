@@ -108,38 +108,38 @@ pub fn get_search_launchers() -> Vec<SearchLauncherInfo> {
     vec![
         SearchLauncherInfo {
             id: "windows".to_string(),
-            name: "Windows Arama".to_string(),
+            name: "Windows Search".to_string(),
             hotkey: "Win + S".to_string(),
             is_available: true,
         },
         SearchLauncherInfo {
             id: "powertoys".to_string(),
             name: "PowerToys Run".to_string(),
-            hotkey: "Alt + Boşluk".to_string(),
+            hotkey: "Alt + Space".to_string(),
             is_available: powertoys_available,
         },
         SearchLauncherInfo {
             id: "raycast".to_string(),
             name: "Raycast".to_string(),
-            hotkey: "Alt + Boşluk".to_string(),
+            hotkey: "Alt + Space".to_string(),
             is_available: raycast_available,
         },
         SearchLauncherInfo {
             id: "flow".to_string(),
             name: "Flow Launcher".to_string(),
-            hotkey: "Alt + Boşluk".to_string(),
+            hotkey: "Alt + Space".to_string(),
             is_available: flow_available,
         },
         SearchLauncherInfo {
             id: "everything".to_string(),
             name: "Everything".to_string(),
-            hotkey: "Hızlı Dosya Arama".to_string(),
+            hotkey: "Quick File Search".to_string(),
             is_available: everything_available,
         },
         SearchLauncherInfo {
             id: "listary".to_string(),
             name: "Listary".to_string(),
-            hotkey: "Ctrl + Ctrl / Alt + Boşluk".to_string(),
+            hotkey: "Ctrl + Ctrl / Alt + Space".to_string(),
             is_available: listary_available,
         },
     ]

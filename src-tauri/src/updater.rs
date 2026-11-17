@@ -9,11 +9,13 @@ use tauri_plugin_updater::{UpdaterBuilder, UpdaterExt};
 
 /// Minimum time between background update checks. Manual checks bypass this.
 const CHECK_INTERVAL_SECS: i64 = 24 * 60 * 60;
-/// Network timeout for a single manifest request.
-const CHECK_TIMEOUT_SECS: u64 = 10;
+/// Network timeout for a single manifest request (allows TCP SYN retries on slow routes).
+const CHECK_TIMEOUT_SECS: u64 = 60;
 /// A release must be at least this old before auto-update installs it, so a
 /// broken release cannot reach everyone within minutes of being published.
 const MIN_AUTO_INSTALL_AGE_SECS: i64 = 24 * 60 * 60;
+/// Minimum time before auto-install retries a version whose installer was already launched.
+const AUTO_INSTALL_RETRY_SECS: i64 = 24 * 60 * 60;
 const STATE_FILE: &str = "update-state.json";
 const RELEASES_API: &str = "https://api.github.com/repos/kagangungor/Fern/releases?per_page=10";
 const RELEASES_PAGE: &str = "https://github.com/kagangungor/Fern/releases/latest";
@@ -42,6 +44,10 @@ struct PersistedUpdateState {
     date: String,
     #[serde(default)]
     channel: String,
+    #[serde(default)]
+    last_install_attempt: i64,
+    #[serde(default)]
+    last_install_version: String,
 }
 
 fn prerelease_channel(app: &AppHandle) -> bool {
@@ -193,6 +199,7 @@ pub async fn check(app: &AppHandle, force: bool) -> Result<UpdateCheckResult, St
         None => UpdateCheckResult::default(),
     };
 
+    let prev = read_state(app);
     write_state(
         app,
         &PersistedUpdateState {
@@ -201,6 +208,8 @@ pub async fn check(app: &AppHandle, force: bool) -> Result<UpdateCheckResult, St
             version: result.version.clone().unwrap_or_default(),
             date: result.date.clone().unwrap_or_default(),
             channel: channel_name(app).to_string(),
+            last_install_attempt: prev.last_install_attempt,
+            last_install_version: prev.last_install_version,
         },
     );
     if let Ok(mut cached) = LAST_CHECK.lock() {
@@ -280,6 +289,11 @@ async fn install_inner(app: &AppHandle) -> Result<(), String> {
 
     let _ = app.emit("auto-update-status", serde_json::json!({ "status": "downloading", "progress": 0 }));
 
+    let mut state = read_state(app);
+    state.last_install_attempt = now_secs();
+    state.last_install_version = update.version.clone();
+    write_state(app, &state);
+
     let progress_handle = app.clone();
     let downloaded = Arc::new(AtomicU64::new(0));
     let downloaded_cb = downloaded.clone();
@@ -344,7 +358,15 @@ pub async fn run_startup_check(app: AppHandle) {
         return;
     }
 
-    if auto_update && ready_to_install(&result) && !is_installed_copy() {
+    let state = read_state(&app);
+    let recently_attempted = !state.last_install_version.is_empty()
+        && result.version.as_deref() == Some(state.last_install_version.as_str())
+        && now_secs() - state.last_install_attempt < AUTO_INSTALL_RETRY_SECS;
+
+    if auto_update && ready_to_install(&result) && recently_attempted {
+        crate::diagnostics::log("auto-update: skipping silent install, this version was already launched recently");
+        let _ = app.emit("auto-update-status", serde_json::json!({ "status": "done" }));
+    } else if auto_update && ready_to_install(&result) && !is_installed_copy() {
         crate::diagnostics::log("auto-update: skipping silent install, this copy is not installed (portable or development build); leaving update available");
         let _ = app.emit("auto-update-status", serde_json::json!({ "status": "done" }));
     } else if auto_update && ready_to_install(&result) && install_needs_unavailable_elevation() {

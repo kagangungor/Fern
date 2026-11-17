@@ -1215,3 +1215,8 @@ body {
   color: var(--fern-text, #fff);
   background: rgba(255, 255, 255, 0.06);
 }
+
+.window-dot.tray-only {
+  background: rgba(156, 163, 175, 0.8);
+  box-shadow: none;
+}

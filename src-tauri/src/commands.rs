@@ -74,6 +74,13 @@ pub async fn update_dock_rect(window: Window, rect: IntRect) {
 }
 
 #[tauri::command]
+pub async fn update_dock_expanded_rect(window: Window, rect: IntRect) {
+    if let Ok(mut m) = crate::state::dock_expanded_rects().lock() {
+        m.insert(window.label().to_string(), rect);
+    }
+}
+
+#[tauri::command]
 pub async fn update_notch_rect(window: Window, rect: IntRect) {
     if let Ok(mut m) = crate::state::notch_rects().lock() {
         m.insert(window.label().to_string(), rect);
@@ -512,7 +519,7 @@ fn is_start_menu_exe(path: &str) -> bool {
 }
 
 /// True while the native Start menu or Search has focus.
-fn is_start_menu_open() -> bool {
+pub fn is_start_menu_open() -> bool {
     is_start_menu_window(unsafe { windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow() })
 }
 
@@ -592,12 +599,13 @@ fn toggle_start_menu() {
         return;
     }
     LAST_START_TOGGLE_MS.store(now, Ordering::Relaxed);
+    let open_at_press = crate::state::START_OPEN_AT_PRESS.swap(false, Ordering::Relaxed);
 
     tauri::async_runtime::spawn_blocking(move || {
         use windows::Win32::UI::Input::KeyboardAndMouse::{VK_ESCAPE, VK_LWIN};
         if is_start_menu_open() {
             send_key_tap(VK_ESCAPE, 0);
-        } else if !ask_explorer_to_open_start() {
+        } else if !open_at_press && !ask_explorer_to_open_start() {
             send_key_tap(VK_LWIN, START_WIN_KEY_HOLD_MS);
         }
     });
@@ -831,30 +839,9 @@ fn launch_path(path: &str, args: Option<&str>) {
 
         use std::path::Path;
         let mut final_path = path.to_string();
-        
-        if !Path::new(&final_path).exists() {
-            if let Some(exe_name) = Path::new(&final_path).file_name() {
-                if let Some(parent) = Path::new(&final_path).parent().and_then(|p| p.parent()) {
-                    if parent.exists() {
-                        if let Ok(entries) = std::fs::read_dir(parent) {
-                            let mut app_dirs = Vec::new();
-                            for entry in entries.flatten() {
-                                let name = entry.file_name().to_string_lossy().to_string();
-                                if (name.starts_with("app-") || name.starts_with("current")) && entry.path().is_dir() {
-                                    app_dirs.push(entry.path());
-                                }
-                            }
-                            app_dirs.sort();
-                            if let Some(latest) = app_dirs.last() {
-                                let exe = latest.join(exe_name);
-                                if exe.exists() {
-                                    final_path = exe.to_string_lossy().to_string();
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+
+        if let Some(moved) = crate::utils::moved_squirrel_exe(&final_path) {
+            final_path = moved;
         }
 
         if let Some(twin) = gui_launcher_for(&final_path) {
@@ -1026,13 +1013,136 @@ unsafe fn send_behind(hwnd: HWND) {
     crate::diagnostics::log(&format!("focus: found no window to activate behind {:?}", hwnd.0));
 }
 
+fn workspace_offset(
+    monitor: &windows::Win32::Graphics::Gdi::MONITORINFO,
+    tool_window: bool,
+) -> (i32, i32) {
+    if tool_window {
+        (0, 0)
+    } else {
+        (
+            monitor.rcWork.left - monitor.rcMonitor.left,
+            monitor.rcWork.top - monitor.rcMonitor.top,
+        )
+    }
+}
+
+fn shift_rect(
+    rect: windows::Win32::Foundation::RECT,
+    (dx, dy): (i32, i32),
+) -> windows::Win32::Foundation::RECT {
+    windows::Win32::Foundation::RECT {
+        left: rect.left + dx,
+        top: rect.top + dy,
+        right: rect.right + dx,
+        bottom: rect.bottom + dy,
+    }
+}
+
+fn on_screen_restore_rect(
+    normal: windows::Win32::Foundation::RECT,
+    work: windows::Win32::Foundation::RECT,
+) -> windows::Win32::Foundation::RECT {
+    let work_w = work.right - work.left;
+    let work_h = work.bottom - work.top;
+    let fit = |size: i32, available: i32| {
+        if size >= available / 3 {
+            size.min(available)
+        } else {
+            available * 2 / 3
+        }
+    };
+    let w = fit(normal.right - normal.left, work_w);
+    let h = fit(normal.bottom - normal.top, work_h);
+    let left = work.left + (work_w - w) / 2;
+    let top = work.top + (work_h - h) / 2;
+    windows::Win32::Foundation::RECT {
+        left,
+        top,
+        right: left + w,
+        bottom: top + h,
+    }
+}
+
+fn restore_rect_on_monitor(
+    on_screen: windows::Win32::Foundation::RECT,
+    target: &windows::Win32::Graphics::Gdi::MONITORINFO,
+    tool_window: bool,
+) -> windows::Win32::Foundation::RECT {
+    let (dx, dy) = workspace_offset(target, tool_window);
+    shift_rect(on_screen_restore_rect(on_screen, target.rcWork), (-dx, -dy))
+}
+
+unsafe fn bring_restore_position_on_screen(hwnd: HWND) {
+    use windows::Win32::Foundation::POINT;
+    use windows::Win32::Graphics::Gdi::{
+        GetMonitorInfoW, MonitorFromPoint, MonitorFromRect, MONITORINFO, MONITOR_DEFAULTTONEAREST,
+        MONITOR_DEFAULTTONULL, MONITOR_DEFAULTTOPRIMARY,
+    };
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetCursorPos, GetWindowLongW, GetWindowPlacement, SetWindowPlacement, GWL_EXSTYLE,
+        WINDOWPLACEMENT, WS_EX_TOOLWINDOW,
+    };
+
+    let mut placement = WINDOWPLACEMENT {
+        length: std::mem::size_of::<WINDOWPLACEMENT>() as u32,
+        ..Default::default()
+    };
+    if GetWindowPlacement(hwnd, &mut placement).is_err() {
+        return;
+    }
+
+    let monitor_info = |monitor| {
+        let mut info = MONITORINFO {
+            cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+            ..Default::default()
+        };
+        GetMonitorInfoW(monitor, &mut info)
+            .as_bool()
+            .then_some(info)
+    };
+    let tool_window = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32 & WS_EX_TOOLWINDOW.0 != 0;
+    let normal = placement.rcNormalPosition;
+    let Some(source) = monitor_info(MonitorFromRect(&normal, MONITOR_DEFAULTTONEAREST)) else {
+        return;
+    };
+    let on_screen = shift_rect(normal, workspace_offset(&source, tool_window));
+    if !MonitorFromRect(&on_screen, MONITOR_DEFAULTTONULL).is_invalid() {
+        return;
+    }
+
+    let mut cursor = POINT::default();
+    let _ = GetCursorPos(&mut cursor);
+    let Some(target) = monitor_info(MonitorFromPoint(cursor, MONITOR_DEFAULTTOPRIMARY)) else {
+        return;
+    };
+    placement.rcNormalPosition = restore_rect_on_monitor(on_screen, &target, tool_window);
+    let _ = SetWindowPlacement(hwnd, &placement);
+}
+
+fn last_focused_window() -> Option<HWND> {
+    let map = crate::state::FOCUS_TIMESTAMPS.get()?.lock().ok()?;
+    let (&last, _) = map.iter().max_by_key(|(_, &at)| at)?;
+    let last = HWND(last as *mut _);
+    unsafe { windows::Win32::UI::WindowsAndMessaging::IsWindow(Some(last)) }
+        .as_bool()
+        .then_some(last)
+}
+
 #[tauri::command]
-pub async fn focus_window(hwnd: isize) {
+pub async fn focus_window(app: AppHandle, hwnd: isize) {
     if is_repeat_click(hwnd) {
         return;
     }
+    let dock_hwnd = app
+        .get_webview_window("dock")
+        .and_then(|window| window.hwnd().ok())
+        .map(|h| h.0 as isize);
     tauri::async_runtime::spawn_blocking(move || unsafe {
-        use windows::Win32::UI::WindowsAndMessaging::{ShowWindow, SW_RESTORE, SW_SHOW, SW_MINIMIZE, IsIconic, IsWindowVisible, GetForegroundWindow, GetWindowThreadProcessId};
+        use windows::Win32::UI::WindowsAndMessaging::{
+            GA_ROOTOWNER, GetAncestor, GetForegroundWindow, GetWindowThreadProcessId,
+            IsIconic, IsWindowVisible, ShowWindow, SW_MINIMIZE, SW_RESTORE, SW_SHOW,
+        };
         let hwnd = HWND(hwnd as *mut _);
         let my_pid = std::process::id();
 
@@ -1049,37 +1159,24 @@ pub async fn focus_window(hwnd: isize) {
 
         if !IsWindowVisible(hwnd).as_bool() {
             let _ = ShowWindow(hwnd, SW_SHOW);
+            bring_restore_position_on_screen(hwnd);
             let _ = ShowWindow(hwnd, SW_RESTORE);
             force_set_foreground(hwnd);
         } else if IsIconic(hwnd).as_bool() {
+            bring_restore_position_on_screen(hwnd);
             let _ = ShowWindow(hwnd, SW_RESTORE);
             force_set_foreground(hwnd);
         } else {
-            let fg = GetForegroundWindow();
-            let mut should_minimize = false;
-
-            if !fg.is_invalid() && fg == hwnd {
-                should_minimize = true;
-            } else if !fg.is_invalid() {
-                let mut fg_pid = 0u32;
-                let mut target_pid = 0u32;
-                GetWindowThreadProcessId(fg, Some(&mut fg_pid));
-                GetWindowThreadProcessId(hwnd, Some(&mut target_pid));
-                if fg_pid == target_pid && fg_pid != 0 && fg_pid != my_pid {
-                    should_minimize = true;
+            // Only minimize when this exact window (or an owned popup/dialog via GA_ROOTOWNER)
+            // is in front, never when another window from the same process is active.
+            let mut fg = GetForegroundWindow();
+            if dock_hwnd == Some(fg.0 as isize) {
+                if let Some(last) = last_focused_window() {
+                    fg = last;
                 }
             }
-
-            if !should_minimize {
-                let now = crate::utils::get_now_ms();
-                should_minimize = if let Some(map) = crate::state::FOCUS_TIMESTAMPS.get() {
-                    if let Ok(guard) = map.lock() {
-                        guard.get(&(hwnd.0 as *mut () as isize))
-                            .map(|ts| now - ts < 2000)
-                            .unwrap_or(false)
-                    } else { false }
-                } else { false };
-            }
+            let should_minimize = !fg.is_invalid()
+                && (fg == hwnd || GetAncestor(fg, GA_ROOTOWNER) == hwnd);
 
             if should_minimize {
                 let _ = ShowWindow(hwnd, SW_MINIMIZE);
@@ -1120,8 +1217,10 @@ pub async fn bring_hwnd_to_front(hwnd: isize) {
         let hwnd = windows::Win32::Foundation::HWND(hwnd as *mut _);
         if !IsWindowVisible(hwnd).as_bool() {
             let _ = ShowWindow(hwnd, SW_SHOW);
+            bring_restore_position_on_screen(hwnd);
             let _ = ShowWindow(hwnd, SW_RESTORE);
         } else if IsIconic(hwnd).as_bool() {
+            bring_restore_position_on_screen(hwnd);
             let _ = ShowWindow(hwnd, SW_RESTORE);
         }
 
@@ -1172,6 +1271,10 @@ pub async fn focus_app_windows(hwnds: Vec<isize>) {
         let hwnd = HWND(target as *mut _);
         if !IsWindowVisible(hwnd).as_bool() {
             let _ = ShowWindow(hwnd, SW_SHOW);
+        }
+        if IsIconic(hwnd).as_bool() {
+            bring_restore_position_on_screen(hwnd);
+            let _ = ShowWindow(hwnd, SW_RESTORE);
         }
         if IsIconic(hwnd).as_bool() {
             let _ = ShowWindow(hwnd, SW_RESTORE);
@@ -1670,6 +1773,17 @@ pub async fn get_app_icon(app: AppHandle, path: String, name: Option<String>, hw
         std::sync::Mutex::new(map)
     });
 
+    if path.to_ascii_lowercase().ends_with(".url") {
+        let p = path.clone();
+        if let Ok(Some(icon)) = tauri::async_runtime::spawn_blocking(move || url_shortcut_icon(&p)).await {
+            if let Ok(mut c) = cache.lock() {
+                c.insert(cache_key.clone(), icon.clone());
+            }
+            schedule_icon_cache_save(app.clone());
+            return Ok(Some(icon));
+        }
+    }
+
     let is_uwp_host = path.to_lowercase().contains("applicationframehost.exe");
     let stale_store_path = path.to_lowercase().contains("\\windowsapps\\") && !std::path::Path::new(&path).exists();
     let match_by_name = is_uwp_host || stale_store_path;
@@ -1746,6 +1860,9 @@ pub async fn get_app_icon(app: AppHandle, path: String, name: Option<String>, hw
         if let Some(resolved) = resolve_executable_path(&path) {
             path = resolved;
         }
+    }
+    if let Some(moved) = crate::utils::moved_squirrel_exe(&path) {
+        path = moved;
     }
 
     // Strategy 2: shell-resolved icons for Store/UWP/PWA ids and exes inside MSIX packages.
@@ -4090,6 +4207,23 @@ mod pwa_icon_tests {
     }
 
     #[test]
+    fn url_shortcut_icon_parsing_and_legacy_pwa_repair() {
+        let ini = "[InternetShortcut]\r\nURL=https://example.com\r\nIconIndex=2\r\nIconFile=C:\\Icons\\app.ico\r\n";
+        assert_eq!(
+            parse_url_shortcut_icon(ini),
+            Some(("C:\\Icons\\app.ico".to_string(), 2))
+        );
+        assert_eq!(
+            repair_legacy_pwa_path("C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe", Some("--app-id=xyz123")).as_deref(),
+            Some("shell:AppsFolder\\MSEdge._crx_xyz123")
+        );
+        assert_eq!(
+            repair_legacy_pwa_path("shell:AppsFolder\\Chrome._crx_abc", Some("--app-id=abc")),
+            None
+        );
+    }
+
+    #[test]
     fn command_line_arg_parsing() {
         let args = "--profile-directory=\"Profile 1\" --app-id=abcdef --ip-aumid=Package_Pub!App";
         assert_eq!(extract_arg(args, "--app-id="), Some("abcdef".into()));
@@ -4212,10 +4346,15 @@ pub fn setup_shelf_drop(app: AppHandle) {
 
 #[tauri::command]
 pub async fn shelf_thumbnail(path: String) -> Option<String> {
-    tauri::async_runtime::spawn_blocking(move || shelf_image_thumbnail(&path).or_else(|| shelf_shell_thumbnail(&path)))
-        .await
-        .ok()
-        .flatten()
+    tauri::async_runtime::spawn_blocking(move || {
+        shelf_image_thumbnail(&path)
+            .or_else(|| crate::shelf_preview::pdf_thumbnail(&path))
+            .or_else(|| crate::shelf_preview::office_thumbnail(&path))
+            .or_else(|| shelf_shell_thumbnail(&path))
+    })
+    .await
+    .ok()
+    .flatten()
 }
 
 pub(crate) fn extract_shelf_text_preview(p: &std::path::Path) -> Option<String> {
@@ -4227,7 +4366,7 @@ pub(crate) fn extract_shelf_text_preview(p: &std::path::Path) -> Option<String> 
             | "html" | "htm" | "css" | "js" | "jsx" | "ts" | "tsx" | "rs" | "py" | "go" | "java" | "c" | "h" | "cpp" | "cs"
             | "sh" | "ps1" | "bat" | "sql" | "rtf"
     ) {
-        return None;
+        return crate::shelf_preview::office_text_preview(p);
     }
     let mut buf = vec![0u8; 1024];
     let n = std::fs::File::open(p).ok()?.read(&mut buf).ok()?;
@@ -4389,6 +4528,110 @@ pub async fn focus_agent_window(window: u64) {
 #[tauri::command]
 pub fn agent_answer(id: u64, allow: bool, choices: Option<Vec<usize>>) {
     crate::agent_api::answer(id, allow, choices.unwrap_or_default());
+}
+
+pub(crate) fn parse_url_shortcut_icon(content: &str) -> Option<(String, i32)> {
+    let mut icon_file = None;
+    let mut icon_index = 0i32;
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if let Some((k, v)) = trimmed.split_once('=') {
+            if k.trim().eq_ignore_ascii_case("IconFile") {
+                let val = crate::taskbar_pins::expand_env(v.trim());
+                if !val.is_empty() {
+                    icon_file = Some(val);
+                }
+            } else if k.trim().eq_ignore_ascii_case("IconIndex") {
+                icon_index = v.trim().parse::<i32>().unwrap_or(0);
+            }
+        }
+    }
+    icon_file.map(|f| (f, icon_index))
+}
+
+fn url_shortcut_icon(path: &str) -> Option<String> {
+    let content = std::fs::read_to_string(path).ok()?;
+    let (icon_file, icon_index) = parse_url_shortcut_icon(&content)?;
+    let icon_path = std::path::Path::new(&icon_file);
+    if !icon_path.exists() {
+        return None;
+    }
+    let ext = icon_path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
+    if matches!(ext.as_str(), "png" | "ico" | "jpg" | "jpeg" | "bmp" | "webp") {
+        if let Ok(img) = image::open(icon_path) {
+            let mut png = Vec::new();
+            if img.thumbnail(128, 128).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).is_ok() {
+                use base64::Engine;
+                return Some(format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(&png)));
+            }
+        }
+    }
+    unsafe {
+        use windows::Win32::UI::Shell::ExtractIconExW;
+        use windows::Win32::UI::WindowsAndMessaging::{DestroyIcon, HICON};
+        let wide: Vec<u16> = icon_file.encode_utf16().chain(Some(0)).collect();
+        let mut large = HICON::default();
+        let count = ExtractIconExW(windows::core::PCWSTR(wide.as_ptr()), icon_index, Some(&mut large), None, 1);
+        if count > 0 && !large.is_invalid() {
+            let b64 = icon_to_base64(large);
+            let _ = DestroyIcon(large);
+            return b64;
+        }
+    }
+    None
+}
+
+pub(crate) fn repair_legacy_pwa_path(path: &str, args: Option<&str>) -> Option<String> {
+    let lower = path.to_ascii_lowercase();
+    if lower.starts_with("shell:appsfolder\\") {
+        return None;
+    }
+    let args_str = args?;
+    let app_id = args_str
+        .split_whitespace()
+        .find_map(|tok| tok.strip_prefix("--app-id="))
+        .map(|s| s.trim_matches('"'))?;
+    if app_id.is_empty() {
+        return None;
+    }
+    if lower.ends_with("msedge.exe") {
+        Some(format!("shell:AppsFolder\\MSEdge._crx_{app_id}"))
+    } else if lower.ends_with("chrome.exe") {
+        Some(format!("shell:AppsFolder\\Chrome._crx_{app_id}"))
+    } else if lower.ends_with("brave.exe") {
+        Some(format!("shell:AppsFolder\\Brave._crx_{app_id}"))
+    } else {
+        None
+    }
+}
+
+#[tauri::command]
+pub fn get_agent_integrations_status() -> Vec<crate::agent_api::IntegrationStatus> {
+    crate::agent_api::integrations_status()
+}
+
+#[tauri::command]
+pub async fn sync_agent_integration(id: String, enable: bool) -> Vec<crate::agent_api::IntegrationStatus> {
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::agent_api::sync_single_integration(&id, enable);
+        crate::agent_api::integrations_status()
+    })
+    .await
+    .unwrap_or_default()
+}
+
+#[tauri::command]
+pub async fn get_tray_app_names() -> Vec<String> {
+    tauri::async_runtime::spawn_blocking(crate::tray_icons::list_tray_app_names)
+        .await
+        .unwrap_or_default()
+}
+
+#[tauri::command]
+pub async fn trigger_tray_app(name: String, context_menu: bool) -> bool {
+    tauri::async_runtime::spawn_blocking(move || crate::tray_icons::trigger_tray_app(&name, context_menu))
+        .await
+        .unwrap_or(false)
 }
 
 const AGENT_SOUND_STATES: [&str; 3] = ["needs_input", "done", "error"];
@@ -4586,6 +4829,11 @@ pub fn toggle_target_app_mute(target: String, pids: Option<Vec<u32>>) -> Result<
 }
 
 #[tauri::command]
+pub fn get_media_info() -> Option<crate::types::MediaInfo> {
+    crate::state::LAST_MEDIA.lock().ok().and_then(|last| last.clone())
+}
+
+#[tauri::command]
 pub async fn get_lyrics(
     app: AppHandle,
     title: String,
@@ -4655,6 +4903,28 @@ mod metrics_tests {
         assert_eq!(extract_shelf_text_preview(&nul_txt), None);
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn replaces_a_stub_size_with_two_thirds_of_the_work_area() {
+        use windows::Win32::Foundation::RECT;
+        let rect = |left, top, width, height| RECT { left, top, right: left + width, bottom: top + height };
+        let work = rect(0, 0, 2880, 1800);
+        assert_eq!(
+            super::on_screen_restore_rect(rect(-32000, -32000, 945, 200), work),
+            rect(480, 300, 1920, 1200)
+        );
+    }
+
+    #[test]
+    fn shrinks_an_oversized_window_to_the_work_area_of_its_monitor() {
+        use windows::Win32::Foundation::RECT;
+        let rect = |left, top, width, height| RECT { left, top, right: left + width, bottom: top + height };
+        let work = rect(2880, 100, 1920, 980);
+        assert_eq!(
+            super::on_screen_restore_rect(rect(-32000, -32000, 3000, 2000), work),
+            work
+        );
     }
 }
 

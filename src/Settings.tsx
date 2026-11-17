@@ -4,7 +4,7 @@ import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { Effect, EffectState } from "@tauri-apps/api/window";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { Settings, Palette, PanelTop, Monitor, Layers, Activity, Info } from "lucide-react";
+import { Settings, Palette, PanelTop, Monitor, Layers, Plug, Activity, Info } from "lucide-react";
 import { WindowControls } from "./components/WindowControls";
 import {
   useSettings,
@@ -14,6 +14,7 @@ import {
   CalendarSyncPage,
   DockTab,
   OverlaysTab,
+  IntegrationsTab,
   DiagnosticsTab,
   AboutTab,
 } from "./settings/index";
@@ -31,6 +32,7 @@ const TABS: { id: SettingsTab; labelKey: string; icon: typeof Settings }[] = [
   { id: "notch", labelKey: "tabs.notch", icon: PanelTop },
   { id: "dock", labelKey: "tabs.dock", icon: Monitor },
   { id: "overlays", labelKey: "tabs.overlays", icon: Layers },
+  { id: "integrations", labelKey: "tabs.integrations", icon: Plug },
   { id: "diagnostics", labelKey: "tabs.diagnostics", icon: Activity },
   { id: "about", labelKey: "tabs.about", icon: Info },
 ];
@@ -281,6 +283,14 @@ function SettingsApp() {
               toggleAgentSounds={settings.toggleAgentSounds}
               notchEdgeDelay={settings.notchEdgeDelay}
               handleNotchEdgeDelayChange={settings.handleNotchEdgeDelayChange}
+            />
+          )}
+          {activeTab === "integrations" && (
+            <IntegrationsTab
+              agentApiEnabled={settings.agentApiEnabled}
+              toggleAgentApi={settings.toggleAgentApi}
+              agentSoundsEnabled={settings.agentSoundsEnabled}
+              toggleAgentSounds={settings.toggleAgentSounds}
             />
           )}
           {activeTab === "dock" && (

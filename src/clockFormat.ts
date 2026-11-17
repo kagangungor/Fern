@@ -28,3 +28,26 @@ export function parseDuration(text: string): number | null {
   }
   return seconds > 0 && seconds <= MAX_SECONDS ? seconds : null;
 }
+
+/** Formats up to 6 right-to-left typed digits as MM:SS or HH:MM:SS (e.g. "130" -> "01:30"). */
+export function rtlDigitsToDisplay(digits: string): string {
+  const clean = digits.replace(/\D/g, "").slice(-6);
+  if (clean.length > 4) {
+    const padded = clean.padStart(6, "0");
+    return `${padded.slice(0, 2)}:${padded.slice(2, 4)}:${padded.slice(4, 6)}`;
+  }
+  const padded = clean.padStart(4, "0");
+  return `${padded.slice(0, 2)}:${padded.slice(2, 4)}`;
+}
+
+/** Converts right-to-left typed digits ("130" -> 90s, "2500" -> 1500s) into seconds. */
+export function rtlDigitsToSeconds(digits: string): number | null {
+  const clean = digits.replace(/\D/g, "").slice(-6);
+  if (!clean) return null;
+  const padded = clean.padStart(6, "0");
+  const h = Number(padded.slice(0, 2));
+  const m = Number(padded.slice(2, 4));
+  const s = Number(padded.slice(4, 6));
+  const total = h * 3600 + m * 60 + s;
+  return total > 0 && total <= MAX_SECONDS ? total : null;
+}

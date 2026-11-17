@@ -5,10 +5,11 @@ use windows::Win32::Foundation::{HWND, POINT, RECT};
 use windows::Win32::Graphics::Gdi::{GetMonitorInfoW, MonitorFromPoint, MONITORINFO, MONITOR_DEFAULTTONEAREST};
 use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_INPROC_SERVER};
 use windows::Win32::UI::Accessibility::{
-    CUIAutomation, IUIAutomation, IUIAutomationElement, IUIAutomationExpandCollapsePattern,
-    IUIAutomationInvokePattern, IUIAutomationLegacyIAccessiblePattern, IUIAutomationTogglePattern,
-    TreeScope_Descendants, UIA_ExpandCollapsePatternId, UIA_InvokePatternId,
-    UIA_LegacyIAccessiblePatternId, UIA_TogglePatternId,
+    CUIAutomation, IUIAutomation, IUIAutomationElement, IUIAutomationElement3,
+    IUIAutomationExpandCollapsePattern, IUIAutomationInvokePattern,
+    IUIAutomationLegacyIAccessiblePattern, IUIAutomationTogglePattern, TreeScope_Descendants,
+    UIA_ExpandCollapsePatternId, UIA_InvokePatternId, UIA_LegacyIAccessiblePatternId,
+    UIA_TogglePatternId,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, FindWindowA, FindWindowExA, GetAncestor, GetClassNameA, GetCursorPos, GetForegroundWindow,
@@ -554,4 +555,132 @@ pub fn schedule_taskbar_layout_refresh() {
         crate::utils::set_taskbar_visibility(false, false);
         crate::state::NATIVE_TASKBAR_HIDDEN.store(true, Ordering::SeqCst);
     });
+}
+
+fn collect_tray_elements(automation: &IUIAutomation) -> Vec<(String, IUIAutomationElement)> {
+    let mut out = Vec::new();
+    unsafe {
+        let Ok(cond) = automation.CreateTrueCondition() else {
+            return out;
+        };
+        let mut roots = Vec::new();
+        if let Ok(tray) = find_window(c"Shell_TrayWnd") {
+            let bridge = FindWindowExA(
+                Some(tray),
+                None,
+                windows::core::PCSTR(c"Windows.UI.Composition.DesktopWindowContentBridge".as_ptr() as *const u8),
+                windows::core::PCSTR::null(),
+            )
+            .unwrap_or_default();
+            if !bridge.0.is_null() {
+                roots.push(bridge);
+            }
+            let notify = FindWindowExA(
+                Some(tray),
+                None,
+                windows::core::PCSTR(c"TrayNotifyWnd".as_ptr() as *const u8),
+                windows::core::PCSTR::null(),
+            )
+            .unwrap_or_default();
+            if !notify.0.is_null() {
+                roots.push(notify);
+            }
+        }
+        if let Some(overflow) = find_overflow_window() {
+            if IsWindowVisible(overflow).as_bool() {
+                roots.push(overflow);
+            }
+        }
+        for root_hwnd in roots {
+            let Ok(root) = automation.ElementFromHandle(root_hwnd) else {
+                continue;
+            };
+            let Ok(arr) = root.FindAll(TreeScope_Descendants, &cond) else {
+                continue;
+            };
+            let count = arr.Length().unwrap_or(0);
+            for i in 0..count {
+                let Ok(el) = arr.GetElement(i) else {
+                    continue;
+                };
+                let name = el.CurrentName().map(|s| s.to_string()).unwrap_or_default();
+                let trimmed = name.trim();
+                if !trimmed.is_empty() && !is_system_tray_label(trimmed) {
+                    out.push((trimmed.to_string(), el));
+                }
+            }
+        }
+    }
+    out
+}
+
+fn is_system_tray_label(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    matches!(
+        lower.as_str(),
+        "show hidden icons"
+            | "gizli simgeleri göster"
+            | "system tray overflow window."
+            | "notification chevron"
+    )
+}
+
+pub(crate) fn matches_tray_name(tray_label: &str, app_name: &str) -> bool {
+    let tray = tray_label.trim().to_ascii_lowercase();
+    let app = app_name.trim().to_ascii_lowercase();
+    !tray.is_empty() && !app.is_empty() && (tray == app || tray.contains(&app) || app.contains(&tray))
+}
+
+pub fn list_tray_app_names() -> Vec<String> {
+    let Ok(_guard) = AUTOMATION_LOCK.try_lock() else {
+        return Vec::new();
+    };
+    let _com = crate::utils::ComGuard::mta();
+    let Ok(auto) = automation() else {
+        return Vec::new();
+    };
+    let mut names: Vec<String> = collect_tray_elements(&auto)
+        .into_iter()
+        .map(|(n, _)| n)
+        .collect();
+    names.sort();
+    names.dedup();
+    names
+}
+
+pub fn trigger_tray_app(app_name: &str, context_menu: bool) -> bool {
+    let Ok(_guard) = AUTOMATION_LOCK.lock() else {
+        return false;
+    };
+    let _com = crate::utils::ComGuard::mta();
+    let Ok(auto) = automation() else {
+        return false;
+    };
+    let elements = collect_tray_elements(&auto);
+    let Some((_, el)) = elements.into_iter().find(|(label, _)| matches_tray_name(label, app_name)) else {
+        return false;
+    };
+    if context_menu {
+        unsafe {
+            if let Ok(el3) = el.cast::<IUIAutomationElement3>() {
+                if el3.ShowContextMenu().is_ok() {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+    invoke_element(&el)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn matches_tray_name_case_insensitively() {
+        assert!(matches_tray_name("Discord - 2 unread", "Discord"));
+        assert!(matches_tray_name("Steam", "steam"));
+        assert!(!matches_tray_name("Show hidden icons", "Discord"));
+    }
 }

@@ -1,7 +1,7 @@
 use std::sync::{atomic::{AtomicBool, AtomicU32, AtomicI64}, Mutex, OnceLock};
 use std::sync::mpsc::Sender;
 use std::collections::HashMap;
-use crate::types::{SystemCommand, IntRect, AppInfo};
+use crate::types::{SystemCommand, IntRect, AppInfo, MediaInfo};
 use tauri::{AppHandle, PhysicalPosition, PhysicalSize};
 
 pub static COMMAND_SENDER: OnceLock<Sender<SystemCommand>> = OnceLock::new();
@@ -12,6 +12,8 @@ pub static SHUTTING_DOWN: AtomicBool = AtomicBool::new(false);
 /// This launch follows a restart or a crash, so calendars should sync right away.
 pub static RELAUNCHED: AtomicBool = AtomicBool::new(false);
 pub static KEYBOARD_FOCUS_LABEL: Mutex<Option<String>> = Mutex::new(None);
+pub static LAST_MEDIA: Mutex<Option<MediaInfo>> = Mutex::new(None);
+pub static START_OPEN_AT_PRESS: AtomicBool = AtomicBool::new(false);
 
 macro_rules! label_map {
     ($fn_name:ident, $val_ty:ty) => {
@@ -23,6 +25,7 @@ macro_rules! label_map {
 }
 
 label_map!(dock_rects, IntRect);
+label_map!(dock_expanded_rects, IntRect);
 label_map!(notch_rects, IntRect);
 label_map!(dock_hovered, bool);
 label_map!(notch_hovered, bool);

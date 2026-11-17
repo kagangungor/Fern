@@ -22,6 +22,13 @@
     image-rendering: auto;
 }
 
+.surface-clip {
+    position: absolute;
+    z-index: 0;
+    pointer-events: none;
+    overflow: hidden;
+}
+
 .edge-outline {
     display: none;
     position: absolute;
@@ -169,6 +176,9 @@
         var(--surface-grain),
         linear-gradient(var(--glass-tint), var(--glass-tint)),
         var(--backdrop-image);
+    background-size: auto, auto, var(--backdrop-size);
+    background-repeat: repeat, no-repeat, no-repeat;
+    background-position: 0 0, 0 0, var(--backdrop-x) var(--backdrop-y);
 }
 
 :root.has-backdrop.style-frosted .dock > .surface-fill {
@@ -203,12 +213,7 @@
         var(--backdrop-image);
 }
 
-/* The album glow fades into the glass instead of into a solid dark edge */
-:root:is(.style-frosted, .style-liquid) .notch-ambient-glow {
-    -webkit-mask-image: radial-gradient(ellipse at center, #000 25%, rgba(0, 0, 0, 0) 85%);
-    mask-image: radial-gradient(ellipse at center, #000 25%, rgba(0, 0, 0, 0) 85%);
-}
-
+/* In glass styles, skip the dark scrim so the glow tints the frosted/liquid backdrop directly */
 :root:is(.style-frosted, .style-liquid) .notch-ambient-glow::after {
     display: none;
 }
@@ -232,7 +237,7 @@
 }
 
 .light-mode .notch-ambient-glow::after {
-    background: radial-gradient(ellipse at center, transparent 25%, rgba(255, 255, 255, 0.3) 55%, var(--notch-bg, var(--fern-bg)) 88%);
+    background: radial-gradient(ellipse at center, transparent 25%, rgba(255, 255, 255, 0.3) 60%, rgba(255, 255, 255, 0.45) 100%);
 }
 
 :root:is(.style-frosted, .style-liquid) .dock:not(.dock-icon-only) .dock-icon {

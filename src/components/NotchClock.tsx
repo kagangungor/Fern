@@ -1,8 +1,38 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { Stopwatch } from "../hooks/useStopwatch";
-import { formatStopwatch, parseDuration } from "../clockFormat";
+import { formatStopwatch, rtlDigitsToDisplay, rtlDigitsToSeconds } from "../clockFormat";
 import { useT } from "../i18n";
+
+const DIGITS = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"];
+
+function OdometerDisplay({ value }: { value: string }) {
+  return (
+    <span className="odometer-clock" aria-label={value}>
+      {value.split("").map((ch, idx) => {
+        if (ch < "0" || ch > "9") {
+          return (
+            <span key={`sep-${idx}`} className="odometer-sep">
+              {ch}
+            </span>
+          );
+        }
+        const d = Number(ch);
+        return (
+          <span key={`d-${value.length - idx}`} className="odometer-digit">
+            <span className="odometer-strip" style={{ transform: `translateY(-${d * 10}%)` }}>
+              {DIGITS.map((n) => (
+                <span key={n} className="odometer-cell">
+                  {n}
+                </span>
+              ))}
+            </span>
+          </span>
+        );
+      })}
+    </span>
+  );
+}
 
 type Tab = "timer" | "stopwatch";
 
@@ -65,9 +95,9 @@ export function NotchClock({
 }: Props) {
   const t = useT();
   const [savedTab, setSavedTab] = useState<Tab>(readTab);
-  const [custom, setCustom] = useState("");
-  const [invalid, setInvalid] = useState(false);
-  const customRef = useRef<HTMLInputElement>(null);
+  const [editing, setEditing] = useState(false);
+  const [editDigits, setEditDigits] = useState("");
+  const displayRef = useRef<HTMLDivElement>(null);
 
   const setKeyboardFocus = (enabled: boolean) => invoke("set_window_keyboard_focus", { enabled }).catch(() => {});
   useEffect(() => () => void setKeyboardFocus(false), []);
@@ -79,16 +109,46 @@ export function NotchClock({
     remember(TAB_KEY, next);
   };
 
-  const submitCustom = (e: React.FormEvent) => {
-    e.preventDefault();
-    const seconds = parseDuration(custom);
-    if (seconds === null) {
-      setInvalid(true);
+  const startEditing = () => {
+    if (isTimerRunning) return;
+    setEditing(true);
+    setEditDigits("");
+    setKeyboardFocus(true).finally(() => displayRef.current?.focus());
+  };
+
+  const stopEditing = () => {
+    setEditing(false);
+    setEditDigits("");
+    setKeyboardFocus(false);
+  };
+
+  const commitEdit = () => {
+    const secs = rtlDigitsToSeconds(editDigits);
+    stopEditing();
+    if (secs !== null) onStartTimer(secs);
+  };
+
+  const handleDisplayKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (!editing) {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        startEditing();
+      }
       return;
     }
-    setInvalid(false);
-    setCustom("");
-    onStartTimer(seconds);
+    if (/^\d$/.test(e.key)) {
+      e.preventDefault();
+      setEditDigits((prev) => (prev + e.key).slice(-6));
+    } else if (e.key === "Backspace") {
+      e.preventDefault();
+      setEditDigits((prev) => prev.slice(0, -1));
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      commitEdit();
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      stopEditing();
+    }
   };
 
   const recentLaps = stopwatch.laps.slice(-3).map((total, i, list) => {
@@ -118,46 +178,43 @@ export function NotchClock({
 
         {tab === "timer" ? (
           <>
-            <div className="timer-display-large">
-              <span className="timer-time-large">{formatTimerTime(timerSeconds)}</span>
+            <div
+              ref={displayRef}
+              tabIndex={isTimerRunning ? -1 : 0}
+              role="button"
+              aria-label={t("clock.custom.label")}
+              title={isTimerRunning ? undefined : t("clock.custom.placeholder")}
+              className={`timer-display-large odometer-editable${editing ? " editing" : ""}${isTimerRunning ? " running" : ""}`}
+              onMouseDown={(e) => {
+                if (!isTimerRunning) {
+                  e.preventDefault();
+                  startEditing();
+                }
+              }}
+              onKeyDown={handleDisplayKeyDown}
+              onBlur={stopEditing}
+            >
+              <span className="timer-time-large">
+                <OdometerDisplay value={editing ? rtlDigitsToDisplay(editDigits) : formatTimerTime(timerSeconds)} />
+              </span>
             </div>
 
             <div className="timer-controls-new">
-              <button onClick={onToggleTimer} className="timer-btn primary">
+              <button onClick={editing ? commitEdit : onToggleTimer} className="timer-btn primary">
                 {isTimerRunning ? t("clock.pause") : t("clock.start")}
               </button>
-              <button onClick={onResetTimer} className="timer-btn secondary">
+              <button onClick={() => { stopEditing(); onResetTimer(); }} className="timer-btn secondary">
                 {t("clock.reset")}
               </button>
             </div>
 
             <div className="timer-presets-new">
               {PRESETS.map((mins) => (
-                <button key={mins} onClick={() => onStartTimer(mins * 60)} className="preset-btn-small">
+                <button key={mins} onClick={() => { stopEditing(); onStartTimer(mins * 60); }} className="preset-btn-small">
                   {mins}m
                 </button>
               ))}
             </div>
-
-            <form className={`timer-custom${invalid ? " invalid" : ""}`} onSubmit={submitCustom}>
-              <input
-                ref={customRef}
-                onMouseDown={() => setKeyboardFocus(true).finally(() => customRef.current?.focus())}
-                onBlur={() => setKeyboardFocus(false)}
-                value={custom}
-                onChange={(e) => {
-                  setCustom(e.target.value.replace(/[^\d:]/g, ""));
-                  setInvalid(false);
-                }}
-                inputMode="numeric"
-                placeholder={t("clock.custom.placeholder")}
-                spellCheck={false}
-                aria-label={t("clock.custom.label")}
-              />
-              <button type="submit" disabled={!custom.trim()}>
-                {t("clock.go")}
-              </button>
-            </form>
           </>
         ) : (
           <>

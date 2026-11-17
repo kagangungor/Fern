@@ -66,11 +66,86 @@ static ORIGINAL_SEC_TRAY_RECTS: std::sync::Mutex<Vec<(isize, windows::Win32::Fou
 static ORIGINAL_TASKBAR_STATE: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(-1);
 
 static TASKBAR_MARKER: OnceLock<PathBuf> = OnceLock::new();
+static TASKBAR_WATCHDOG_STARTED: std::sync::Mutex<bool> = std::sync::Mutex::new(false);
 
 /// Point the crash-recovery marker at this user's app config dir (called from setup).
 pub fn init_taskbar_marker(app: &tauri::AppHandle) {
     if let Ok(dir) = app.path().app_config_dir() {
         let _ = TASKBAR_MARKER.set(dir.join("taskbar_hidden.flag"));
+    }
+}
+
+/// Spawns a separate watchdog process that restores Explorer's taskbar if Fern
+/// is force-killed or crashes without running exit handlers.
+pub fn start_taskbar_watchdog() -> std::io::Result<()> {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+    let mut started = TASKBAR_WATCHDOG_STARTED
+        .lock()
+        .map_err(|_| std::io::Error::other("taskbar watchdog lock poisoned"))?;
+    if *started {
+        return Ok(());
+    }
+    let marker = TASKBAR_MARKER.get().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "taskbar marker path unavailable",
+        )
+    })?;
+    if let Some(dir) = marker.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    std::process::Command::new(std::env::current_exe()?)
+        .arg("--taskbar-watchdog")
+        .arg(std::process::id().to_string())
+        .arg(marker)
+        .creation_flags(CREATE_NO_WINDOW)
+        .spawn()?;
+    *started = true;
+    Ok(())
+}
+
+pub fn run_taskbar_watchdog(parent_pid: u32, marker: PathBuf) {
+    use windows::Win32::Foundation::{
+        CloseHandle, GetLastError, ERROR_INVALID_PARAMETER, WAIT_OBJECT_0,
+    };
+    use windows::Win32::System::Threading::{
+        OpenProcess, WaitForSingleObject, INFINITE, PROCESS_SYNCHRONIZE,
+    };
+    // Only treat a missing PID as an already-exited parent. Access denied or
+    // another wait failure must not restore the taskbar over a live Fern.
+    unsafe {
+        match OpenProcess(PROCESS_SYNCHRONIZE, false, parent_pid) {
+            Ok(parent) => {
+                let result = WaitForSingleObject(parent, INFINITE);
+                let _ = CloseHandle(parent);
+                if result != WAIT_OBJECT_0 {
+                    return;
+                }
+            }
+            Err(_) if GetLastError() == ERROR_INVALID_PARAMETER => {}
+            Err(_) => {
+                return;
+            }
+        }
+    }
+    let _ = TASKBAR_MARKER.set(marker.clone());
+    // Explorer can be restarting at the same time. Retry briefly, but never
+    // act on a marker owned by a replacement Fern process.
+    for _ in 0..120 {
+        if std::fs::read_to_string(&marker)
+            .ok()
+            .and_then(|contents| parse_marker_pid(&contents))
+            != Some(parent_pid)
+        {
+            return;
+        }
+        restore_taskbar_after_crash();
+        if !marker.exists() {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(250));
     }
 }
 
@@ -148,22 +223,100 @@ unsafe fn restore_tray_position(hwnd: windows::Win32::Foundation::HWND, primary:
 
 /// The marker stores the user's own taskbar state from before we forced auto-hide,
 /// so a crash can't lose it. Old markers just have "1".
-fn marker_contents(original_state: i32) -> String {
-    format!("abstate={original_state}")
+fn marker_contents(
+    original_state: i32,
+    pid: u32,
+    primary: Option<windows::Win32::Foundation::RECT>,
+    secondaries: &[(isize, windows::Win32::Foundation::RECT)],
+) -> String {
+    let mut contents = format!("abstate={original_state}\npid={pid}\n");
+    if let Some(rect) = primary {
+        contents.push_str(&format!(
+            "primary={},{},{},{}\n",
+            rect.left, rect.top, rect.right, rect.bottom
+        ));
+    }
+    let mut sorted = secondaries.to_vec();
+    sorted.sort_by_key(|(hwnd, _)| *hwnd);
+    for (hwnd, rect) in sorted {
+        contents.push_str(&format!(
+            "secondary={hwnd},{},{},{},{}\n",
+            rect.left, rect.top, rect.right, rect.bottom
+        ));
+    }
+    contents
 }
 
 fn parse_marker_state(contents: &str) -> Option<i32> {
-    contents.trim().strip_prefix("abstate=")?.parse().ok()
+    contents
+        .lines()
+        .next()?
+        .strip_prefix("abstate=")?
+        .parse()
+        .ok()
+}
+
+fn parse_marker_pid(contents: &str) -> Option<u32> {
+    contents
+        .lines()
+        .find_map(|line| line.strip_prefix("pid=")?.parse().ok())
+}
+
+fn parse_rect<'a>(mut parts: impl Iterator<Item = &'a str>) -> Option<windows::Win32::Foundation::RECT> {
+    let mut next = || parts.next()?.parse::<i32>().ok();
+    let rect = windows::Win32::Foundation::RECT {
+        left: next()?,
+        top: next()?,
+        right: next()?,
+        bottom: next()?,
+    };
+    parts.next().is_none().then_some(rect)
+}
+
+fn parse_marker_rect(contents: &str, key: &str) -> Option<windows::Win32::Foundation::RECT> {
+    parse_rect(
+        contents
+            .lines()
+            .find_map(|line| line.strip_prefix(key))?
+            .split(','),
+    )
+}
+
+fn parse_marker_secondaries(contents: &str) -> Vec<(isize, windows::Win32::Foundation::RECT)> {
+    contents
+        .lines()
+        .filter_map(|line| {
+            let mut parts = line.strip_prefix("secondary=")?.split(',');
+            let hwnd = parts.next()?.parse::<isize>().ok()?;
+            Some((hwnd, parse_rect(parts)?))
+        })
+        .collect()
 }
 
 /// Restores the taskbar after a session died with it hidden, using the state saved in the marker.
 pub fn restore_taskbar_after_crash() {
     let saved = TASKBAR_MARKER
         .get()
-        .and_then(|p| std::fs::read_to_string(p).ok())
-        .and_then(|contents| parse_marker_state(&contents));
-    if let Some(state) = saved {
-        ORIGINAL_TASKBAR_STATE.store(state, std::sync::atomic::Ordering::Relaxed);
+        .and_then(|p| std::fs::read_to_string(p).ok());
+    if let Some(contents) = saved {
+        if let Some(state) = parse_marker_state(&contents) {
+            ORIGINAL_TASKBAR_STATE.store(state, std::sync::atomic::Ordering::Relaxed);
+        }
+        if let Some(rect) = parse_marker_rect(&contents, "primary=") {
+            if let Ok(mut guard) = ORIGINAL_TRAY_RECT.lock() {
+                if guard.is_none() {
+                    *guard = Some(rect);
+                }
+            }
+        }
+        let secs = parse_marker_secondaries(&contents);
+        if !secs.is_empty() {
+            if let Ok(mut guard) = ORIGINAL_SEC_TRAY_RECTS.lock() {
+                if guard.is_empty() {
+                    *guard = secs;
+                }
+            }
+        }
     }
     set_taskbar_visibility(true, true);
 }
@@ -210,17 +363,13 @@ pub fn set_taskbar_visibility(visible: bool, always_on_top: bool) {
             ORIGINAL_TASKBAR_STATE.store(original_state as i32, std::sync::atomic::Ordering::Relaxed);
         }
 
-        // Crash marker: written when hidden so the next launch can undo it after a force kill.
-        // Written after the original state is known so it can carry it.
         if visible {
             if let Some(p) = TASKBAR_MARKER.get() {
                 let _ = std::fs::remove_file(p);
             }
-        } else if let Some(p) = TASKBAR_MARKER.get() {
-            if !p.exists() {
-                let original = ORIGINAL_TASKBAR_STATE.load(std::sync::atomic::Ordering::Relaxed);
-                let _ = std::fs::write(p, marker_contents(original));
-            }
+        } else if start_taskbar_watchdog().is_err() {
+            // Never hide the taskbar without the watchdog guarding recovery.
+            return;
         }
 
         let state_val = if visible {
@@ -312,6 +461,25 @@ pub fn set_taskbar_visibility(visible: bool, always_on_top: bool) {
                 }
                 let _ = ShowWindow(secondary_tray_hwnd, SW_HIDE);
                 park_below_monitor(secondary_tray_hwnd, false);
+            }
+        }
+
+        if !visible {
+            if let Some(p) = TASKBAR_MARKER.get() {
+                let original = ORIGINAL_TASKBAR_STATE.load(std::sync::atomic::Ordering::Relaxed);
+                let primary = ORIGINAL_TRAY_RECT.lock().ok().and_then(|g| *g);
+                let secondaries = ORIGINAL_SEC_TRAY_RECTS.lock().ok().map(|g| g.clone()).unwrap_or_default();
+                let contents = marker_contents(original, std::process::id(), primary, &secondaries);
+                let existing = std::fs::read_to_string(p).ok();
+                let owned_by_other = (existing.is_some() || p.exists())
+                    && existing.as_deref().and_then(parse_marker_pid) != Some(std::process::id());
+                if !owned_by_other && existing.as_deref() != Some(contents.as_str()) {
+                    use std::io::Write;
+                    let _ = std::fs::File::create(p).and_then(|mut file| {
+                        file.write_all(contents.as_bytes())?;
+                        file.sync_all()
+                    });
+                }
             }
         }
 
@@ -985,6 +1153,60 @@ pub fn resolve_executable_path(name: &str) -> Option<String> {
     known_install_location(&file)
 }
 
+/// The version in a Squirrel version folder's name: `app-1.0.9264` is
+/// `[1, 0, 9264]`. Compared as numbers, so `app-1.0.10000` is newer.
+fn squirrel_folder_version(name: &str) -> Option<Vec<u64>> {
+    let version = name
+        .get(..4)?
+        .eq_ignore_ascii_case("app-")
+        .then(|| &name[4..])?;
+    version
+        .split('.')
+        .map(|part| part.parse::<u64>().ok())
+        .collect()
+}
+
+/// The newest of a Squirrel app's version folders, by name.
+fn newest_squirrel_folder<'a>(names: impl IntoIterator<Item = &'a str>) -> Option<&'a str> {
+    names
+        .into_iter()
+        .filter_map(|name| squirrel_folder_version(name).map(|v| (v, name)))
+        .max_by(|a, b| a.0.cmp(&b.0))
+        .map(|(_, name)| name)
+}
+
+/// Resolves the current executable for a Squirrel-installed app (Discord, Slack,
+/// GitHub Desktop, Postman, Figma) when its old `app-<version>` folder was deleted
+/// by an update, or returns None if the path still exists or isn't Squirrel-managed.
+pub fn moved_squirrel_exe(path: &str) -> Option<String> {
+    let path = std::path::Path::new(path.trim().trim_matches('"'));
+    if path.exists() {
+        return None;
+    }
+    let folder = path.parent()?;
+    let folder_name = folder.file_name()?.to_str()?;
+    if squirrel_folder_version(folder_name).is_none()
+        && !folder_name.eq_ignore_ascii_case("current")
+    {
+        return None;
+    }
+    let root = folder.parent()?;
+    let exe = path.file_name()?;
+    let names: Vec<String> = std::fs::read_dir(root)
+        .ok()?
+        .flatten()
+        .filter(|entry| entry.path().join(exe).is_file())
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .collect();
+    let newest = newest_squirrel_folder(names.iter().map(String::as_str)).or_else(|| {
+        names
+            .iter()
+            .find(|n| n.eq_ignore_ascii_case("current"))
+            .map(String::as_str)
+    })?;
+    Some(root.join(newest).join(exe).to_string_lossy().into_owned())
+}
+
 /// App Paths registry lookup (HKCU, then HKLM).
 fn app_paths_lookup(file: &str) -> Option<String> {
     use windows::Win32::System::Registry::{HKEY, RegCloseKey, RegOpenKeyExW, RegQueryValueExW, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_READ};
@@ -1211,5 +1433,63 @@ mod tests {
         }
         super::strip_dark_plate(&mut img);
         assert_eq!(img.get_pixel(0, 0), &image::Rgba([232, 236, 242, 255]));
+    }
+
+    #[test]
+    fn picks_the_newest_squirrel_version_by_number() {
+        use super::newest_squirrel_folder;
+        assert_eq!(
+            newest_squirrel_folder(["app-1.0.9264", "app-1.0.10000", "app-1.0.999", "packages"]),
+            Some("app-1.0.10000")
+        );
+        assert_eq!(
+            newest_squirrel_folder(["App-3.2", "app-3.10"]),
+            Some("app-3.10")
+        );
+        assert_eq!(
+            newest_squirrel_folder(["app-beta", "current", "packages"]),
+            None
+        );
+    }
+
+    #[test]
+    fn finds_a_squirrel_app_after_an_update() {
+        use super::moved_squirrel_exe;
+        let root = std::env::temp_dir().join(format!("fern-squirrel-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let old_dir = root.join("app-1.0.999");
+        let new_dir = root.join("app-1.0.1000");
+        std::fs::create_dir_all(&new_dir).unwrap();
+        let current = new_dir.join("Discord.exe");
+        std::fs::write(&current, b"").unwrap();
+
+        let stale = old_dir.join("Discord.exe");
+        assert_eq!(
+            moved_squirrel_exe(&stale.to_string_lossy()),
+            Some(current.to_string_lossy().into_owned())
+        );
+        assert_eq!(moved_squirrel_exe(&current.to_string_lossy()), None);
+        assert_eq!(
+            moved_squirrel_exe(&root.join("Discord.exe").to_string_lossy()),
+            None
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn roundtrips_taskbar_marker_with_pid_and_rects() {
+        use super::{
+            marker_contents, parse_marker_pid, parse_marker_rect, parse_marker_secondaries,
+            parse_marker_state,
+        };
+        use windows::Win32::Foundation::RECT;
+        let primary = RECT { left: 0, top: 1032, right: 1920, bottom: 1080 };
+        let sec = RECT { left: 1920, top: 1032, right: 3840, bottom: 1080 };
+        let raw = marker_contents(2, 4242, Some(primary), &[(999, sec)]);
+        assert_eq!(parse_marker_state(&raw), Some(2));
+        assert_eq!(parse_marker_pid(&raw), Some(4242));
+        assert_eq!(parse_marker_rect(&raw, "primary="), Some(primary));
+        assert_eq!(parse_marker_secondaries(&raw), vec![(999, sec)]);
     }
 }

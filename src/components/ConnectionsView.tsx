@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { ChevronLeft, Lock, X, Bluetooth, Check, Speaker, Volume2, VolumeX } from "lucide-react";
 import { useT } from "../i18n";
 
@@ -15,6 +16,20 @@ interface BluetoothDeviceInfo {
   id: string;
   name: string;
   connected: boolean;
+  battery?: number | null;
+  can_connect?: boolean;
+}
+
+interface BtNearbyDevice {
+  id: string;
+  name: string;
+  kind: string;
+}
+
+interface BtPairingRequest {
+  id: string;
+  kind: "confirm" | "display" | "provide";
+  pin?: string | null;
 }
 
 interface OutputDevice {
@@ -27,6 +42,7 @@ interface Props {
   kind: "wifi" | "bluetooth" | "audio";
   onBack: () => void;
   onOpenWindowsSettings: () => void;
+  onContentHeight?: (height: number) => void;
   tip?: (text: string | undefined) => Record<string, unknown>;
 }
 
@@ -165,7 +181,9 @@ function AppVolumes({ tip }: { tip?: (text: string | undefined) => Record<string
   );
 }
 
-export function ConnectionsView({ kind, onBack, onOpenWindowsSettings, tip = () => ({}) }: Props) {
+export function ConnectionsView({ kind, onBack, onOpenWindowsSettings, onContentHeight, tip = () => ({}) }: Props) {
+  const headerRef = useRef<HTMLDivElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
   void tip;
   const [networks, setNetworks] = useState<WifiNetwork[] | null>(null);
   const [devices, setDevices] = useState<BluetoothDeviceInfo[] | null>(null);
@@ -175,14 +193,18 @@ export function ConnectionsView({ kind, onBack, onOpenWindowsSettings, tip = () 
   const [passwordFor, setPasswordFor] = useState<string | null>(null);
   const [password, setPassword] = useState("");
   const [confirmRemove, setConfirmRemove] = useState<string | null>(null);
+  const [btScanning, setBtScanning] = useState(false);
+  const [nearbyDevices, setNearbyDevices] = useState<BtNearbyDevice[]>([]);
+  const [pairingRequest, setPairingRequest] = useState<BtPairingRequest | null>(null);
+  const [pairingPin, setPairingPin] = useState("");
 
   useEffect(() => {
-    if (passwordFor === null) return;
+    if (passwordFor === null && pairingRequest?.kind !== "provide") return;
     invoke("set_window_keyboard_focus", { enabled: true }).catch(() => {});
     return () => {
       invoke("set_window_keyboard_focus", { enabled: false }).catch(() => {});
     };
-  }, [passwordFor]);
+  }, [passwordFor, pairingRequest?.kind]);
 
   const refresh = useCallback(async () => {
     try {
@@ -199,10 +221,60 @@ export function ConnectionsView({ kind, onBack, onOpenWindowsSettings, tip = () 
   }, [kind]);
 
   useEffect(() => {
+    if (!onContentHeight) return;
+    const measure = () => {
+      const headerH = headerRef.current?.offsetHeight ?? 24;
+      const listH = listRef.current?.scrollHeight ?? 40;
+      const errH = error ? 24 : 0;
+      // 36px main-row + 24px container vertical padding + 6px flex gap
+      onContentHeight(Math.round(66 + headerH + listH + errH));
+    };
+    const frame = requestAnimationFrame(measure);
+    return () => cancelAnimationFrame(frame);
+  }, [onContentHeight, kind, networks, devices, outputs, nearbyDevices, btScanning, pairingRequest, passwordFor, confirmRemove, error]);
+
+  useEffect(() => {
     void refresh();
     const timer = setInterval(() => void refresh(), REFRESH_MS);
     return () => clearInterval(timer);
   }, [refresh]);
+
+  useEffect(() => {
+    if (kind !== "bluetooth") return;
+    const unlistenNearby = listen<BtNearbyDevice[]>("bluetooth-nearby", (event) => {
+      setNearbyDevices(event.payload ?? []);
+    });
+    const unlistenChanged = listen("bluetooth-changed", () => {
+      void refresh();
+    });
+    const unlistenPairing = listen<BtPairingRequest>("bluetooth-pairing-request", (event) => {
+      setPairingRequest(event.payload);
+      setPairingPin("");
+    });
+    return () => {
+      unlistenNearby.then((fn) => fn());
+      unlistenChanged.then((fn) => fn());
+      unlistenPairing.then((fn) => fn());
+      invoke("bluetooth_discovery", { active: false }).catch(() => {});
+    };
+  }, [kind, refresh]);
+
+  const toggleBtScan = () => {
+    const next = !btScanning;
+    setBtScanning(next);
+    if (!next) setNearbyDevices([]);
+    invoke("bluetooth_discovery", { active: next }).catch((e) => {
+      setError(String(e));
+      setBtScanning(false);
+    });
+  };
+
+  const respondPairing = (accept: boolean) => {
+    const pin = pairingRequest?.kind === "provide" ? pairingPin : null;
+    setPairingRequest(null);
+    setPairingPin("");
+    invoke("bluetooth_pairing_respond", { accept, pin }).catch(() => {});
+  };
 
   const t = useT();
   const run = async (label: string, action: () => Promise<unknown>) => {
@@ -246,15 +318,20 @@ export function ConnectionsView({ kind, onBack, onOpenWindowsSettings, tip = () 
 
   return (
     <div className="cv-root" onClick={(e) => e.stopPropagation()} onWheel={(e) => e.stopPropagation()}>
-      <div className="cv-header">
+      <div ref={headerRef} className="cv-header">
         <button className="cv-back" onClick={onBack} aria-label={t("common.back")}>
           <ChevronLeft size={16} />
         </button>
         <span className="cv-title">{title}</span>
+        {kind === "bluetooth" && (
+          <button className="cv-link" onClick={toggleBtScan}>
+            {btScanning ? t("connections.bluetooth.stopScan") : t("connections.bluetooth.scan")}
+          </button>
+        )}
         <button className="cv-link" onClick={onOpenWindowsSettings}>{t("connections.windowsSettings")}</button>
       </div>
 
-      <div className="cv-list" onWheel={(e) => e.stopPropagation()}>
+      <div ref={listRef} className="cv-list" onWheel={(e) => e.stopPropagation()}>
         {loading && <div className="cv-hint">{kind === "wifi" ? t("connections.scanning") : t("connections.loading")}</div>}
         {!loading && empty && !error && <div className="cv-hint">{emptyText}</div>}
 
@@ -320,24 +397,95 @@ export function ConnectionsView({ kind, onBack, onOpenWindowsSettings, tip = () 
         ))}
 
         {kind === "bluetooth" && devices?.map((d) => (
-          <div key={d.id} className={`cv-row${d.connected ? " connected" : ""}`}>
+          <div
+            key={d.id}
+            className={`cv-row${d.connected ? " connected" : ""}${busy === d.id ? " busy" : ""}`}
+            onClick={() => {
+              if (confirmRemove === d.id) return;
+              void run(d.id, () => invoke("bluetooth_set_connected", { id: d.id, connected: !d.connected }));
+            }}
+          >
             <Bluetooth size={13} className="cv-bt-icon" />
             <span className="cv-name">{d.name}</span>
-            <span className="cv-status">{d.connected ? t("connections.connected") : t("connections.paired")}</span>
+            <span className="cv-status">
+              {busy === d.id
+                ? (d.connected ? t("connections.disconnect") : t("connections.connecting"))
+                : d.connected
+                  ? (d.battery != null ? `${t("connections.connected")} · ${d.battery}%` : t("connections.connected"))
+                  : t("connections.paired")}
+            </span>
             {confirmRemove === d.id ? (
               <button
                 className="cv-action danger"
-                onClick={() => { setConfirmRemove(null); void run(d.id, () => invoke("bluetooth_unpair", { id: d.id })); }}
+                onClick={(e) => { e.stopPropagation(); setConfirmRemove(null); void run(d.id, () => invoke("bluetooth_unpair", { id: d.id })); }}
               >
                 {t("connections.removeConfirm")}
               </button>
             ) : (
-              <button className="cv-icon-btn" title={t("connections.removeDevice")} onClick={() => setConfirmRemove(d.id)}>
+              <button className="cv-icon-btn" title={t("connections.removeDevice")} onClick={(e) => { e.stopPropagation(); setConfirmRemove(d.id); }}>
                 <X size={12} />
               </button>
             )}
           </div>
         ))}
+
+        {kind === "bluetooth" && (btScanning || nearbyDevices.length > 0) && (
+          <div className="cv-section-group">
+            <div className="cv-divider" />
+            <div className="cv-section">{t("connections.bluetooth.nearby")}</div>
+            {btScanning && nearbyDevices.length === 0 && (
+              <div className="cv-hint">{t("connections.scanning")}</div>
+            )}
+            {nearbyDevices.map((n) => (
+              <div key={n.id}>
+                <div
+                  className={`cv-row${busy === n.id ? " busy" : ""}`}
+                  onClick={() => void run(n.id, async () => {
+                    try {
+                      await invoke("bluetooth_pair", { id: n.id });
+                    } finally {
+                      setPairingRequest((prev) => (prev?.id === n.id ? null : prev));
+                    }
+                  })}
+                >
+                  <Bluetooth size={13} className="cv-bt-icon" />
+                  <span className="cv-name">{n.name}</span>
+                  <span className="cv-status">
+                    {busy === n.id ? t("connections.bluetooth.pairing") : t("connections.bluetooth.pair")}
+                  </span>
+                </div>
+                {pairingRequest?.id === n.id && (
+                  <div className="cv-password" onClick={(e) => e.stopPropagation()}>
+                    {pairingRequest.kind === "confirm" && (
+                      <>
+                        <span className="cv-status">{t("connections.bluetooth.confirmPin", { pin: pairingRequest.pin ?? "" })}</span>
+                        <button type="button" onClick={() => respondPairing(true)}>{t("connections.bluetooth.accept")}</button>
+                        <button type="button" onClick={() => respondPairing(false)}>{t("connections.bluetooth.cancel")}</button>
+                      </>
+                    )}
+                    {pairingRequest.kind === "display" && (
+                      <span className="cv-status">{t("connections.bluetooth.enterPinOnDevice", { pin: pairingRequest.pin ?? "" })}</span>
+                    )}
+                    {pairingRequest.kind === "provide" && (
+                      <form onSubmit={(e) => { e.preventDefault(); respondPairing(true); }} style={{ display: "flex", gap: 6, flex: 1 }}>
+                        <input
+                          type="text"
+                          autoFocus
+                          value={pairingPin}
+                          onChange={(e) => setPairingPin(e.target.value)}
+                          placeholder={t("connections.bluetooth.pinPlaceholder")}
+                          spellCheck={false}
+                        />
+                        <button type="submit" disabled={!pairingPin}>{t("connections.bluetooth.accept")}</button>
+                        <button type="button" onClick={() => respondPairing(false)}>{t("connections.bluetooth.cancel")}</button>
+                      </form>
+                    )}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       {error && <div className="cv-error">{error}</div>}

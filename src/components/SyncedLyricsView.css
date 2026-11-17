@@ -32,7 +32,7 @@
   margin: 3px 0;
   font-size: 13px;
   font-weight: 500;
-  color: rgba(255, 255, 255, 0.38);
+  color: color-mix(in srgb, var(--fern-text, #ffffff) 42%, transparent);
   border-radius: 6px;
   transition: color 0.22s ease, font-size 0.22s ease, opacity 0.22s ease;
   cursor: pointer;
@@ -44,14 +44,14 @@
 }
 
 .synced-lyric-line:hover {
-  color: rgba(255, 255, 255, 0.75);
+  color: color-mix(in srgb, var(--fern-text, #ffffff) 78%, transparent);
 }
 
 .synced-lyric-line.active {
-  color: #ffffff;
+  color: var(--fern-text, #ffffff);
   font-weight: 700;
   font-size: 14.5px;
-  text-shadow: 0 0 14px rgba(255, 255, 255, 0.35);
+  text-shadow: 0 0 14px color-mix(in srgb, var(--music-accent, var(--fern-text, #ffffff)) 35%, transparent);
 }
 
 .synced-lyrics-status {
@@ -62,7 +62,7 @@
   gap: 8px;
   height: 100%;
   font-size: 12px;
-  color: rgba(255, 255, 255, 0.45);
+  color: color-mix(in srgb, var(--fern-text, #ffffff) 48%, transparent);
   text-align: center;
   padding: 12px;
   box-sizing: border-box;
@@ -80,7 +80,7 @@
 .synced-lyrics-plain {
   font-size: 12px;
   line-height: 1.6;
-  color: rgba(255, 255, 255, 0.7);
+  color: color-mix(in srgb, var(--fern-text, #ffffff) 72%, transparent);
   white-space: pre-wrap;
   text-align: center;
   padding: 10px;
