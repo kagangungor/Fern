@@ -6,7 +6,7 @@ import { listen, emit } from "@tauri-apps/api/event";
 import { getVersion } from "@tauri-apps/api/app";
 import type { UpdateCheckResult } from "../updater";
 import { useSettingsSync } from "../hooks/useSettingsSync";
-import { DEFAULT_ACCENT_COLOR, hexToHsl, STYLE_OPACITY, type ThemePreset } from "../theme";
+import { DEFAULT_ACCENT_COLOR, hexToHsl, STYLE_OPACITY, THEME_STYLES, type ThemePreset } from "../theme";
 import { DEFAULT_DUAL_CLOCK_ZONE } from "../dualClock";
 import { normalizeWidgetConfig } from "../widgetConfig";
 import type { WidgetConfig, MonitorInfo, MonitorMode } from "./types";
@@ -384,6 +384,13 @@ export function useSettings() {
         : savedColor;
       apply(normalizedColor, setThemeColor, (v) => v);
       apply(getVal("fern-theme-opacity"), setThemeOpacity, parseFloat);
+      for (const s of THEME_STYLES) {
+        const perStyleKey = `fern-theme-opacity-${s}`;
+        const perStyleVal = getVal(perStyleKey);
+        if (perStyleVal !== null) {
+          localStorage.setItem(perStyleKey, perStyleVal);
+        }
+      }
       apply(getVal("fern-theme-saturation"), setThemeSaturation, parseFloat);
       apply(getVal("fern-theme-accent"), setThemeAccent, (v) => v);
       apply(getVal("fern-theme-accent-color"), setThemeAccentColor, (v) => v);
@@ -1184,6 +1191,7 @@ export function useSettings() {
   const handleOpacityChange = (value: number) => {
     setThemeOpacity(value);
     saveSetting("fern-theme-opacity", String(value));
+    saveSetting(`fern-theme-opacity-${themeStyle}`, String(value));
   };
 
   const handleSaturationChange = (value: number) => {
@@ -1194,8 +1202,11 @@ export function useSettings() {
   const handleThemeStyleChange = (style: string) => {
     setThemeStyle(style);
     saveSetting("fern-theme-style", style);
-    // Each style is tuned for an opacity; the slider can still change it afterwards.
-    const opacity = STYLE_OPACITY[style];
+    const saved = localStorage.getItem(`fern-theme-opacity-${style}`);
+    const parsed = saved !== null ? parseFloat(saved) : NaN;
+    const opacity = Number.isFinite(parsed) && parsed >= 0 && parsed <= 1
+      ? parsed
+      : STYLE_OPACITY[style];
     if (opacity !== undefined) {
       setThemeOpacity(opacity);
       saveSetting("fern-theme-opacity", String(opacity));

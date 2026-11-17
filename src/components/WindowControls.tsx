@@ -3,7 +3,7 @@ import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { useT } from "../i18n";
 import "./WindowControls.css";
 
-export function WindowControls({ onClose }: { onClose?: () => void }) {
+export function WindowControls({ onClose, maximizable = false }: { onClose?: () => void; maximizable?: boolean }) {
   const t = useT();
   const [focused, setFocused] = useState(true);
 
@@ -19,6 +19,9 @@ export function WindowControls({ onClose }: { onClose?: () => void }) {
   return (
     <div className={`wc${focused ? "" : " blurred"}`}>
       <button className="wc-btn minimize" aria-label={t("window.minimize")} onClick={() => win.minimize().catch(() => {})} />
+      {maximizable && (
+        <button className="wc-btn zoom" aria-label={t("window.maximize")} onClick={() => win.toggleMaximize().catch(() => {})} />
+      )}
       <button
         className="wc-btn close"
         aria-label={t("window.close")}

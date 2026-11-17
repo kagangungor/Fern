@@ -635,7 +635,6 @@ body,
     height: 196px;
     position: relative;
     pointer-events: auto;
-    transition: background 0.3s ease;
 }
 
 .brightness-notch::before,

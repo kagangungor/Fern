@@ -115,20 +115,27 @@ function SettingsApp() {
     };
   }, []);
 
-  useEffect(() => {
-    invoke("resize_settings_window", {
-      width: 620 * settings.scale,
-      height: 480 * settings.scale,
-    }).catch(console.error);
-  }, [settings.scale]);
+  const safeScale = settings.scale > 0 ? settings.scale : 1;
 
   return (
-    <div className="settings-container" style={{ zoom: settings.scale }}>
+    <div
+      className="settings-container"
+      style={{
+        position: "fixed",
+        top: 0,
+        left: 0,
+        width: `${100 / safeScale}vw`,
+        height: `${100 / safeScale}vh`,
+        transform: `scale(${safeScale})`,
+        transformOrigin: "0 0",
+        borderRadius: `${8 / safeScale}px`,
+      }}
+    >
       <div className="title-bar" data-tauri-drag-region>
         <span className="title-text" data-tauri-drag-region>
           {t("settings.title")}
         </span>
-        <WindowControls onClose={() => invoke("close_settings_window").catch(() => {})} />
+        <WindowControls maximizable onClose={() => invoke("close_settings_window").catch(() => {})} />
       </div>
 
       <div className="settings-body">

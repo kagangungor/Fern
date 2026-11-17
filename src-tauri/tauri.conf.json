@@ -45,7 +45,7 @@
         "decorations": false,
         "transparent": true,
         "resizable": true,
-        "maximizable": false,
+        "maximizable": true,
         "minimizable": true,
         "closable": false,
         "alwaysOnTop": false,

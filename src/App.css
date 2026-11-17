@@ -212,7 +212,6 @@ img {
     height: 13px;
     background-color: var(--notch-bg);
     pointer-events: none;
-    transition: background-color 0.3s ease;
 }
 
 .fern.is-impacted::before {

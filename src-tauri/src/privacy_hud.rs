@@ -1,14 +1,15 @@
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
-use windows::core::{PCWSTR, PWSTR};
+use windows::core::{Interface, PCWSTR, PWSTR};
 use windows::Win32::Media::Audio::Endpoints::IAudioEndpointVolume;
 use windows::Win32::Media::Audio::{
-    eCapture, eCommunications, eConsole, IMMDeviceEnumerator, MMDeviceEnumerator,
+    eCapture, eCommunications, eConsole, AudioSessionStateActive, IAudioSessionControl2,
+    IAudioSessionManager2, IMMDeviceEnumerator, MMDeviceEnumerator, DEVICE_STATE_ACTIVE,
 };
 use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_ALL};
 use windows::Win32::System::Registry::{
-    RegCloseKey, RegEnumKeyExW, RegOpenKeyExW, RegQueryValueExW, HKEY, HKEY_CURRENT_USER, KEY_READ,
-    REG_VALUE_TYPE,
+    RegCloseKey, RegEnumKeyExW, RegOpenKeyExW, RegQueryValueExW, HKEY, HKEY_CURRENT_USER,
+    HKEY_LOCAL_MACHINE, KEY_READ, REG_VALUE_TYPE,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -79,12 +80,27 @@ pub fn toggle_microphone_mute_internal(app: &AppHandle) -> Result<bool, String> 
     Ok(new_mute)
 }
 
-fn check_consent_store_path(subpath: &str, is_active: &mut bool, active_apps: &mut Vec<String>) {
+fn is_consent_timestamps_active(start: u64, stop: Option<u64>) -> bool {
+    if start == 0 {
+        return false;
+    }
+    match stop {
+        None => true,
+        Some(s) => s == 0 || start > s,
+    }
+}
+
+fn check_consent_store_path(
+    root: HKEY,
+    subpath: &str,
+    is_active: &mut bool,
+    active_apps: &mut Vec<String>,
+) {
     unsafe {
         let subpath_w = wide(subpath);
         let mut root_key = HKEY::default();
         if RegOpenKeyExW(
-            HKEY_CURRENT_USER,
+            root,
             PCWSTR(subpath_w.as_ptr()),
             Some(0),
             KEY_READ,
@@ -124,7 +140,7 @@ fn check_consent_store_path(subpath: &str, is_active: &mut bool, active_apps: &m
             let child_path_w = wide(&child_path);
             let mut child_key = HKEY::default();
             if RegOpenKeyExW(
-                HKEY_CURRENT_USER,
+                root,
                 PCWSTR(child_path_w.as_ptr()),
                 Some(0),
                 KEY_READ,
@@ -161,10 +177,9 @@ fn check_consent_store_path(subpath: &str, is_active: &mut bool, active_apps: &m
 
                 let _ = RegCloseKey(child_key);
 
-                if stop_res.is_ok() && start_res.is_ok() {
-                    // Windows ConsentStore:
-                    // When actively recording: LastUsedTimeStop is 0 or Start is greater than Stop
-                    if (stop_val == 0 && start_val > 0) || (start_val > stop_val) {
+                if start_res.is_ok() {
+                    let stop_opt = if stop_res.is_ok() { Some(stop_val) } else { None };
+                    if is_consent_timestamps_active(start_val, stop_opt) {
                         *is_active = true;
                         let display_name = child_name
                             .split('#')
@@ -188,16 +203,67 @@ fn is_capability_active(capability: &str, active_apps: &mut Vec<String>) -> bool
         r"Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\{}",
         capability
     );
-    let mut is_active = false;
-    check_consent_store_path(&base_path, &mut is_active, active_apps);
     let non_packaged_path = format!(r"{}\NonPackaged", base_path);
-    check_consent_store_path(&non_packaged_path, &mut is_active, active_apps);
+    let mut is_active = false;
+    for root in [HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE] {
+        check_consent_store_path(root, &base_path, &mut is_active, active_apps);
+        check_consent_store_path(root, &non_packaged_path, &mut is_active, active_apps);
+    }
     is_active
+}
+
+fn is_capture_audio_active(active_apps: &mut Vec<String>) -> bool {
+    let _com = crate::utils::ComGuard::mta();
+    let own_pid = std::process::id();
+    let mut found = false;
+    unsafe {
+        let Ok(enumerator) = CoCreateInstance::<_, IMMDeviceEnumerator>(&MMDeviceEnumerator, None, CLSCTX_ALL) else {
+            return false;
+        };
+        let Ok(collection) = enumerator.EnumAudioEndpoints(eCapture, DEVICE_STATE_ACTIVE) else {
+            return false;
+        };
+        let dev_count = collection.GetCount().unwrap_or(0);
+        for d in 0..dev_count {
+            let Ok(device) = collection.Item(d) else { continue };
+            let Ok(manager) = device.Activate::<IAudioSessionManager2>(CLSCTX_ALL, None) else { continue };
+            let Ok(sessions) = manager.GetSessionEnumerator() else { continue };
+            let count = sessions.GetCount().unwrap_or(0);
+            for s in 0..count {
+                let Ok(session) = sessions.GetSession(s) else { continue };
+                let Ok(state) = session.GetState() else { continue };
+                if state != AudioSessionStateActive {
+                    continue;
+                }
+                let pid = session
+                    .cast::<IAudioSessionControl2>()
+                    .ok()
+                    .and_then(|c| c.GetProcessId().ok())
+                    .unwrap_or(0);
+                if pid == own_pid {
+                    continue;
+                }
+                found = true;
+                if let Ok(ctrl2) = session.cast::<IAudioSessionControl2>() {
+                    if let Ok(name_pw) = ctrl2.GetDisplayName() {
+                        let name = name_pw.to_string().unwrap_or_default();
+                        windows::Win32::System::Com::CoTaskMemFree(Some(name_pw.as_ptr() as *const _));
+                        let clean = name.trim().to_string();
+                        if !clean.is_empty() && !clean.starts_with('@') && !active_apps.contains(&clean) {
+                            active_apps.push(clean);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    found
 }
 
 pub fn check_privacy_status() -> PrivacyStatus {
     let mut active_apps = Vec::new();
-    let mic_active = is_capability_active("microphone", &mut active_apps);
+    let mic_active =
+        is_capability_active("microphone", &mut active_apps) || is_capture_audio_active(&mut active_apps);
     let cam_active = is_capability_active("webcam", &mut active_apps);
     PrivacyStatus {
         mic_active,
@@ -264,4 +330,20 @@ pub async fn get_privacy_status() -> Result<PrivacyStatus, String> {
     tauri::async_runtime::spawn_blocking(check_privacy_status)
         .await
         .map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_consent_timestamps_active;
+
+    #[test]
+    fn consent_timestamps_handle_missing_or_zero_stop() {
+        assert!(!is_consent_timestamps_active(0, None));
+        assert!(!is_consent_timestamps_active(0, Some(0)));
+        assert!(is_consent_timestamps_active(100, None));
+        assert!(is_consent_timestamps_active(100, Some(0)));
+        assert!(is_consent_timestamps_active(200, Some(100)));
+        assert!(!is_consent_timestamps_active(100, Some(200)));
+        assert!(!is_consent_timestamps_active(100, Some(100)));
+    }
 }

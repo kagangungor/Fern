@@ -374,6 +374,7 @@
   "dualClock.zone": "Second clock time zone",
   "dualClock.clear": "Clear search",
   "window.minimize": "Minimize",
+  "window.maximize": "Maximize",
   "window.close": "Close",
   "tour.welcome.title": "Welcome to Fern",
   "tour.welcome.text": "This is the notch. Hover over it to expand. This tour shows you what you can do. Try each step directly on the UI — when finished, Fern restores your volume, brightness, Wi-Fi and Bluetooth settings.",
