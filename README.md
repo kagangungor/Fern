@@ -196,13 +196,6 @@ bun run tauri dev
 - [x] **Universal Meeting & Privacy HUD** — Camera/mic Privacy Aura and system-wide Mic Mute hotkey
 - [x] **Connected Hardware & Fernie Agent API** — Split TWS earbud battery levels, USB/jack popups, and Claude Code notch integration
 
-### Upcoming milestones
-
-#### Core Vision & Productivity
-- [ ] **Developer & Terminal Ambient HUD** — Visual notch progress line for long-running CLI tasks (`cargo build`, `npm install`, `docker`, test suites) and active Git branch / dirty-file context when an IDE or terminal is focused
-- [ ] **Pro Clipboard & Smart Inspector** — Fast island clipboard history with live color token previews (`#hex`, `rgb`, `hsl`), Tailwind/CSS conversion, and quick JSON/Base64/regex actions
-- [ ] **Built-in Search Provider (PowerToys-Free)** — Open-source, standalone Dock/Notch quick launcher and file/app search without relying on PowerToys Run or Command Palette
-
 #### Dock, Tray & Web Apps
 - [x] **Background Tray Apps & Native Tray Menus in Dock** — Keep tray-only apps in the dock with a gray indicator dot, invoke default tray actions on click, and open real Windows 11 native tray context menus via UI Automation (`ShowContextMenu`)
 - [x] **Full Web App (PWA) Support in Dock** — List installed Chromium/Firefox web apps in **Add App**, resolve stable `AppsFolder` names and `.url` icons, and repair legacy browser-pinned PWA entries to their real app IDs
@@ -218,7 +211,6 @@ bun run tauri dev
 - [x] **Multi-Agent Support (Claude Code + Codex + OpenCode v1/v2)** — Dedicated Integrations tab with live connection/verification state, non-blocking async hooks with launch timestamps, PID + start-time owner tracking to auto-clear crashed/closed sessions, and `SHQueryUserNotificationState` quiet gating
 - [x] **Interactive Settings Feature Preview** — Live in-Settings preview simulating clock, battery alert, theme, resting notch, device popups, music player, dock, and volume/brightness HUDs
 - [x] **In-App Announcement Channel** — Fetch and display dismissible release/critical notice cards via `announcements.json`
-- [ ] **Settings & UI Polish** — Inline row-level settings search (`SettingsSearchBox`), extended `HideDelay` options (up to 3h), growing `"bar"` running indicator, `AgentIntro` onboarding card, `--autoplay-policy=no-user-gesture-required`, `strip = true` release binary stripping, and i18n cleanup for hardcoded Turkish strings in `launchers.rs` / `DockTab.tsx`
 - [x] **Community Translation Infrastructure** — Automated `i18n-check` validation, translation reference generator, and key-level English fallback engine
 
 #### Stability, Windows Shell & Bug Fixes
@@ -233,6 +225,16 @@ bun run tauri dev
 - [x] **Fix Fixed-Mode Notch Click-Through & Menu Guard** — Check `!= "fixed"` in `notch_suppressed` and `!MENU_IS_OPEN` in `final_ignore` so Fixed notches stay interactive over fullscreen apps
 - [x] **Clean Glass Texture, Glow Clipping & Startup Performance Fixes** — Remove dotted `--surface-grain` texture, add `.panel-open` glass readability opacity, clip `.notch-ambient-glow` inside `<SurfaceShape>`, fetch initial `get_media_info` on mount, isolate `<TimeDisplay>` to stop 1 s full-`App` re-renders, and scale `battery.low` width dynamically with localized string length
 - [x] **Notch Opacity Sync, SMTC Session Selection, Mic Capture & Settings Polish (v1.6.1)** — Sync notch/overlay flare opacity transitions, prioritize active Windows SMTC sessions (`GetCurrentSession` + `LastUpdatedTime`) and align media controls, add `HKLM` + Core Audio (`eCapture`) microphone detection, persist per-style background opacity (`0%–100%`), fix color picker hex alignment, add Settings maximize button & `8px` DWM corner matching, preserve custom Settings window size on scale changes, and include Settings/Calendar in Smart-mode overlap hiding
+
+### Upcoming milestones
+
+#### Core Vision & Productivity
+- [ ] **Developer & Terminal Ambient HUD** — Visual notch progress line for long-running CLI tasks (`cargo build`, `npm install`, `docker`, test suites) and active Git branch / dirty-file context when an IDE or terminal is focused
+- [ ] **Pro Clipboard & Smart Inspector** — Fast island clipboard history with live color token previews (`#hex`, `rgb`, `hsl`), Tailwind/CSS conversion, and quick JSON/Base64/regex actions
+- [ ] **Built-in Search Provider (PowerToys-Free)** — Open-source, standalone Dock/Notch quick launcher and file/app search without relying on PowerToys Run or Command Palette
+
+#### Settings & UI Polish
+- [ ] **Settings & UI Polish** — Inline row-level settings search (`SettingsSearchBox`), extended `HideDelay` options (up to 3h), growing `"bar"` running indicator, `AgentIntro` onboarding card, `--autoplay-policy=no-user-gesture-required`, `strip = true` release binary stripping, and i18n cleanup for hardcoded Turkish strings in `launchers.rs` / `DockTab.tsx`
 
 See the [open issues](https://github.com/kagangungor/Fern/issues) for feature requests and known bugs.
 
