@@ -846,7 +846,7 @@ function OverlayApp() {
         if (timeoutRef.current) clearTimeout(timeoutRef.current);
       } else {
         if (timeoutRef.current) clearTimeout(timeoutRef.current);
-        timeoutRef.current = setTimeout(() => setMode('idle'), mixerExpandedRef.current ? 700 : 1500);
+        timeoutRef.current = setTimeout(() => setMode('idle'), mixerExpandedRef.current ? 700 : 650);
       }
     });
 
@@ -867,7 +867,7 @@ function OverlayApp() {
         if (timeoutRef.current) clearTimeout(timeoutRef.current);
       } else {
         if (timeoutRef.current) clearTimeout(timeoutRef.current);
-        timeoutRef.current = setTimeout(() => setMode('idle'), 1500);
+        timeoutRef.current = setTimeout(() => setMode('idle'), 650);
       }
     });
 

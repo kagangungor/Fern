@@ -2,6 +2,7 @@ import { Volume2, Sun, ArrowLeftToLine, ArrowRightToLine, Clock } from "lucide-r
 import { SettingRow } from "./SettingRow";
 import { SettingSection } from "./SettingSection";
 import { Dropdown } from "./Dropdown";
+import { EdgeArea } from "./EdgeArea";
 import { useT } from "../i18n";
 
 interface OverlaysTabProps {
@@ -102,18 +103,21 @@ export function OverlaysTab({
         )}
 
         {hasAnyEdge && (
-          <SettingRow icon={Clock} label={t("overlays.edgeDelay")} desc={t("overlays.edgeDelay.desc")} divider={false}>
-            <Dropdown
-              value={edgeDelay}
-              onChange={handleEdgeDelayChange}
-              options={[
-                { value: "0", label: "0 ms" },
-                { value: "150", label: "150 ms" },
-                { value: "300", label: "300 ms" },
-                { value: "500", label: "500 ms" },
-              ]}
-            />
-          </SettingRow>
+          <>
+            <EdgeArea settingKey="fern-overlay-edge-area" />
+            <SettingRow icon={Clock} label={t("overlays.edgeDelay")} desc={t("overlays.edgeDelay.desc")} divider={false}>
+              <Dropdown
+                value={edgeDelay}
+                onChange={handleEdgeDelayChange}
+                options={[
+                  { value: "0", label: "0 ms" },
+                  { value: "150", label: "150 ms" },
+                  { value: "300", label: "300 ms" },
+                  { value: "500", label: "500 ms" },
+                ]}
+              />
+            </SettingRow>
+          </>
         )}
       </SettingSection>
     </>

@@ -704,6 +704,7 @@
   "edgeArea.label": "Edge hover area",
   "edgeArea.notch.desc": "Where touching the top edge opens the notch in Smart and Peek modes. Only near it ignores the rest of the edge, such as the corners.",
   "edgeArea.dock.desc": "Where touching the bottom edge shows the dock in Smart and Peek modes. Only near it ignores the rest of the edge, such as the corners.",
+  "edgeArea.overlay.desc": "Where touching the left or right edge opens the volume and brightness overlays. Only near it ignores the rest of the edge, such as the corners.",
   "edgeArea.full": "Whole screen edge",
   "edgeArea.narrow": "Only near it",
   "settings.searchPlaceholder": "Search",

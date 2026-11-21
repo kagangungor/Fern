@@ -314,6 +314,14 @@ export const SETTINGS_SEARCH_INDEX: SearchableSetting[] = [
     descKey: "overlays.brightness.desc",
     keywords: ["brightness", "parlaklık", "overlay", "hud"],
   },
+  {
+    id: "overlays-edge-area",
+    tab: "overlays",
+    sectionId: "overlays-main",
+    titleKey: "edgeArea.label",
+    descKey: "edgeArea.overlay.desc",
+    keywords: ["edge", "hover", "narrow", "full", "corner", "kenar", "tetikleme", "yakını", "alan", "overlay", "bindirme", "volume", "brightness", "ses", "parlaklık"],
+  },
 
   // Diagnostics Tab
   {

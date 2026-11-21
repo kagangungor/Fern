@@ -5,7 +5,15 @@ import { SettingRow } from "./SettingRow";
 import { Dropdown } from "./Dropdown";
 import { useT } from "../i18n";
 
-export function EdgeArea({ settingKey }: { settingKey: "fern-notch-edge-area" | "fern-dock-edge-area" }) {
+type EdgeAreaKey = "fern-notch-edge-area" | "fern-dock-edge-area" | "fern-overlay-edge-area";
+
+const EDGE_AREA_DESC: Record<EdgeAreaKey, string> = {
+  "fern-notch-edge-area": "edgeArea.notch.desc",
+  "fern-dock-edge-area": "edgeArea.dock.desc",
+  "fern-overlay-edge-area": "edgeArea.overlay.desc",
+};
+
+export function EdgeArea({ settingKey }: { settingKey: EdgeAreaKey }) {
   const t = useT();
   const [value, setValue] = useState(() => (localStorage.getItem(settingKey) === "narrow" ? "narrow" : "full"));
 
@@ -16,7 +24,7 @@ export function EdgeArea({ settingKey }: { settingKey: "fern-notch-edge-area" | 
   };
 
   return (
-    <SettingRow icon={MousePointer2} label={t("edgeArea.label")} desc={t(settingKey === "fern-notch-edge-area" ? "edgeArea.notch.desc" : "edgeArea.dock.desc")}>
+    <SettingRow icon={MousePointer2} label={t("edgeArea.label")} desc={t(EDGE_AREA_DESC[settingKey])}>
       <Dropdown
         value={value}
         onChange={change}

@@ -1,8 +1,8 @@
 [
   {
-    "id": "fern-1.5-faz5",
+    "id": "fern-1.6.2",
     "level": "info",
-    "title": "Fern 1.5 — Rich Shelf, Odometer Timer & Live Island",
-    "body": "Drop PDF or Office files onto the notch shelf for instant previews, click the timer digits to type right-to-left, and tap collapsed live-activity pills."
+    "title": "Fern 1.6.2 — Snappier Side Overlays & Edge Hover Area",
+    "body": "Volume and brightness overlays now open and close reliably even with a still cursor, skip redundant redraws, and support the new narrow Edge hover area setting."
   }
 ]

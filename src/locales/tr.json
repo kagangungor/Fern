@@ -704,6 +704,7 @@
   "edgeArea.label": "Kenar tetikleme alanı",
   "edgeArea.notch.desc": "Akıllı ve Göz At modlarında üst kenara dokunulduğunda çentiğin nerede açılacağını belirler. Yalnızca yakını seçeneği ekran köşeleri gibi kenarın geri kalanını yok sayar.",
   "edgeArea.dock.desc": "Akıllı ve Göz At modlarında alt kenara dokunulduğunda dock'un nerede açılacağını belirler. Yalnızca yakını seçeneği ekran köşeleri gibi kenarın geri kalanını yok sayar.",
+  "edgeArea.overlay.desc": "Sol veya sağ kenara dokunulduğunda ses ve parlaklık bindirmelerinin nerede açılacağını belirler. Yalnızca yakını seçeneği ekran köşeleri gibi kenarın geri kalanını yok sayar.",
   "edgeArea.full": "Tüm ekran kenarı",
   "edgeArea.narrow": "Yalnızca yakını",
   "settings.searchPlaceholder": "Ara",

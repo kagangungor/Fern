@@ -1942,6 +1942,10 @@ fn edge_dwell_met(entered: &AtomicI64, inside: bool, now: i64, dwell_ms: i64) ->
     }
     dwell_ms <= 0 || (since != 0 && now - since >= dwell_ms)
 }
+
+fn edge_dwell_waiting(inside: bool, confirmed: bool) -> bool {
+    inside && !confirmed
+}
 static MH_RIGHT_EXPIRY_MS: AtomicI64 = AtomicI64::new(0);
 static MH_LAST_MONITOR_UPDATE_MS: AtomicI64 = AtomicI64::new(0);
 static MH_CACHED_MON_POS: Mutex<Option<(i32, i32)>> = Mutex::new(None);
@@ -2123,6 +2127,12 @@ fn edge_area_narrow(app_handle: &AppHandle, key: &str) -> bool {
 
 fn edge_area_allows_x(narrow: bool, span: Option<(i32, i32)>, cursor_x: i32, pad: i32) -> bool {
     !narrow || span.map_or(true, |(l, r)| cursor_x >= l - pad && cursor_x <= r + pad)
+}
+
+fn overlay_edge_y_span(mon_y: i32, mon_h: i32, scale: f64) -> (i32, i32) {
+    let nh = (196.0 * scale) as i32;
+    let ny = mon_y + (mon_h / 2) - (nh / 2);
+    (ny, ny + nh)
 }
 
 fn notch_x_span_for(label: &str, scale: f64) -> Option<(i32, i32)> {
@@ -2694,35 +2704,59 @@ unsafe fn process_mouse_move(app_handle: &AppHandle, cursor: windows::Win32::Fou
             let brightness_right = side_of("fern-brightness-side", "right");
 
             if !fg_fs {
+                let overlay_narrow = edge_area_narrow(app_handle, "fern-overlay-edge-area");
+                let overlay_y_allowed = if !overlay_narrow {
+                    true
+                } else {
+                    let (span, pad) = app_handle.primary_monitor().ok().flatten().map_or((None, 0), |m| {
+                        let ms = m.size();
+                        let mp = m.position();
+                        let sc = m.scale_factor() * overlay_fern_scale;
+                        (Some(overlay_edge_y_span(mp.y, ms.height as i32, sc)), (60.0 * sc) as i32)
+                    });
+                    edge_area_allows_x(true, span, cursor.y, pad)
+                };
                 let at_edge = |right: bool| {
-                    cursor.y >= mon_y && cursor.y <= (mon_y + mon_h)
+                    overlay_y_allowed
+                        && cursor.y >= mon_y && cursor.y <= (mon_y + mon_h)
                         && if right { cursor.x >= (mon_x + mon_w - 8) && cursor.x <= mon_x + mon_w } else { cursor.x >= mon_x && cursor.x <= (mon_x + 8) }
                 };
 
-                let at_volume_edge = at_edge(volume_right);
                 // The collapsed card sticks out past the 8px edge band, keep the hover alive over it too
                 // or the HUD hides mid-click.
-                let over_card = !at_volume_edge
-                    && !in_mixer
-                    && MH_LAST_LEFT_EDGE_HOVER.load(Ordering::Relaxed) != 0
-                    && app_handle.primary_monitor().ok().flatten().is_some_and(|m| {
+                let over_side_card = |right: bool| {
+                    app_handle.primary_monitor().ok().flatten().is_some_and(|m| {
                         let ms = m.size();
                         let mp = m.position();
                         let sc = m.scale_factor() * overlay_fern_scale;
                         let nw = (42.0 * sc) as i32;
                         let nh = (196.0 * sc) as i32;
-                        let nx = if volume_right { mp.x + ms.width as i32 - nw } else { mp.x };
+                        let nx = if right { mp.x + ms.width as i32 - nw } else { mp.x };
                         let ny = mp.y + (ms.height as i32 / 2) - (nh / 2);
                         cursor.x >= nx && cursor.x <= nx + nw && cursor.y >= ny && cursor.y <= ny + nh
-                    });
+                    })
+                };
+
+                let at_volume_edge = at_edge(volume_right);
+                let over_card = !at_volume_edge
+                    && !in_mixer
+                    && MH_LAST_LEFT_EDGE_HOVER.load(Ordering::Relaxed) != 0
+                    && over_side_card(volume_right);
 
                 let volume_enter = if volume_right { &MH_RIGHT_ENTER_MS } else { &MH_LEFT_ENTER_MS };
                 let volume_confirmed = edge_dwell_met(volume_enter, at_volume_edge, now, edge_dwell);
-                if volume_confirmed || in_mixer || over_card {
+                if edge_dwell_waiting(at_volume_edge, volume_confirmed) {
+                    CURSOR_RECHECK_PENDING.store(true, Ordering::Relaxed);
+                }
+                let volume_active = volume_confirmed || in_mixer || over_card;
+                if volume_active {
                     MH_LEFT_EXPIRY_MS.store(now + 500, Ordering::Relaxed);
                 }
 
                 let final_volume_hover = now < MH_LEFT_EXPIRY_MS.load(Ordering::Relaxed);
+                if hover_waits_on_expiry(volume_active, final_volume_hover) {
+                    CURSOR_RECHECK_PENDING.store(true, Ordering::Relaxed);
+                }
                 let prev = MH_LAST_LEFT_EDGE_HOVER.load(Ordering::Relaxed);
                 let new_val = if final_volume_hover { 1 } else { 0 };
                 if prev != new_val {
@@ -2732,11 +2766,23 @@ unsafe fn process_mouse_move(app_handle: &AppHandle, cursor: windows::Win32::Fou
 
                 let brightness_enter = if brightness_right { &MH_RIGHT_ENTER_MS } else { &MH_LEFT_ENTER_MS };
                 let brightness_band = at_edge(brightness_right) && brightness_right != volume_right;
-                if edge_dwell_met(brightness_enter, brightness_band, now, edge_dwell) {
+                let over_brightness_card = !brightness_band
+                    && brightness_right != volume_right
+                    && MH_LAST_RIGHT_EDGE_HOVER.load(Ordering::Relaxed) != 0
+                    && over_side_card(brightness_right);
+                let brightness_confirmed = edge_dwell_met(brightness_enter, brightness_band, now, edge_dwell);
+                if edge_dwell_waiting(brightness_band, brightness_confirmed) {
+                    CURSOR_RECHECK_PENDING.store(true, Ordering::Relaxed);
+                }
+                let brightness_active = brightness_confirmed || over_brightness_card;
+                if brightness_active {
                     MH_RIGHT_EXPIRY_MS.store(now + 500, Ordering::Relaxed);
                 }
 
                 let final_brightness_hover = now < MH_RIGHT_EXPIRY_MS.load(Ordering::Relaxed);
+                if hover_waits_on_expiry(brightness_active, final_brightness_hover) {
+                    CURSOR_RECHECK_PENDING.store(true, Ordering::Relaxed);
+                }
                 let prev = MH_LAST_RIGHT_EDGE_HOVER.load(Ordering::Relaxed);
                 let new_val = if final_brightness_hover { 1 } else { 0 };
                 if prev != new_val {
@@ -3325,13 +3371,26 @@ pub fn sync_overlays(app: &AppHandle) {
     // Full-screen overlay — notches render at left/right edges via CSS
     // The window covers the entire primary monitor so it never needs repositioning
     if let Some(ov_win) = app.get_webview_window("overlay") {
+        let hwnd_res = ov_win.hwnd();
         if let Ok(Some(monitor)) = ov_win.primary_monitor() {
             let size = monitor.size();
             let pos = monitor.position();
-            let _ = ov_win.set_position(tauri::PhysicalPosition::new(pos.x, pos.y));
-            let _ = ov_win.set_size(tauri::PhysicalSize::new(size.width, size.height));
+            let already_positioned = hwnd_res.as_ref().ok().is_some_and(|&hwnd| unsafe {
+                use windows::Win32::Foundation::RECT;
+                use windows::Win32::UI::WindowsAndMessaging::GetWindowRect;
+                let mut current_rect = RECT::default();
+                GetWindowRect(hwnd, &mut current_rect).is_ok()
+                    && current_rect.left == pos.x
+                    && current_rect.top == pos.y
+                    && (current_rect.right - current_rect.left) == size.width as i32
+                    && (current_rect.bottom - current_rect.top) == size.height as i32
+            });
+            if !already_positioned {
+                let _ = ov_win.set_position(tauri::PhysicalPosition::new(pos.x, pos.y));
+                let _ = ov_win.set_size(tauri::PhysicalSize::new(size.width, size.height));
+            }
         }
-        if let Ok(hwnd) = ov_win.hwnd() { re_assert_topmost(hwnd); }
+        if let Ok(hwnd) = hwnd_res { re_assert_topmost(hwnd); }
     }
 }
 
@@ -4304,7 +4363,8 @@ fn recover_from_webview_failure(handle: &AppHandle) {
 
 #[cfg(test)]
 mod tests {
-    use super::{cursor_watch_interval, dock_edge_hover_allowed, dock_hover_went_stale, notch_overlap_during_start, start_counts_as_shown, hides_own_window, hover_waits_on_expiry, is_helper_name, is_launchable_entry, win_number_index};
+    use super::{cursor_watch_interval, dock_edge_hover_allowed, dock_hover_went_stale, edge_dwell_met, edge_dwell_waiting, notch_overlap_during_start, start_counts_as_shown, hides_own_window, hover_waits_on_expiry, is_helper_name, is_launchable_entry, win_number_index};
+    use std::sync::atomic::AtomicI64;
     use std::time::Duration;
 
     #[test]
@@ -4571,5 +4631,50 @@ mod tests {
             choose_media_session_index(&mixed, Some("Brave"), "", "", None),
             Some(1)
         );
+    }
+
+    #[test]
+    fn edge_dwell_met_waits_until_elapsed_and_resets_outside() {
+        let entered = AtomicI64::new(0);
+        // First entry records timestamp and stays unconfirmed when dwell_ms > 0.
+        assert!(!edge_dwell_met(&entered, true, 1000, 300));
+        assert_eq!(entered.load(std::sync::atomic::Ordering::Relaxed), 1000);
+        // Before dwell_ms elapses, still unconfirmed.
+        assert!(!edge_dwell_met(&entered, true, 1299, 300));
+        // At and after dwell_ms, confirmed.
+        assert!(edge_dwell_met(&entered, true, 1300, 300));
+        assert!(edge_dwell_met(&entered, true, 1500, 300));
+        // Leaving resets the entry timestamp.
+        assert!(!edge_dwell_met(&entered, false, 1600, 300));
+        assert_eq!(entered.load(std::sync::atomic::Ordering::Relaxed), 0);
+        // Zero dwell confirms immediately on first entry.
+        assert!(edge_dwell_met(&entered, true, 2000, 0));
+    }
+
+    #[test]
+    fn edge_dwell_waiting_only_while_inside_and_unconfirmed() {
+        assert!(edge_dwell_waiting(true, false));
+        assert!(!edge_dwell_waiting(true, true));
+        assert!(!edge_dwell_waiting(false, false));
+        assert!(!edge_dwell_waiting(false, true));
+    }
+
+    #[test]
+    fn overlay_edge_y_span_centers_card_on_monitor() {
+        use super::{edge_area_allows_x, overlay_edge_y_span};
+
+        // 1080p at 1.0 scale -> centered 196px card spans y = 442..638; ±60px pad -> 382..698.
+        let span = overlay_edge_y_span(0, 1080, 1.0);
+        assert_eq!(span, (442, 638));
+        // Full mode allows corners.
+        assert!(edge_area_allows_x(false, Some(span), 0, 60));
+        assert!(edge_area_allows_x(false, Some(span), 1079, 60));
+        // Narrow mode allows near the centered card and ignores top/bottom corners.
+        assert!(edge_area_allows_x(true, Some(span), 382, 60));
+        assert!(edge_area_allows_x(true, Some(span), 698, 60));
+        assert!(!edge_area_allows_x(true, Some(span), 381, 60));
+        assert!(!edge_area_allows_x(true, Some(span), 699, 60));
+        assert!(!edge_area_allows_x(true, Some(span), 0, 60));
+        assert!(!edge_area_allows_x(true, Some(span), 1079, 60));
     }
 }
