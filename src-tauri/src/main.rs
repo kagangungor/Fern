@@ -261,6 +261,7 @@ fn main() {
             bring_hwnd_to_front,
             focus_app_windows,
             close_window,
+            trigger_thumbar_button,
             end_task,
             quit_fern,
             restart_fern,

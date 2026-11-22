@@ -797,8 +797,8 @@ fn launch_path(path: &str, args: Option<&str>) {
         let shell_target = if path.to_lowercase().ends_with(".lnk") {
             Some(path.to_string())
         } else if is_aumid_path(path) {
-            let id = path.trim().trim_start_matches("shell:AppsFolder\\");
-            Some(format!("shell:AppsFolder\\{}", id))
+            let target = shell_parsing_name_for_aumid(path);
+            (!target.is_empty()).then_some(target)
         } else {
             None
         };
@@ -1318,11 +1318,33 @@ fn extract_arg(args: &str, key: &str) -> Option<String> {
     if value.is_empty() { None } else { Some(value.to_string()) }
 }
 
-/// True for shell app ids (PackageFamily!App etc.), not file paths.
+/// Normalizes an AppsFolder entry or AUMID into a shell parsing name.
+fn shell_parsing_name_for_aumid(path: &str) -> String {
+    let p = path.trim().trim_matches('"');
+    if p.is_empty() {
+        return String::new();
+    }
+    let lower = p.to_ascii_lowercase();
+    if lower.starts_with("shell:appsfolder\\") {
+        let rest = &p["shell:AppsFolder\\".len()..];
+        if rest.is_empty() {
+            return String::new();
+        }
+        return format!("shell:AppsFolder\\{}", rest);
+    }
+    if p.starts_with("::") || lower.starts_with("shell:") {
+        return p.to_string();
+    }
+    format!("shell:AppsFolder\\{}", p)
+}
+
+/// True for shell app ids (PackageFamily!App, {GUID}\..., ::{CLSID}\..., etc.), not file paths.
 pub fn is_aumid_path(path: &str) -> bool {
     let p = path.trim().trim_matches('"');
     if p.is_empty() || p.len() < 3 { return false; }
     if p.to_lowercase().starts_with("shell:appsfolder\\") { return true; }
+    if p.starts_with("::{") { return true; }
+    if p.starts_with('{') && p.contains("}\\") { return true; }
     if p.contains('\\') || p.contains('/') || p.contains(':') { return false; }
     if p.to_lowercase().ends_with(".exe") { return false; }
     if std::path::Path::new(p).exists() { return false; }
@@ -1337,25 +1359,14 @@ fn is_browser_host_process(path: &str) -> bool {
 /// Icon for a shell app id via shell:AppsFolder (SHGetFileInfoW can't do these).
 fn icon_from_aumid(aumid: &str) -> Option<String> {
     unsafe {
-        use windows::Win32::Foundation::SIZE;
-        use windows::Win32::UI::Shell::{IShellItemImageFactory, SHCreateItemFromParsingName, SIIGBF, SIIGBF_BIGGERSIZEOK, SIIGBF_ICONONLY};
+        use windows::Win32::UI::Shell::{IShellItemImageFactory, SHCreateItemFromParsingName};
 
-        let id = aumid.trim().trim_start_matches("shell:AppsFolder\\");
-        if id.is_empty() { return None; }
+        let parsing_name = shell_parsing_name_for_aumid(aumid);
+        if parsing_name.is_empty() { return None; }
 
-        let parsing_name = format!("shell:AppsFolder\\{}", id);
         let wide: Vec<u16> = parsing_name.encode_utf16().chain(std::iter::once(0)).collect();
         let factory: IShellItemImageFactory = SHCreateItemFromParsingName(windows::core::PCWSTR(wide.as_ptr()), None).ok()?;
-
-        let size = SIZE { cx: 256, cy: 256 };
-        let hbitmap = factory.GetImage(size, SIIGBF(SIIGBF_ICONONLY.0 | SIIGBF_BIGGERSIZEOK.0))
-            .or_else(|_| factory.GetImage(size, SIIGBF_BIGGERSIZEOK))
-            .ok()?;
-        if hbitmap.0.is_null() { return None; }
-
-        let result = crate::utils::hbitmap_to_base64(hbitmap);
-        let _ = windows::Win32::Graphics::Gdi::DeleteObject(hbitmap.into());
-        result
+        crate::utils::image_factory_to_base64(&factory)
     }
 }
 
@@ -1805,6 +1816,7 @@ pub async fn get_app_icon(app: AppHandle, path: String, name: Option<String>, hw
         }
     }
 
+    let mut matched_app_path: Option<String> = None;
     if let Some(apps_cache) = INSTALLED_APPS_CACHE.get() {
         if let Ok(apps) = apps_cache.lock() {
             let scanned = apps.iter().find(|a| {
@@ -1819,6 +1831,12 @@ pub async fn get_app_icon(app: AppHandle, path: String, name: Option<String>, hw
                 }
                 schedule_icon_cache_save(app.clone());
                 return Ok(Some(icon));
+            }
+            if match_by_name {
+                matched_app_path = apps
+                    .iter()
+                    .find(|a| lookup_name.as_deref().is_some_and(|n| a.name.eq_ignore_ascii_case(n)))
+                    .map(|a| a.path.clone());
             }
         }
     }
@@ -1855,7 +1873,7 @@ pub async fn get_app_icon(app: AppHandle, path: String, name: Option<String>, hw
     }
 
     // Resolve bare names (notepad.exe) first so Store packages get their own logo, not the System32 stub.
-    let mut path = path;
+    let mut path = matched_app_path.unwrap_or(path);
     if !path.contains('\\') && !path.contains('/') {
         if let Some(resolved) = resolve_executable_path(&path) {
             path = resolved;
@@ -1867,7 +1885,7 @@ pub async fn get_app_icon(app: AppHandle, path: String, name: Option<String>, hw
 
     // Strategy 2: shell-resolved icons for Store/UWP/PWA ids and exes inside MSIX packages.
     let aumid_opt = if is_aumid_path(&path) {
-        Some(path.trim().trim_start_matches("shell:AppsFolder\\").to_string())
+        Some(path.trim().to_string())
     } else {
         None
     };
@@ -1875,12 +1893,12 @@ pub async fn get_app_icon(app: AppHandle, path: String, name: Option<String>, hw
     if aumid_opt.is_some() || packaged_exe {
         let path_owned = path.clone();
         let result = tauri::async_runtime::spawn_blocking(move || {
-            let _ = unsafe { windows::Win32::System::Com::CoInitializeEx(None, windows::Win32::System::Com::COINIT_MULTITHREADED) };
+            let com_ok = unsafe { windows::Win32::System::Com::CoInitializeEx(None, windows::Win32::System::Com::COINIT_APARTMENTTHREADED).is_ok() };
             let icon = match aumid_opt {
                 Some(aumid) => icon_from_aumid(&aumid),
                 None => packaged_exe_icon(&path_owned),
             };
-            unsafe { windows::Win32::System::Com::CoUninitialize(); }
+            if com_ok { unsafe { windows::Win32::System::Com::CoUninitialize(); } }
             icon
         }).await.unwrap_or(None);
 
@@ -1941,11 +1959,11 @@ pub async fn get_app_icon(app: AppHandle, path: String, name: Option<String>, hw
     let path_clone = path.clone();
     let ck_clone = cache_key.clone();
     let file_icon = tauri::async_runtime::spawn_blocking(move || unsafe {
-        use windows::Win32::System::Com::{CoInitializeEx, COINIT_MULTITHREADED, CoUninitialize};
+        use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED, CoUninitialize};
         use windows::Win32::UI::Shell::{SHGetFileInfoW, SHFILEINFOW, SHGFI_ICON, SHGFI_LARGEICON};
         use windows::Win32::UI::WindowsAndMessaging::DestroyIcon;
         
-        let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+        let com_ok = CoInitializeEx(None, COINIT_APARTMENTTHREADED).is_ok();
         let result = {
             let (mut actual_path, args) = if path_clone.to_lowercase().ends_with(".lnk") {
                 resolve_shortcut(&path_clone).unwrap_or((path_clone.clone(), String::new()))
@@ -1976,7 +1994,7 @@ pub async fn get_app_icon(app: AppHandle, path: String, name: Option<String>, hw
 
             if let Some(icon) = icon_data {
                 if let Ok(mut lock) = ICON_CACHE.get().unwrap().lock() { lock.insert(ck_clone, icon.clone()); }
-                CoUninitialize();
+                if com_ok { CoUninitialize(); }
                 return Some(icon);
             }
 
@@ -2013,7 +2031,7 @@ pub async fn get_app_icon(app: AppHandle, path: String, name: Option<String>, hw
             if actual_path.to_lowercase().starts_with("shell:") {
                 if let Some(icon) = crate::utils::icon_from_parsing_name(&actual_path) {
                     if let Ok(mut lock) = ICON_CACHE.get().unwrap().lock() { lock.insert(ck_clone, icon.clone()); }
-                    CoUninitialize();
+                    if com_ok { CoUninitialize(); }
                     return Some(icon);
                 }
             }
@@ -2035,7 +2053,7 @@ pub async fn get_app_icon(app: AppHandle, path: String, name: Option<String>, hw
                 Some(base64_icon)
             } else { None }
         };
-        CoUninitialize();
+        if com_ok { CoUninitialize(); }
         result.flatten()
     }).await.map_err(|e| e.to_string())?;
 
@@ -3189,6 +3207,35 @@ pub async fn close_window(hwnd: isize) -> bool {
     }).await.unwrap_or(true)
 }
 
+const ELECTRON_THUMBAR_BUTTON_ID_BASE: u16 = 40001;
+const THBN_CLICKED: usize = 0x1800;
+const MAX_THUMBAR_BUTTONS: u16 = 7;
+
+pub(crate) fn thumbar_command_wparam(button_index: u16) -> Option<usize> {
+    if button_index >= MAX_THUMBAR_BUTTONS {
+        return None;
+    }
+    Some((THBN_CLICKED << 16) | (ELECTRON_THUMBAR_BUTTON_ID_BASE + button_index) as usize)
+}
+
+/// Triggers an Electron window's registered thumbnail toolbar button without focusing it.
+#[tauri::command]
+pub fn trigger_thumbar_button(hwnd: isize, button_index: u16) -> Result<(), String> {
+    let wparam = thumbar_command_wparam(button_index)
+        .ok_or_else(|| format!("Invalid thumbar button index: {button_index}"))?;
+    unsafe {
+        use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
+        use windows::Win32::UI::WindowsAndMessaging::{IsWindow, PostMessageW, WM_COMMAND};
+        let target = HWND(hwnd as *mut _);
+        if !IsWindow(Some(target)).as_bool() {
+            return Err("Target window is no longer valid".to_string());
+        }
+        PostMessageW(Some(target), WM_COMMAND, WPARAM(wparam), LPARAM(0))
+            .map_err(|e| format!("Failed to post thumbar command: {e}"))?;
+    }
+    Ok(())
+}
+
 fn re_register_appbars(app: &AppHandle, settings: &HashMap<String, serde_json::Value>) {
     let notch_fixed = settings.get("fern-notch-mode").map(|v| v.as_str() == Some("fixed")).unwrap_or(true);
     let dock_fixed = settings.get("fern-dock-mode").map(|v| v.as_str() == Some("fixed")).unwrap_or(false);
@@ -4201,9 +4248,29 @@ mod pwa_icon_tests {
         assert!(is_aumid_path("4DF9E0F8.Netflix_mcm4njqhnhss8!Netflix.App"));
         assert!(is_aumid_path("Microsoft.VisualStudioCode"));
         assert!(is_aumid_path("shell:AppsFolder\\4DF9E0F8.Netflix_mcm4njqhnhss8!Netflix.App"));
+        assert!(is_aumid_path("{6D809377-6AF0-444B-8957-A3773F02200E}\\Blender Foundation\\Blender 4.5\\blender.exe"));
+        assert!(is_aumid_path("{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\\compmgmt.msc"));
+        assert!(is_aumid_path("::{4234D49B-0245-4DF3-B780-3893943456E1}\\Microsoft.Getstarted_8wekyb3d8bbwe!App"));
         assert!(!is_aumid_path("C:\\Windows\\explorer.exe"));
         assert!(!is_aumid_path("msedge.exe"));
         assert!(!is_aumid_path(""));
+
+        assert_eq!(
+            shell_parsing_name_for_aumid("::{4234D49B-0245-4DF3-B780-3893943456E1}\\Microsoft.Getstarted_8wekyb3d8bbwe!App"),
+            "::{4234D49B-0245-4DF3-B780-3893943456E1}\\Microsoft.Getstarted_8wekyb3d8bbwe!App"
+        );
+        assert_eq!(
+            shell_parsing_name_for_aumid("shell:AppsFolder\\4DF9E0F8.Netflix_mcm4njqhnhss8!Netflix.App"),
+            "shell:AppsFolder\\4DF9E0F8.Netflix_mcm4njqhnhss8!Netflix.App"
+        );
+        assert_eq!(
+            shell_parsing_name_for_aumid("{6D809377-6AF0-444B-8957-A3773F02200E}\\Blender Foundation\\Blender 4.5\\blender.exe"),
+            "shell:AppsFolder\\{6D809377-6AF0-444B-8957-A3773F02200E}\\Blender Foundation\\Blender 4.5\\blender.exe"
+        );
+        assert_eq!(
+            shell_parsing_name_for_aumid("4DF9E0F8.Netflix_mcm4njqhnhss8!Netflix.App"),
+            "shell:AppsFolder\\4DF9E0F8.Netflix_mcm4njqhnhss8!Netflix.App"
+        );
     }
 
     #[test]
@@ -4925,6 +4992,14 @@ mod metrics_tests {
             super::on_screen_restore_rect(rect(-32000, -32000, 3000, 2000), work),
             work
         );
+    }
+
+    #[test]
+    fn thumbar_command_wparam_encodes_electron_ids_and_rejects_overflow() {
+        assert_eq!(super::thumbar_command_wparam(0), Some((0x1800 << 16) | 40001));
+        assert_eq!(super::thumbar_command_wparam(3), Some((0x1800 << 16) | 40004));
+        assert_eq!(super::thumbar_command_wparam(6), Some((0x1800 << 16) | 40007));
+        assert_eq!(super::thumbar_command_wparam(7), None);
     }
 }
 

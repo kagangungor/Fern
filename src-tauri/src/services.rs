@@ -3171,11 +3171,11 @@ pub fn trigger_app_scan() {
     IS_SCANNING.store(true, Ordering::Relaxed);
     
     std::thread::spawn(|| {
-        use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_MULTITHREADED, CoTaskMemFree};
+        use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED, CoTaskMemFree};
         use windows::Win32::UI::Shell::{SHGetKnownFolderIDList, FOLDERID_AppsFolder, SHGetDesktopFolder, IShellFolder, IEnumIDList, SHGetNameFromIDList, SIGDN_NORMALDISPLAY, SIGDN_DESKTOPABSOLUTEPARSING, SIGDN_FILESYSPATH, SIGDN_URL};
         let mut apps = Vec::new();
         unsafe {
-            let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+            let com_ok = CoInitializeEx(None, COINIT_APARTMENTTHREADED).is_ok();
             // Use a scope to ensure COM objects are dropped before CoUninitialize
             {
                 if let Ok(pidl_apps) = SHGetKnownFolderIDList(&FOLDERID_AppsFolder, 0, None) {
@@ -3214,8 +3214,7 @@ pub fn trigger_app_scan() {
                                         } else { name.clone() };
 
                                         if is_launchable_entry(&name, &path) {
-                                            let icon = if abs_item.is_null() { None } else { crate::utils::icon_from_absolute_pidl(abs_item) };
-                                            // AUMIDs have no exe, storing the id here would make exe matching claim any browser window.
+                                            // Icons are fetched lazily by get_app_icon and cached in ICON_CACHE so get_installed_apps stays tiny and instant.
                                             let executable = if path.contains('\\') || path.contains('/') {
                                                 std::path::Path::new(&path).file_name().and_then(|n| n.to_str()).map(|s| s.to_string())
                                             } else {
@@ -3224,7 +3223,7 @@ pub fn trigger_app_scan() {
                                             apps.push(AppInfo {
                                                 name,
                                                 path,
-                                                icon,
+                                                icon: None,
                                                 is_running: false,
                                                 hwnd: None,
                                                 executable,
@@ -3243,7 +3242,7 @@ pub fn trigger_app_scan() {
                     CoTaskMemFree(Some(pidl_apps as *const _));
                 }
             } // Close COM scope
-            CoUninitialize();
+            if com_ok { CoUninitialize(); }
         }
 
         // Scan Start Menu .lnk shortcuts (depth-limited, no .exe scanning)
@@ -3257,14 +3256,14 @@ pub fn trigger_app_scan() {
         }
 
         // Shortcut resolution uses IShellLinkW, which needs COM on this thread.
-        unsafe { let _ = CoInitializeEx(None, COINIT_MULTITHREADED); }
+        let shortcut_com_ok = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED).is_ok() };
         for dir in &start_menu_dirs {
             let root = std::path::Path::new(dir);
             if root.exists() {
                 collect_shortcuts(root, &mut apps, 0);
             }
         }
-        unsafe { CoUninitialize(); }
+        if shortcut_com_ok { unsafe { CoUninitialize(); } }
 
         if let Some(c) = INSTALLED_APPS_CACHE.get() {
             if let Ok(mut lock) = c.lock() {
@@ -3281,8 +3280,17 @@ fn is_helper_name(name: &str) -> bool {
         "uninstall", "uninstaller", "installer", "setup", "help", "readme", "manual",
         "documentation", "troubleshoot", "troubleshooting", "repair",
     ];
+    const HELPER_PHRASES: &[&str] = &[
+        "release notes",
+        "desktop overlay host",
+        "debuggable package manager",
+        "developer command prompt",
+        "developer powershell",
+        "crash reporter",
+        "crash handler",
+    ];
     let lower = name.to_lowercase();
-    if lower.contains("release notes") {
+    if HELPER_PHRASES.iter().any(|p| lower.contains(p)) {
         return true;
     }
     lower
@@ -3303,6 +3311,55 @@ fn is_launchable_entry(name: &str, path: &str) -> bool {
     true
 }
 
+fn is_shared_host_exe(exe: &str) -> bool {
+    const SHARED_HOST_EXES: &[&str] = &[
+        "cmd.exe", "powershell.exe", "pwsh.exe", "wt.exe", "explorer.exe", "mmc.exe",
+        "rundll32.exe", "mshta.exe", "wscript.exe", "cscript.exe", "javaw.exe", "java.exe",
+        "python.exe", "pythonw.exe",
+    ];
+    SHARED_HOST_EXES.iter().any(|&host| exe.eq_ignore_ascii_case(host))
+}
+
+fn shortcut_display_name(path: &std::path::Path) -> String {
+    use std::os::windows::ffi::OsStrExt;
+    use windows::Win32::UI::Shell::{SHFILEINFOW, SHGFI_DISPLAYNAME, SHGetFileInfoW};
+
+    let fallback = || {
+        path.file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_default()
+    };
+
+    unsafe {
+        let mut shfi: SHFILEINFOW = std::mem::zeroed();
+        let wide: Vec<u16> = path.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
+        let res = SHGetFileInfoW(
+            windows::core::PCWSTR(wide.as_ptr()),
+            Default::default(),
+            Some(&mut shfi),
+            std::mem::size_of::<SHFILEINFOW>() as u32,
+            SHGFI_DISPLAYNAME,
+        );
+        if res != 0 {
+            let len = shfi
+                .szDisplayName
+                .iter()
+                .position(|&c| c == 0)
+                .unwrap_or(shfi.szDisplayName.len());
+            let raw = String::from_utf16_lossy(&shfi.szDisplayName[..len]).trim().to_string();
+            let cleaned = if raw.to_ascii_lowercase().ends_with(".lnk") {
+                raw[..raw.len() - 4].trim().to_string()
+            } else {
+                raw
+            };
+            if !cleaned.is_empty() {
+                return cleaned;
+            }
+        }
+    }
+    fallback()
+}
+
 fn collect_shortcuts(dir: &std::path::Path, apps: &mut Vec<AppInfo>, depth: i32) {
     if depth > 3 { return; }
     if let Ok(entries) = std::fs::read_dir(dir) {
@@ -3311,8 +3368,8 @@ fn collect_shortcuts(dir: &std::path::Path, apps: &mut Vec<AppInfo>, depth: i32)
             if path.is_dir() {
                 collect_shortcuts(&path, apps, depth + 1);
             } else if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("lnk")) {
-                let name = path.file_stem().unwrap().to_string_lossy().to_string();
-                if is_helper_name(&name) || name.starts_with("Install") { continue; }
+                let name = shortcut_display_name(&path);
+                if name.is_empty() || is_helper_name(&name) || name.starts_with("Install") { continue; }
 
                 // Keep the .lnk itself, its args identify PWAs and must be passed on launch.
                 // The target goes in as the exe name so pins still match running windows.
@@ -3330,7 +3387,18 @@ fn collect_shortcuts(dir: &std::path::Path, apps: &mut Vec<AppInfo>, depth: i32)
                     })
                 };
 
-                if !apps.iter().any(|a| a.name == name || a.path == path_str) {
+                let duplicate = apps.iter().any(|a| {
+                    a.name.eq_ignore_ascii_case(&name)
+                        || a.path.eq_ignore_ascii_case(&path_str)
+                        || (!is_pwa
+                            && executable.as_deref().is_some_and(|exe| {
+                                !is_shared_host_exe(exe)
+                                    && a.executable
+                                        .as_deref()
+                                        .is_some_and(|existing| existing.eq_ignore_ascii_case(exe))
+                            }))
+                });
+                if !duplicate {
                     apps.push(AppInfo {
                         name,
                         path: path_str,
@@ -3605,6 +3673,10 @@ fn hides_own_window(window_pid: u32, own_pid: u32, title: &str) -> bool {
     !is_settings
 }
 
+fn should_include_window_title(title_len: i32, window_class: &str, console_windows_enabled: bool) -> bool {
+    title_len > 0 || (window_class == "ConsoleWindowClass" && console_windows_enabled)
+}
+
 pub unsafe extern "system" fn enum_windows_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
     let apps = &mut *(lparam.0 as *mut Vec<AppInfo>);
 
@@ -3626,8 +3698,12 @@ pub unsafe extern "system" fn enum_windows_proc(hwnd: HWND, lparam: LPARAM) -> B
 
         let mut text = [0u16; 512];
         let len = windows::Win32::UI::WindowsAndMessaging::GetWindowTextW(hwnd, &mut text);
-        if len > 0 {
-            let title = String::from_utf16_lossy(&text[..len as usize]);
+        let mut class_name = [0u8; 256];
+        let class_len = windows::Win32::UI::WindowsAndMessaging::GetClassNameA(hwnd, &mut class_name);
+        let window_class = std::str::from_utf8(&class_name[..class_len.max(0) as usize]).unwrap_or("");
+        let console_windows_enabled = crate::utils::setting_flag("fern-dock-console-windows");
+        if should_include_window_title(len, window_class, console_windows_enabled) {
+            let title = if len > 0 { String::from_utf16_lossy(&text[..len as usize]) } else { String::new() };
             
             let ex_style = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
             
@@ -3652,10 +3728,7 @@ pub unsafe extern "system" fn enum_windows_proc(hwnd: HWND, lparam: LPARAM) -> B
                 if QueryFullProcessImageNameW(process_handle, PROCESS_NAME_WIN32, windows::core::PWSTR(path_buf.as_mut_ptr()), &mut path_len).is_ok() {
                     let path = String::from_utf16_lossy(&path_buf[..path_len as usize]);
                     let lowercase_path = path.to_lowercase();
-                    
-                    let mut class_name = [0u8; 256];
-                    let class_len = windows::Win32::UI::WindowsAndMessaging::GetClassNameA(hwnd, &mut class_name);
-                    let window_class = std::str::from_utf8(&class_name[..class_len as usize]).unwrap_or("");
+                    let is_console_window = window_class == "ConsoleWindowClass";
 
                     // Explorer folder windows and property sheets (#32770 with a tab control) both count,
                     // so Properties shows under File Explorer.
@@ -3666,14 +3739,14 @@ pub unsafe extern "system" fn enum_windows_proc(hwnd: HWND, lparam: LPARAM) -> B
                     let has_visible_owner = windows::Win32::UI::WindowsAndMessaging::GetWindow(hwnd, windows::Win32::UI::WindowsAndMessaging::GW_OWNER)
                         .map(|owner| !owner.0.is_null() && IsWindowVisible(owner).as_bool())
                         .unwrap_or(false);
-                    if has_visible_owner && !is_explorer_window {
+                    if has_visible_owner && !is_explorer_window && !is_console_window {
                         let _ = CloseHandle(process_handle);
                         return true.into();
                     }
 
                     if hides_own_window(process_id, std::process::id(), &title) ||
                        (lowercase_path.contains("conhost.exe")
-                           && !(window_class == "ConsoleWindowClass" && crate::utils::setting_flag("fern-dock-console-windows"))) ||
+                           && !(is_console_window && console_windows_enabled)) ||
                        (lowercase_path.contains("explorer.exe") && !is_explorer_window) ||
                        lowercase_path.contains("shellexperiencehost.exe") ||
                        lowercase_path.contains("searchhost.exe") ||
@@ -3716,8 +3789,8 @@ pub unsafe extern "system" fn enum_windows_proc(hwnd: HWND, lparam: LPARAM) -> B
                     let is_browser_pwa = is_browser_host
                         && window_aumid.as_deref().map_or(false, crate::commands::is_browser_pwa_aumid);
 
-                    let final_name = if name.eq_ignore_ascii_case("conhost") && !title.is_empty() {
-                        title.clone()
+                    let final_name = if name.eq_ignore_ascii_case("conhost") {
+                        if !title.trim().is_empty() { title.clone() } else { "Console".to_string() }
                     } else if (name.eq_ignore_ascii_case("javaw") || name.eq_ignore_ascii_case("java")) && !title.is_empty() {
                         title.clone()
                     } else if ((is_browser_host && (is_browser_pwa || window_aumid.is_none()))
@@ -4448,11 +4521,19 @@ mod tests {
         assert!(is_helper_name("7-Zip Help"));
         assert!(is_helper_name("Readme"));
         assert!(is_helper_name("Get Help"));
+        assert!(is_helper_name("Desktop Overlay Host"));
+        assert!(is_helper_name("Debuggable Package Manager"));
+        assert!(is_helper_name("Developer Command Prompt for VS 2022"));
+        assert!(is_helper_name("Developer PowerShell for VS 2022"));
         // Whole-word matching: legit names containing helper words survive.
         assert!(!is_helper_name("Helper"));
         assert!(!is_helper_name("Photo Remover"));
         assert!(!is_helper_name("7-Zip File Manager"));
         assert!(!is_helper_name("Brave"));
+        assert!(!is_helper_name("Blender 4.5"));
+        assert!(!is_helper_name("Blockbench"));
+        assert!(!is_helper_name("Denetim Masası"));
+        assert!(!is_helper_name("Deskio"));
         assert!(!is_launchable_entry("Docs", "https://example.com"));
         assert!(is_launchable_entry("Brave", r"C:\Program Files\Brave\brave.exe"));
     }
@@ -4676,5 +4757,15 @@ mod tests {
         assert!(!edge_area_allows_x(true, Some(span), 699, 60));
         assert!(!edge_area_allows_x(true, Some(span), 0, 60));
         assert!(!edge_area_allows_x(true, Some(span), 1079, 60));
+    }
+
+    #[test]
+    fn empty_title_console_windows_show_only_when_enabled() {
+        use super::should_include_window_title;
+
+        assert!(should_include_window_title(5, "Chrome_WidgetWin_1", false));
+        assert!(!should_include_window_title(0, "Chrome_WidgetWin_1", true));
+        assert!(!should_include_window_title(0, "ConsoleWindowClass", false));
+        assert!(should_include_window_title(0, "ConsoleWindowClass", true));
     }
 }

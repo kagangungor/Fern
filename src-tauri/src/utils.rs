@@ -540,9 +540,39 @@ pub fn exe_description(path: &str) -> Option<String> {
     result
 }
 
+pub(crate) unsafe fn image_factory_to_base64(
+    factory: &windows::Win32::UI::Shell::IShellItemImageFactory,
+) -> Option<String> {
+    use windows::Win32::Foundation::SIZE;
+    use windows::Win32::Graphics::Gdi::DeleteObject;
+    use windows::Win32::UI::Shell::{SIIGBF, SIIGBF_BIGGERSIZEOK, SIIGBF_ICONONLY};
+
+    let size = SIZE { cx: 256, cy: 256 };
+    let hbitmap = factory
+        .GetImage(size, SIIGBF(SIIGBF_ICONONLY.0 | SIIGBF_BIGGERSIZEOK.0))
+        .or_else(|_| factory.GetImage(size, SIIGBF_BIGGERSIZEOK))
+        .ok()?;
+    if hbitmap.0.is_null() {
+        return None;
+    }
+    let b64 = hbitmap_to_base64(hbitmap);
+    let _ = DeleteObject(hbitmap.into());
+    b64
+}
+
 pub unsafe fn icon_from_absolute_pidl(pidl: *const windows::Win32::UI::Shell::Common::ITEMIDLIST) -> Option<String> {
-    use windows::Win32::UI::Shell::{SHGetFileInfoW, SHFILEINFOW, SHGFI_ICON, SHGFI_LARGEICON, SHGFI_PIDL};
+    use windows::Win32::UI::Shell::{
+        IShellItemImageFactory, SHCreateItemFromIDList, SHFILEINFOW, SHGetFileInfoW,
+        SHGFI_ICON, SHGFI_LARGEICON, SHGFI_PIDL,
+    };
     use windows::Win32::UI::WindowsAndMessaging::DestroyIcon;
+
+    if let Ok(factory) = SHCreateItemFromIDList::<IShellItemImageFactory>(pidl) {
+        if let Some(b64) = image_factory_to_base64(&factory) {
+            return Some(b64);
+        }
+    }
+
     let mut shfi: SHFILEINFOW = std::mem::zeroed();
     let res = SHGetFileInfoW(
         windows::core::PCWSTR(pidl as *const u16),

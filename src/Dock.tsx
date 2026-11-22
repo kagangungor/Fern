@@ -1,4 +1,4 @@
-import { Volume2, Volume1, VolumeX } from 'lucide-react';
+import { Volume2, Volume1, VolumeX, Video, VideoOff, Mic, MicOff, Headphones, HeadphoneOff, PhoneOff } from 'lucide-react';
 import { useState, useEffect, useLayoutEffect, useMemo, useRef, memo, useCallback } from 'react';
 import { motion, AnimatePresence, Reorder, useIsPresent } from 'framer-motion';
 import { invoke } from '@tauri-apps/api/core';
@@ -303,6 +303,93 @@ function AttentionBadge({ count, isFlashing }: { count: number | null; isFlashin
 
 let liveThumbnailGeneration = 0;
 
+type CommActionKind = 'camera' | 'mic' | 'deafen' | 'disconnect';
+
+interface CommThumbarAction {
+  index: number;
+  kind: CommActionKind;
+  labelKey: string;
+  danger?: boolean;
+}
+
+interface CommThumbarProfile {
+  matchTokens: string[];
+  actions: CommThumbarAction[];
+}
+
+const COMM_THUMBAR_PROFILES: CommThumbarProfile[] = [
+  {
+    matchTokens: ['discord', 'vesktop'],
+    actions: [
+      { index: 0, kind: 'camera', labelKey: 'dockpreview.camera' },
+      { index: 1, kind: 'mic', labelKey: 'dockpreview.mic' },
+      { index: 2, kind: 'deafen', labelKey: 'dockpreview.deafen' },
+      { index: 3, kind: 'disconnect', labelKey: 'dockpreview.disconnect', danger: true },
+    ],
+  },
+];
+
+function commProfileForApp(app: AppInfo): CommThumbarProfile | null {
+  const haystack = `${app.executable ?? ''} ${app.path ?? ''} ${app.name ?? ''}`.toLowerCase();
+  return (
+    COMM_THUMBAR_PROFILES.find((profile) =>
+      profile.matchTokens.some((token) => haystack.includes(token))
+    ) ?? null
+  );
+}
+
+interface CommToggleState {
+  cameraOn: boolean;
+  micMuted: boolean;
+  deafened: boolean;
+  micBeforeDeafen: boolean;
+}
+
+const DEFAULT_COMM_TOGGLE: CommToggleState = {
+  cameraOn: false,
+  micMuted: false,
+  deafened: false,
+  micBeforeDeafen: false,
+};
+
+const commToggleStateByHwnd = new Map<number, CommToggleState>();
+
+function nextCommToggleState(prev: CommToggleState, kind: CommActionKind): CommToggleState {
+  if (kind === 'camera') {
+    return { ...prev, cameraOn: !prev.cameraOn };
+  }
+  if (kind === 'mic') {
+    if (prev.deafened) {
+      return { ...prev, micMuted: false, deafened: false, micBeforeDeafen: false };
+    }
+    const nextMuted = !prev.micMuted;
+    return { ...prev, micMuted: nextMuted, deafened: false, micBeforeDeafen: nextMuted };
+  }
+  if (kind === 'deafen') {
+    if (!prev.deafened) {
+      return { ...prev, micMuted: true, deafened: true, micBeforeDeafen: prev.micMuted };
+    }
+    return { ...prev, micMuted: prev.micBeforeDeafen, deafened: false, micBeforeDeafen: false };
+  }
+  if (kind === 'disconnect') {
+    return { ...DEFAULT_COMM_TOGGLE };
+  }
+  return prev;
+}
+
+function CommActionIcon({ kind, toggled }: { kind: CommActionKind; toggled: boolean }) {
+  switch (kind) {
+    case 'camera':
+      return toggled ? <Video size={14} /> : <VideoOff size={14} />;
+    case 'mic':
+      return toggled ? <MicOff size={14} /> : <Mic size={14} />;
+    case 'deafen':
+      return toggled ? <HeadphoneOff size={14} /> : <Headphones size={14} />;
+    case 'disconnect':
+      return <PhoneOff size={14} />;
+  }
+}
+
 interface DockPreviewTooltipProps {
   app: AppInfo;
   previews: { hwnd: number; title: string; image: string }[];
@@ -334,6 +421,49 @@ function DockPreviewTooltip({
     }
   }, [isPresent]);
   const surfaceRefs = useRef<Map<number, HTMLDivElement>>(new Map());
+  const commProfile = useMemo(() => commProfileForApp(app), [app]);
+  const [privacy, setPrivacy] = useState<{ mic_active: boolean; cam_active: boolean; active_apps: string[] } | null>(null);
+  const [, setToggleTick] = useState(0);
+
+  useEffect(() => {
+    if (!commProfile) {
+      setPrivacy(null);
+      return;
+    }
+    let alive = true;
+    invoke<{ mic_active: boolean; cam_active: boolean; active_apps: string[] }>('get_privacy_status')
+      .then((status) => {
+        if (alive) setPrivacy(status);
+      })
+      .catch(() => {});
+    const unlisten = listen<{ mic_active: boolean; cam_active: boolean; active_apps: string[] }>(
+      'privacy-status-changed',
+      (event) => {
+        if (alive) setPrivacy(event.payload);
+      }
+    );
+    return () => {
+      alive = false;
+      unlisten.then((fn) => fn()).catch(() => {});
+    };
+  }, [commProfile]);
+
+  const showCommActions = Boolean(
+    commProfile &&
+      privacy &&
+      (privacy.mic_active || privacy.cam_active) &&
+      privacy.active_apps.some((name) =>
+        commProfile.matchTokens.some((tok) => name.toLowerCase().includes(tok))
+      )
+  );
+
+  useEffect(() => {
+    if (privacy !== null && !showCommActions) {
+      for (const p of previews) {
+        commToggleStateByHwnd.delete(p.hwnd);
+      }
+    }
+  }, [privacy, showCommActions, previews]);
 
   useLayoutEffect(() => {
     const generation = ++liveThumbnailGeneration;
@@ -386,7 +516,7 @@ function DockPreviewTooltip({
       if (t2) clearTimeout(t2);
       if (generation === liveThumbnailGeneration) invoke('clear_live_thumbnails').catch(() => {});
     };
-  }, [previews]);
+  }, [previews, showCommActions]);
 
   return (
     <motion.div
@@ -448,6 +578,57 @@ function DockPreviewTooltip({
                   <div className="preview-item-icon-fallback">{renderMedia(app)}</div>
                 )}
               </div>
+              {showCommActions && commProfile && (
+                <div
+                  className="preview-thumbar-actions"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  {commProfile.actions.map((action) => {
+                    const toggleState = commToggleStateByHwnd.get(prev.hwnd) ?? {
+                      ...DEFAULT_COMM_TOGGLE,
+                      cameraOn: Boolean(privacy?.cam_active),
+                    };
+                    const isCameraActive = action.kind === 'camera' && toggleState.cameraOn;
+                    const isMuted =
+                      (action.kind === 'mic' && toggleState.micMuted) ||
+                      (action.kind === 'deafen' && toggleState.deafened);
+                    const iconToggled = action.kind === 'camera' ? isCameraActive : isMuted;
+                    return (
+                      <button
+                        key={action.index}
+                        type="button"
+                        className={`preview-thumbar-btn${isCameraActive ? ' is-active' : ''}${isMuted ? ' is-muted' : ''}${action.danger ? ' is-danger' : ''}`}
+                        title={t(action.labelKey)}
+                        aria-label={t(action.labelKey)}
+                        aria-pressed={action.kind === 'disconnect' ? undefined : iconToggled}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          const prevToggle = commToggleStateByHwnd.get(prev.hwnd);
+                          if (action.kind === 'disconnect') {
+                            commToggleStateByHwnd.delete(prev.hwnd);
+                          } else {
+                            commToggleStateByHwnd.set(
+                              prev.hwnd,
+                              nextCommToggleState(toggleState, action.kind)
+                            );
+                          }
+                          setToggleTick((n) => n + 1);
+                          invoke('trigger_thumbar_button', {
+                            hwnd: prev.hwnd,
+                            buttonIndex: action.index,
+                          }).catch(() => {
+                            if (prevToggle) commToggleStateByHwnd.set(prev.hwnd, prevToggle);
+                            else commToggleStateByHwnd.delete(prev.hwnd);
+                            setToggleTick((n) => n + 1);
+                          });
+                        }}
+                      >
+                        <CommActionIcon kind={action.kind} toggled={iconToggled} />
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           );
         })}
@@ -2703,6 +2884,8 @@ const Dock = memo(function Dock() {
   );
 });
 
+let cachedInstalledApps: AppInfo[] | null = null;
+
 function AddAppPopup({
   onClose,
   onAdd,
@@ -2723,7 +2906,7 @@ function AddAppPopup({
   isPickingProgramRef?: React.MutableRefObject<boolean>;
 }) {
   const t = useT();
-  const [apps, setApps] = useState<AppInfo[]>([]);
+  const [apps, setApps] = useState<AppInfo[]>(() => cachedInstalledApps ?? []);
 
   const handleBrowse = async () => {
     if (isPickingProgramRef) isPickingProgramRef.current = true;
@@ -2742,8 +2925,18 @@ function AddAppPopup({
   };
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(() => cachedInstalledApps === null);
   const [listIcons, setListIcons] = useState<Record<string, string>>({});
+  const listIconsRef = useRef(listIcons);
+  listIconsRef.current = listIcons;
+  const attemptedPathsRef = useRef<Set<string>>(new Set());
+  const popupAliveRef = useRef(true);
+  useEffect(() => {
+    popupAliveRef.current = true;
+    return () => {
+      popupAliveRef.current = false;
+    };
+  }, []);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
@@ -2837,7 +3030,9 @@ function AddAppPopup({
     const load = async () => {
       try {
         const res = await invoke<AppInfo[]>("get_installed_apps");
-        setApps(res.sort((a, b) => a.name.localeCompare(b.name)));
+        const sorted = res.sort((a, b) => a.name.localeCompare(b.name));
+        cachedInstalledApps = sorted;
+        setApps(sorted);
       } finally {
         setLoading(false);
       }
@@ -2885,32 +3080,53 @@ function AddAppPopup({
     };
   }, [onClose, containerRef, flat, selectedIndex, onAdd, pinned, isPickingProgramRef]);
 
-  // Fetch icons in parallel and apply them as one batch, one at a time looked like the list
-  // shifting. Boxes are fixed size and images fade in.
+  // Lazy-load icons as rows enter (or approach) the visible scroll viewport.
   useEffect(() => {
-    let active = true;
-    const targets = flat.slice(0, 25).filter((a) => !listIcons[a.path]);
-    if (targets.length === 0) return;
-    Promise.all(
-      targets.map(async (app) => {
-        try {
-          const icon = await invoke<string | null>("get_app_icon", { path: app.path });
-          return [app.path, icon] as const;
-        } catch (err) {
-          console.error(err);
-          return [app.path, null] as const;
+    const root = listRef.current;
+    if (!root || loading || flat.length === 0) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const targets: AppInfo[] = [];
+        for (const entry of entries) {
+          if (!entry.isIntersecting) continue;
+          const idxStr = (entry.target as HTMLElement).dataset.idx;
+          if (idxStr === undefined) continue;
+          const app = flat[Number(idxStr)];
+          observer.unobserve(entry.target);
+          if (!app || app.icon || listIconsRef.current[app.path] || attemptedPathsRef.current.has(app.path)) {
+            continue;
+          }
+          attemptedPathsRef.current.add(app.path);
+          targets.push(app);
         }
-      })
-    ).then((pairs) => {
-      if (!active) return;
-      const batch: Record<string, string> = {};
-      for (const [path, icon] of pairs) if (icon) batch[path] = icon;
-      if (Object.keys(batch).length > 0) setListIcons((prev) => ({ ...prev, ...batch }));
-    });
-    return () => {
-      active = false;
-    };
-  }, [flat, listIcons]);
+        if (targets.length === 0) return;
+
+        Promise.all(
+          targets.map(async (app) => {
+            try {
+              const icon = await invoke<string | null>("get_app_icon", { path: app.path, name: app.name });
+              return [app.path, icon] as const;
+            } catch (err) {
+              console.error(err);
+              return [app.path, null] as const;
+            }
+          })
+        ).then((pairs) => {
+          if (!popupAliveRef.current) return;
+          const batch: Record<string, string> = {};
+          for (const [path, icon] of pairs) if (icon) batch[path] = icon;
+          if (Object.keys(batch).length > 0) setListIcons((prev) => ({ ...prev, ...batch }));
+        });
+      },
+      { root, rootMargin: "200px 0px" }
+    );
+
+    const rows = root.querySelectorAll<HTMLElement>("[data-idx]");
+    rows.forEach((row) => observer.observe(row));
+
+    return () => observer.disconnect();
+  }, [flat, loading]);
 
   return (
     <div className="add-popup-anchor" style={{ zoom: scale, bottom }}>
@@ -2967,7 +3183,7 @@ function AddAppPopup({
                 {sec.title && <div className="popup-section-label">{sec.title}</div>}
                 {sec.items.map((app) => {
                   const gi = flatIndex.get(app) ?? 0;
-                  const icon = listIcons[app.path];
+                  const icon = app.icon || listIcons[app.path];
                   const alreadyPinned = pinned.some((p) => isSameApp(p, app));
                   return (
                     <div
