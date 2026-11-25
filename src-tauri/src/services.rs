@@ -27,6 +27,16 @@ static WIN_KEY_DOWN: AtomicBool = AtomicBool::new(false);
 /// Digit of the held Win+Number combo (0 = none). Auto-repeat re-fires keydown, only the first press counts.
 static WIN_NUMBER_HELD: AtomicU8 = AtomicU8::new(0);
 static WIN_B_HELD: AtomicBool = AtomicBool::new(false);
+/// Another key went down while Win was held, so the Win release won't open Start.
+static WIN_COMBO_USED: AtomicBool = AtomicBool::new(false);
+/// When a lone Win tap was released (ms). Start opens cloaked and takes a moment to be detected as
+/// foreground, so the dock treats this as "Start opening" right away instead of waiting for it.
+static START_TAP_MS: AtomicI64 = AtomicI64::new(0);
+const START_TAP_GRACE_MS: i64 = 700;
+/// Whether Start/Search is currently detected on the primary dock monitor.
+static CURRENT_START_ON_DOCK: AtomicBool = AtomicBool::new(false);
+/// Visibility/overlap loop thread, unparked on foreground or Win tap changes.
+static VISIBILITY_THREAD: OnceLock<std::thread::Thread> = OnceLock::new();
 /// Unassigned virtual key used as the mask key (see send_start_menu_mask).
 const MASK_VK: u16 = 0xE8;
 
@@ -109,16 +119,27 @@ unsafe extern "system" fn keyboard_hook_proc(code: i32, wparam: windows::Win32::
         if (kb.flags.0 & LLKHF_INJECTED.0) == 0 {
             if vk_code == VK_LWIN || vk_code == VK_RWIN {
                 if is_down {
-                    WIN_KEY_DOWN.store(true, Ordering::Relaxed);
+                    // Auto-repeat re-sends keydown while held, only the first press starts a combo.
+                    if !WIN_KEY_DOWN.swap(true, Ordering::Relaxed) {
+                        WIN_COMBO_USED.store(false, Ordering::Relaxed);
+                    }
                     // A new Win press starts a fresh combo, even if a digit keyup got missed.
                     WIN_NUMBER_HELD.store(0, Ordering::Relaxed);
                     WIN_B_HELD.store(false, Ordering::Relaxed);
                 } else if is_up {
-                    WIN_KEY_DOWN.store(false, Ordering::Relaxed);
+                    let was_down = WIN_KEY_DOWN.swap(false, Ordering::Relaxed);
+                    // A lone tap opens Start, unless Start is already up (then it closes it).
+                    if was_down && !WIN_COMBO_USED.load(Ordering::Relaxed)
+                        && !CURRENT_START_ON_DOCK.load(Ordering::Relaxed)
+                    {
+                        START_TAP_MS.store(now_ms(), Ordering::Relaxed);
+                        if let Some(t) = VISIBILITY_THREAD.get() { t.unpark(); }
+                    }
                     WIN_NUMBER_HELD.store(0, Ordering::Relaxed);
                     WIN_B_HELD.store(false, Ordering::Relaxed);
                 }
             } else if WIN_KEY_DOWN.load(Ordering::Relaxed) {
+                if is_down { WIN_COMBO_USED.store(true, Ordering::Relaxed); }
                 if vk_code.0 == 0x42 {
                     if is_up {
                         WIN_B_HELD.store(false, Ordering::Relaxed);
@@ -489,6 +510,8 @@ unsafe extern "system" fn focus_event_proc(
     _ms_event_time: u32,
 ) {
     if hwnd.0.is_null() { return; }
+    // Wake the visibility loop now so Start/Search updates the dock without waiting for the next tick.
+    if let Some(t) = VISIBILITY_THREAD.get() { t.unpark(); }
     // Foreground moved — e.g. Snipping Tool opened/closed or got minimised.
     CAPTURE_RECHECK.store(true, Ordering::Relaxed);
     use windows::Win32::UI::WindowsAndMessaging::{IsWindow, GetWindowLongW, GWL_EXSTYLE, WS_EX_TOOLWINDOW};
@@ -513,7 +536,7 @@ unsafe extern "system" fn focus_event_proc(
     std::thread::spawn(move || {
         use windows::Win32::UI::WindowsAndMessaging::{GetWindowTextW, IsIconic, IsWindow};
 
-        std::thread::sleep(std::time::Duration::from_millis(200));
+        std::thread::sleep(std::time::Duration::from_millis(450));
         let hwnd = HWND(hwnd_raw as *mut _);
         unsafe {
             if !IsWindow(Some(hwnd)).as_bool() || IsIconic(hwnd).as_bool() { return; }
@@ -592,7 +615,14 @@ unsafe extern "system" fn thumbnail_capture_proc(
     let hwnd_raw = hwnd.0 as isize;
 
     std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_millis(150));
+        use windows::Win32::UI::WindowsAndMessaging::{IsIconic, IsWindow};
+
+        std::thread::sleep(std::time::Duration::from_millis(450));
+        let hwnd = HWND(hwnd_raw as *mut _);
+        unsafe {
+            if !IsWindow(Some(hwnd)).as_bool() || IsIconic(hwnd).as_bool() { return; }
+        }
+        if crate::utils::is_window_fullscreen(hwnd) { return; }
 
         // Skip if another capture refreshed this window very recently
         if let Some(cache) = crate::state::THUMBNAIL_CACHE.get() {
@@ -605,13 +635,14 @@ unsafe extern "system" fn thumbnail_capture_proc(
             }
         }
 
-        let hwnd = HWND(hwnd_raw as *mut _);
+        if THUMB_CAPTURE_IN_FLIGHT.swap(true, Ordering::Relaxed) { return; }
+        let _guard = ThumbnailCaptureGuard;
+
         if let Some(img) = crate::utils::capture_hwnd_to_base64(hwnd, 320, 200) {
             if let Some(cache) = crate::state::THUMBNAIL_CACHE.get() {
                 if let Ok(mut guard) = cache.lock() {
                     guard.insert(hwnd_raw, (img, crate::utils::get_now_ms()));
                     if guard.len() > 15 {
-                        use windows::Win32::UI::WindowsAndMessaging::IsWindow;
                         guard.retain(|&k, _| {
                             unsafe { IsWindow(Some(HWND(k as *mut _))).as_bool() }
                         });
@@ -1302,17 +1333,21 @@ pub fn setup_system_worker(app_handle: AppHandle) -> Sender<SystemCommand> {
         use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowRect, IsZoomed, IsIconic, GetWindowLongW, GWL_STYLE, WS_MAXIMIZE, GetClientRect};
         use windows::Win32::Graphics::Gdi::ClientToScreen;
         use windows::Win32::Foundation::{RECT, POINT};
+        let _ = VISIBILITY_THREAD.set(std::thread::current());
         let mut last_visible = true;
         let mut last_dock_overlap: Option<bool> = None;
         let mut last_dock_fullscreen: Option<bool> = None;
+        let mut last_dock_shell_surface: Option<bool> = None;
         let mut last_notch_fullscreen: Option<bool> = None;
         let mut last_secondary_dock_fullscreen = std::collections::HashMap::<String, (bool, Instant)>::new();
+        let mut last_secondary_dock_shell_surface = std::collections::HashMap::<String, (bool, Instant)>::new();
         let mut last_notch_overlap: Option<bool> = None;
         let mut last_dock_maximized: Option<bool> = None;
         let mut last_fg_maximized = false;
         let mut last_hwnd = HWND(std::ptr::null_mut());
         let mut last_emit = Instant::now();
         let mut is_known_shell = false;
+        let mut is_desktop_focused = false;
         let my_process_id = std::process::id();
         let mut last_monitor_update = Instant::now() - Duration::from_secs(5);
         let mut cached_scale = 1.0f64;
@@ -1342,10 +1377,29 @@ pub fn setup_system_worker(app_handle: AppHandle) -> Sender<SystemCommand> {
                     DwmGetWindowAttribute(target_fg, windows::Win32::Graphics::Dwm::DWMWA_CLOAKED, &mut cloaked as *mut _ as *mut _, 4).is_err() || cloaked == 0
                 };
                 let start_shown = start_counts_as_shown(start_open, start_on_screen, now.duration_since(start_focused_at));
+                let hide_on_start = crate::utils::get_setting_str(&handle_visibility, "fern-dock-hide-on-start")
+                    .map(|v| v != "false")
+                    .unwrap_or(true);
+                let start_tap_monitor = if !hide_on_start
+                    && !start_shown
+                    && now_ms() - START_TAP_MS.load(Ordering::Relaxed) < START_TAP_GRACE_MS
+                {
+                    cursor_monitor_origin()
+                } else {
+                    None
+                };
                 let start_monitor = if start_shown { monitor_rect_for_hwnd(target_fg) } else { None };
-                let start_on = |window: HWND| match (start_monitor, monitor_rect_for_hwnd(window)) {
-                    (Some((sx, sy, _, _)), Some((x, y, _, _))) => sx == x && sy == y,
-                    _ => false,
+                let start_on = |window: HWND| {
+                    let win_mon = monitor_rect_for_hwnd(window);
+                    let detected = match (start_monitor, win_mon) {
+                        (Some((sx, sy, _, _)), Some((x, y, _, _))) => sx == x && sy == y,
+                        _ => false,
+                    };
+                    let tapped = match (start_tap_monitor, win_mon) {
+                        (Some((cx, cy)), Some((x, y, _, _))) => cx == x && cy == y,
+                        _ => false,
+                    };
+                    detected || tapped
                 };
                 if now.duration_since(last_monitor_update) > Duration::from_millis(1000) {
                     if let Some(m) = handle_visibility.primary_monitor().ok().flatten() {
@@ -1411,7 +1465,8 @@ pub fn setup_system_worker(app_handle: AppHandle) -> Sender<SystemCommand> {
                             && (title == "Start" || title == "Search"));
                     let is_shell = class_str == "Shell_TrayWnd" || class_str == "Shell_SecondaryTrayWnd" || is_start;
                     
-                    is_known_shell = is_desktop || is_shell; 
+                    is_known_shell = is_desktop || is_shell;
+                    is_desktop_focused = is_desktop;
                 }
 
                 if !hwnd.is_invalid() {
@@ -1468,7 +1523,7 @@ pub fn setup_system_worker(app_handle: AppHandle) -> Sender<SystemCommand> {
                                         should_maximized = is_maximized && !current_is_fs;
                                     } else {
                                         should_overlap = false;
-                                        if let Some(dr) = dock_overlap_rect("dock") {
+                                        if let Some(dr) = crate::state::dock_overlap_rect("dock") {
                                             should_overlap = rect_overlaps_dock(screen_rect.left, screen_rect.bottom, rect, dr, cached_scale);
                                         }
 
@@ -1490,9 +1545,11 @@ pub fn setup_system_worker(app_handle: AppHandle) -> Sender<SystemCommand> {
                         .is_ok_and(|state| state == windows::Win32::UI::Shell::QUNS_RUNNING_D3D_FULL_SCREEN);
                     current_is_fs = is_d3d_fs;
                     is_known_shell = false;
+                    is_desktop_focused = false;
                 }
 
-                // Overlap only counts on the monitor the foreground window is on.
+                // Overlap only counts on the monitor the foreground window is on, unless another
+                // monitor has a maximized/fullscreen/covering window in front on its z-order.
                 let monitor_of = |label: &str| {
                     handle_visibility.get_webview_window(label)
                         .and_then(|w| w.hwnd().ok())
@@ -1502,12 +1559,44 @@ pub fn setup_system_worker(app_handle: AppHandle) -> Sender<SystemCommand> {
                     (Some((screen, _, _)), Some((mx, my, _, _))) => screen.left == mx && screen.top == my,
                     _ => true,
                 };
+                let focused_monitor = if hwnd.is_invalid() || is_desktop_focused {
+                    None
+                } else if is_known_shell {
+                    cursor_monitor_origin()
+                } else {
+                    monitor_rect_for_hwnd(hwnd).map(|(x, y, _, _)| (x, y))
+                };
+                let covers = scan_monitor_covers(my_process_id);
+                let fullscreen_monitors: Vec<(i32, i32)> = covers.iter().filter(|c| c.fullscreen).map(|c| c.origin).collect();
+                let unfocused_panel_overlap = |label: &str, is_dock: bool| -> Option<bool> {
+                    let (mx, my, _, _) = monitor_of(label)?;
+                    if focused_monitor == Some((mx, my)) {
+                        return None;
+                    }
+                    let Some(cover) = covers.iter().find(|c| c.origin == (mx, my)) else { return Some(false) };
+                    if cover.covered {
+                        return Some(true);
+                    }
+                    Some(if is_dock {
+                        crate::state::dock_overlap_rect(label)
+                            .is_some_and(|dr| cover.rects.iter().any(|r| rect_overlaps_dock(mx, cover.bottom, *r, dr, cached_scale)))
+                    } else {
+                        crate::state::notch_rects().lock().ok().and_then(|m| m.get(label).copied())
+                            .is_some_and(|nr| cover.rects.iter().any(|r| rect_overlaps_notch(mx, my, *r, nr, cached_scale)))
+                    })
+                };
                 if !fg_on("dock") {
                     should_overlap = false;
                     should_maximized = false;
                 }
                 if !fg_on("main") {
                     should_notch_overlap = false;
+                }
+                if let Some(overlap) = unfocused_panel_overlap("dock", true) {
+                    should_overlap = overlap;
+                }
+                if let Some(overlap) = unfocused_panel_overlap("main", false) {
+                    should_notch_overlap = overlap;
                 }
                 should_notch_overlap = notch_overlap_during_start(start_shown, should_notch_overlap, last_notch_overlap.unwrap_or(should_notch_overlap));
 
@@ -1522,19 +1611,29 @@ pub fn setup_system_worker(app_handle: AppHandle) -> Sender<SystemCommand> {
                 crate::state::set_overlap(crate::state::dock_overlap(), "dock", if effective_dock_overlap { 1 } else { 0 });
                 crate::state::set_overlap(crate::state::notch_overlap(), "main", if should_notch_overlap { 1 } else { 0 });
                 CURRENT_FOREGROUND_FULLSCREEN.store(current_is_fs, Ordering::Relaxed);
-                // Start counts as fullscreen for the dock, which then hides, stays click-through and
-                // doesn't reveal at the screen edge until Start closes.
+                // Start counts as fullscreen for the dock when fern-dock-hide-on-start is enabled;
+                // otherwise it reveals the dock on that monitor via dock-shell-surface.
                 let start_on_dock = handle_visibility.get_webview_window("dock")
                     .and_then(|w| w.hwnd().ok())
                     .is_some_and(start_on);
-                let fullscreen_on_dock = (current_is_fs && fg_on("dock")) || start_on_dock;
+                CURRENT_START_ON_DOCK.store(start_on_dock, Ordering::Relaxed);
+                let fullscreen_on = |label: &str| match monitor_of(label) {
+                    Some((mx, my, _, _)) => monitor_fullscreen((mx, my), focused_monitor, current_is_fs, &fullscreen_monitors),
+                    None => current_is_fs && fg_on(label),
+                };
+                let fullscreen_on_dock = fullscreen_on("dock") || (hide_on_start && start_on_dock);
                 crate::state::set_flag(crate::state::dock_fullscreen(), "dock", fullscreen_on_dock);
                 CURRENT_FOREGROUND_FULLSCREEN_ON_DOCK.store(fullscreen_on_dock, Ordering::Relaxed);
                 if Some(fullscreen_on_dock) != last_dock_fullscreen || last_emit.elapsed() >= Duration::from_secs(3) {
                     let _ = handle_visibility.emit_to("dock", "dock-fullscreen", fullscreen_on_dock);
                     last_dock_fullscreen = Some(fullscreen_on_dock);
                 }
-                let fullscreen_on_notch = current_is_fs && fg_on("main");
+                let shell_surface_on_dock = !hide_on_start && start_on_dock;
+                if Some(shell_surface_on_dock) != last_dock_shell_surface || last_emit.elapsed() >= Duration::from_secs(3) {
+                    let _ = handle_visibility.emit_to("dock", "dock-shell-surface", shell_surface_on_dock);
+                    last_dock_shell_surface = Some(shell_surface_on_dock);
+                }
+                let fullscreen_on_notch = fullscreen_on("main");
                 crate::state::set_flag(crate::state::notch_fullscreen(), "main", fullscreen_on_notch);
                 if Some(fullscreen_on_notch) != last_notch_fullscreen || last_emit.elapsed() >= Duration::from_secs(3) {
                     let _ = handle_visibility.emit_to("main", "notch-fullscreen", fullscreen_on_notch);
@@ -1561,8 +1660,8 @@ pub fn setup_system_worker(app_handle: AppHandle) -> Sender<SystemCommand> {
                     let Ok(w_hwnd) = win.hwnd() else { continue };
                     let Some((mx, my, _mw, _mh)) = monitor_rect_for_hwnd(w_hwnd) else { continue };
                     {
-                        let fullscreen_here = (current_is_fs && fg_info.is_some_and(|(screen, _, _)| screen.left == mx && screen.top == my))
-                            || (is_dock && start_on(w_hwnd));
+                        let fullscreen_here = monitor_fullscreen((mx, my), focused_monitor, current_is_fs, &fullscreen_monitors)
+                            || (is_dock && hide_on_start && start_on(w_hwnd));
                         if is_dock {
                             crate::state::set_flag(crate::state::dock_fullscreen(), &label, fullscreen_here);
                         } else {
@@ -1575,13 +1674,22 @@ pub fn setup_system_worker(app_handle: AppHandle) -> Sender<SystemCommand> {
                             let _ = handle_visibility.emit_to(label.as_str(), event, fullscreen_here);
                             last_secondary_dock_fullscreen.insert(label.clone(), (fullscreen_here, now));
                         }
+                        if is_dock {
+                            let shell_here = !hide_on_start && start_on(w_hwnd);
+                            let needs_shell_update = last_secondary_dock_shell_surface.get(&label)
+                                .is_none_or(|(previous, sent_at)| *previous != shell_here || sent_at.elapsed() >= Duration::from_secs(3));
+                            if needs_shell_update {
+                                let _ = handle_visibility.emit_to(label.as_str(), "dock-shell-surface", shell_here);
+                                last_secondary_dock_shell_surface.insert(label.clone(), (shell_here, now));
+                            }
+                        }
                     }
                     let overlap = match fg_info {
                         Some((screen, rect, covers)) if screen.left == mx && screen.top == my => {
                             if covers {
                                 true
                             } else if is_dock {
-                                dock_overlap_rect(&label).is_some_and(|dr| {
+                                crate::state::dock_overlap_rect(&label).is_some_and(|dr| {
                                     rect_overlaps_dock(mx, screen.bottom, rect, dr, cached_scale)
                                 })
                             } else {
@@ -1590,7 +1698,8 @@ pub fn setup_system_worker(app_handle: AppHandle) -> Sender<SystemCommand> {
                                 })
                             }
                         }
-                        _ => false,
+                        // Another monitor has focus: a maximized or fullscreen window there still covers the panel.
+                        _ => unfocused_panel_overlap(label.as_str(), is_dock).unwrap_or(false),
                     };
                     // Same visibility guard as the primary dock.
                     let overlap = overlap && (!is_dock || win.is_visible().unwrap_or(false));
@@ -1659,7 +1768,7 @@ pub fn setup_system_worker(app_handle: AppHandle) -> Sender<SystemCommand> {
                     apply_capture_ui_state(&handle_visibility, active);
                 }
             }
-            std::thread::sleep(crate::memory_saver::poll_interval(std::time::Duration::from_millis(150)));
+            std::thread::park_timeout(crate::memory_saver::poll_interval(std::time::Duration::from_millis(150)));
         }
     });
 
@@ -2340,8 +2449,12 @@ fn should_ignore_notch_cursor(suppressed: bool, interactive: bool, menu_open: bo
     suppressed || (!interactive && !menu_open)
 }
 
-/// Smart and Peek notches stay hidden while a fullscreen window covers their monitor.
+/// Smart and Peek notches stay hidden while a fullscreen window covers their monitor,
+/// or whenever the notch is permanently turned off via `fern-notch-enabled`.
 fn notch_suppressed(app_handle: &AppHandle, label: &str) -> bool {
+    if crate::utils::get_setting_str(app_handle, "fern-notch-enabled").as_deref() == Some("false") {
+        return true;
+    }
     crate::state::get_flag(crate::state::notch_fullscreen(), label)
         && should_suppress_notch_for_mode(&crate::monitors::resolve_mode_for_label(
             app_handle,
@@ -2592,45 +2705,52 @@ unsafe fn process_mouse_move(app_handle: &AppHandle, cursor: windows::Win32::Fou
                         if let Some((win_pos, _)) = main_rect_val {
                             if let Ok(region) = crate::state::notch_rects().try_lock() {
                                 if let Some(r) = region.get("main").copied() {
-                                    let scale = main_win.scale_factor().unwrap_or(1.0);
-                                    let pad_x = (20.0 * scale) as i32;
-                                    let pad_y_bottom = (5.0 * scale) as i32;
-                                    // Hysteresis keeps the notch interactive a little past
-                                    // its bounds once grabbed, so removing the edge-forced
-                                    // interactivity doesn't reintroduce boundary flicker.
-                                    let hyst = if MH_LAST_MAIN_IGNORE.load(Ordering::Relaxed) == 0 { (10.0 * scale) as i32 } else { 0 };
-                                    let rx = win_pos.x + (r.x as f64 * scale) as i32 - pad_x - hyst;
-                                    let rw = (r.width as f64 * scale) as i32 + (pad_x * 2) + (hyst * 2);
-                                    let ry_top = win_pos.y;
-                                    let ry_bottom = win_pos.y + (r.height as f64 * scale) as i32 + pad_y_bottom + hyst;
+                                    if r.width > 0 && r.height > 0 {
+                                        let scale = main_win.scale_factor().unwrap_or(1.0);
+                                        let pad_x = (20.0 * scale) as i32;
+                                        let pad_y_bottom = (5.0 * scale) as i32;
+                                        // Hysteresis keeps the notch interactive a little past
+                                        // its bounds once grabbed, so removing the edge-forced
+                                        // interactivity doesn't reintroduce boundary flicker.
+                                        let hyst = if MH_LAST_MAIN_IGNORE.load(Ordering::Relaxed) == 0 { (10.0 * scale) as i32 } else { 0 };
+                                        let rx = win_pos.x + (r.x as f64 * scale) as i32 - pad_x - hyst;
+                                        let rw = (r.width as f64 * scale) as i32 + (pad_x * 2) + (hyst * 2);
+                                        let y_off = (r.y.max(0) as f64 * scale) as i32;
+                                        let ry_top = if r.y > 0 {
+                                            (win_pos.y + y_off - (5.0 * scale) as i32 - hyst).max(win_pos.y)
+                                        } else {
+                                            win_pos.y
+                                        };
+                                        let ry_bottom = win_pos.y + y_off + (r.height as f64 * scale) as i32 + pad_y_bottom + hyst;
 
-                                    // A hidden notch must not eat clicks, in smart/peek it's off screen most of the time.
-                                    let notch_hidden = crate::state::get_flag(crate::state::notch_hidden(), "main");
-                                    let hover_active = is_notch_hovered || now < MH_TOPBAR_EXPIRY_MS.load(Ordering::Relaxed);
-                                    if (!notch_hidden || hover_active)
-                                        && cursor.x >= rx && cursor.x <= (rx + rw) && cursor.y >= ry_top && cursor.y <= ry_bottom {
-                                        is_click_interactive = true;
-                                    }
-                                    dbg_box = Some((rx, ry_top, rw, ry_bottom - ry_top));
-                                    dbg_rect = Some(r);
-
-                                    // Approaching along the top edge keeps the window
-                                    // interactive while near the notch's horizontal
-                                    // span, so peek/hover can't flicker at the
-                                    // boundary. The screen corners stay click-through.
-                                    // Keep this immediate (not dwell-gated), the notch rect lags the animation and flipping
-                                    // click-through mid-hover makes it flicker. Still gated on the notch being visible or hovered.
-                                    let edge_pad = (60.0 * scale) as i32;
-                                    if !fg_fs && in_top_band && (!notch_hidden || hover_active)
-                                        && cursor.x >= rx - edge_pad && cursor.x <= rx + rw + edge_pad {
-                                        is_click_interactive = true;
-                                    }
-
-                                    if left_button_held() {
-                                        let over_span = cursor.x >= rx - edge_pad && cursor.x <= rx + rw + edge_pad;
-                                        let over_box = cursor.x >= rx && cursor.x <= rx + rw && cursor.y >= ry_top && cursor.y <= ry_bottom;
-                                        if over_box || (in_top_band && over_span) {
+                                        // A hidden notch must not eat clicks, in smart/peek it's off screen most of the time.
+                                        let notch_hidden = crate::state::get_flag(crate::state::notch_hidden(), "main");
+                                        let hover_active = is_notch_hovered || now < MH_TOPBAR_EXPIRY_MS.load(Ordering::Relaxed);
+                                        if (!notch_hidden || hover_active)
+                                            && cursor.x >= rx && cursor.x <= (rx + rw) && cursor.y >= ry_top && cursor.y <= ry_bottom {
                                             is_click_interactive = true;
+                                        }
+                                        dbg_box = Some((rx, ry_top, rw, ry_bottom - ry_top));
+                                        dbg_rect = Some(r);
+
+                                        // Approaching along the top edge keeps the window
+                                        // interactive while near the notch's horizontal
+                                        // span, so peek/hover can't flicker at the
+                                        // boundary. The screen corners stay click-through.
+                                        // Keep this immediate (not dwell-gated), the notch rect lags the animation and flipping
+                                        // click-through mid-hover makes it flicker. Still gated on the notch being visible or hovered.
+                                        let edge_pad = (60.0 * scale) as i32;
+                                        if !fg_fs && in_top_band && (!notch_hidden || hover_active)
+                                            && cursor.x >= rx - edge_pad && cursor.x <= rx + rw + edge_pad {
+                                            is_click_interactive = true;
+                                        }
+
+                                        if left_button_held() {
+                                            let over_span = cursor.x >= rx - edge_pad && cursor.x <= rx + rw + edge_pad;
+                                            let over_box = cursor.x >= rx && cursor.x <= rx + rw && cursor.y >= ry_top && cursor.y <= ry_bottom;
+                                            if over_box || (in_top_band && over_span) {
+                                                is_click_interactive = true;
+                                            }
                                         }
                                     }
                                 }
@@ -2859,6 +2979,116 @@ fn monitor_rect_for_hwnd(hwnd: HWND) -> Option<(i32, i32, i32, i32)> {
             None
         }
     }
+}
+
+fn cursor_monitor_origin() -> Option<(i32, i32)> {
+    use windows::Win32::Foundation::POINT;
+    use windows::Win32::Graphics::Gdi::{GetMonitorInfoA, MonitorFromPoint, MONITORINFO, MONITOR_DEFAULTTONEAREST};
+    use windows::Win32::UI::WindowsAndMessaging::GetCursorPos;
+    unsafe {
+        let mut pt = POINT::default();
+        if GetCursorPos(&mut pt).is_err() {
+            return None;
+        }
+        let h_monitor = MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST);
+        let mut mi = MONITORINFO { cbSize: std::mem::size_of::<MONITORINFO>() as u32, ..Default::default() };
+        if GetMonitorInfoA(h_monitor, &mut mi).as_bool() {
+            Some((mi.rcMonitor.left, mi.rcMonitor.top))
+        } else {
+            None
+        }
+    }
+}
+
+/// What the z-order shows on one monitor: the windows down to (and including) the first maximized
+/// or monitor-sized one, which hides everything below it.
+struct MonitorCover {
+    origin: (i32, i32),
+    bottom: i32,
+    rects: Vec<windows::Win32::Foundation::RECT>,
+    covered: bool,
+    fullscreen: bool,
+}
+
+struct CoverScan {
+    own_pid: u32,
+    monitors: Vec<MonitorCover>,
+}
+
+unsafe extern "system" fn cover_scan_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
+    use windows::Win32::Foundation::RECT;
+    use windows::Win32::Graphics::Dwm::DWMWA_CLOAKED;
+    use windows::Win32::Graphics::Gdi::{GetMonitorInfoA, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST};
+    use windows::Win32::UI::WindowsAndMessaging::{GetClassNameW, GetWindowRect, IsIconic, IsZoomed};
+    let scan = &mut *(lparam.0 as *mut CoverScan);
+    if !IsWindowVisible(hwnd).as_bool() || IsIconic(hwnd).as_bool() {
+        return true.into();
+    }
+    let mut pid = 0u32;
+    GetWindowThreadProcessId(hwnd, Some(&mut pid));
+    if pid == scan.own_pid || (GetWindowLongW(hwnd, GWL_EXSTYLE) as u32 & WS_EX_TOOLWINDOW.0) != 0 {
+        return true.into();
+    }
+    let mut cloaked = 0u32;
+    if DwmGetWindowAttribute(hwnd, DWMWA_CLOAKED, &mut cloaked as *mut _ as *mut _, 4).is_ok() && cloaked != 0 {
+        return true.into();
+    }
+    let mut class = [0u16; 64];
+    let len = GetClassNameW(hwnd, &mut class).max(0) as usize;
+    if matches!(String::from_utf16_lossy(&class[..len]).as_str(), "Progman" | "WorkerW" | "Shell_TrayWnd" | "Shell_SecondaryTrayWnd") {
+        return true.into();
+    }
+    let monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+    let mut mi = MONITORINFO { cbSize: std::mem::size_of::<MONITORINFO>() as u32, ..Default::default() };
+    if !GetMonitorInfoA(monitor, &mut mi).as_bool() {
+        return true.into();
+    }
+    let screen = mi.rcMonitor;
+    let origin = (screen.left, screen.top);
+    let index = match scan.monitors.iter().position(|m| m.origin == origin) {
+        Some(i) => i,
+        None => {
+            scan.monitors.push(MonitorCover { origin, bottom: screen.bottom, rects: Vec::new(), covered: false, fullscreen: false });
+            scan.monitors.len() - 1
+        }
+    };
+    let entry = &mut scan.monitors[index];
+    if entry.covered {
+        return true.into();
+    }
+    let mut rect = RECT::default();
+    let has_rect = DwmGetWindowAttribute(hwnd, DWMWA_EXTENDED_FRAME_BOUNDS, &mut rect as *mut _ as *mut _, std::mem::size_of::<RECT>() as u32).is_ok()
+        || GetWindowRect(hwnd, &mut rect).is_ok();
+    if !has_rect {
+        return true.into();
+    }
+    entry.rects.push(rect);
+    // Small windows (popups, picture-in-picture) above a fullscreen app don't decide whether the
+    // monitor is fullscreen; a maximized or monitor-sized window does.
+    let covers = rect.left <= screen.left && rect.top <= screen.top && rect.right >= screen.right && rect.bottom >= screen.bottom;
+    if covers || IsZoomed(hwnd).as_bool() {
+        entry.covered = true;
+        entry.fullscreen = crate::utils::is_window_fullscreen(hwnd);
+    }
+    true.into()
+}
+
+/// Per monitor, the windows that are not hidden behind a maximized or monitor-sized one. Read from
+/// the z-order rather than focus, so a window keeps its monitor's panels hidden while another
+/// monitor has focus.
+fn scan_monitor_covers(own_pid: u32) -> Vec<MonitorCover> {
+    use windows::Win32::UI::WindowsAndMessaging::EnumWindows;
+    let mut scan = CoverScan { own_pid, monitors: Vec::new() };
+    unsafe {
+        let _ = EnumWindows(Some(cover_scan_proc), LPARAM(&mut scan as *mut CoverScan as isize));
+    }
+    scan.monitors
+}
+
+/// Fullscreen state of the monitor at `origin`. The focused monitor keeps the foreground check;
+/// the others use the z-order scan.
+fn monitor_fullscreen(origin: (i32, i32), focused_monitor: Option<(i32, i32)>, focused_is_fullscreen: bool, covered: &[(i32, i32)]) -> bool {
+    if focused_monitor == Some(origin) { focused_is_fullscreen } else { covered.contains(&origin) }
 }
 
 struct CaptionProbe {
@@ -3103,34 +3333,41 @@ fn hit_test_extra_notch_windows(app_handle: &AppHandle, cursor: windows::Win32::
         let main_rect_val = crate::state::main_window_rects().lock().ok().and_then(|m| m.get(&label).copied());
         if let Some((win_pos, _)) = main_rect_val {
             if let Some(r) = crate::state::notch_rects().lock().ok().and_then(|m| m.get(&label).copied()) {
-                let pad_x = (20.0 * scale) as i32;
-                let pad_y_bottom = (5.0 * scale) as i32;
-                let last_ignore = crate::state::get_i32(crate::state::notch_extra_last_ignore(), &label, -1);
-                let hyst = if last_ignore == 0 { (10.0 * scale) as i32 } else { 0 };
-                let rx = win_pos.x + (r.x as f64 * scale) as i32 - pad_x - hyst;
-                let rw = (r.width as f64 * scale) as i32 + (pad_x * 2) + (hyst * 2);
-                let ry_top = win_pos.y;
-                let ry_bottom = win_pos.y + (r.height as f64 * scale) as i32 + pad_y_bottom + hyst;
+                if r.width > 0 && r.height > 0 {
+                    let pad_x = (20.0 * scale) as i32;
+                    let pad_y_bottom = (5.0 * scale) as i32;
+                    let last_ignore = crate::state::get_i32(crate::state::notch_extra_last_ignore(), &label, -1);
+                    let hyst = if last_ignore == 0 { (10.0 * scale) as i32 } else { 0 };
+                    let rx = win_pos.x + (r.x as f64 * scale) as i32 - pad_x - hyst;
+                    let rw = (r.width as f64 * scale) as i32 + (pad_x * 2) + (hyst * 2);
+                    let y_off = (r.y.max(0) as f64 * scale) as i32;
+                    let ry_top = if r.y > 0 {
+                        (win_pos.y + y_off - (5.0 * scale) as i32 - hyst).max(win_pos.y)
+                    } else {
+                        win_pos.y
+                    };
+                    let ry_bottom = win_pos.y + y_off + (r.height as f64 * scale) as i32 + pad_y_bottom + hyst;
 
-                let notch_hidden = crate::state::get_flag(crate::state::notch_hidden(), &label);
-                let hover_active = is_notch_hovered
-                    || now < crate::state::get_i64(crate::state::notch_extra_expiry_ms(), &label, 0);
-                if (!notch_hidden || hover_active)
-                    && cursor.x >= rx && cursor.x <= (rx + rw) && cursor.y >= ry_top && cursor.y <= ry_bottom {
-                    is_click_interactive = true;
-                }
-
-                let edge_pad = (60.0 * scale) as i32;
-                if !fg_fs && in_top_band && (!notch_hidden || hover_active)
-                    && cursor.x >= rx - edge_pad && cursor.x <= rx + rw + edge_pad {
-                    is_click_interactive = true;
-                }
-
-                if left_button_held() {
-                    let over_span = cursor.x >= rx - edge_pad && cursor.x <= rx + rw + edge_pad;
-                    let over_box = cursor.x >= rx && cursor.x <= rx + rw && cursor.y >= ry_top && cursor.y <= ry_bottom;
-                    if over_box || (in_top_band && over_span) {
+                    let notch_hidden = crate::state::get_flag(crate::state::notch_hidden(), &label);
+                    let hover_active = is_notch_hovered
+                        || now < crate::state::get_i64(crate::state::notch_extra_expiry_ms(), &label, 0);
+                    if (!notch_hidden || hover_active)
+                        && cursor.x >= rx && cursor.x <= (rx + rw) && cursor.y >= ry_top && cursor.y <= ry_bottom {
                         is_click_interactive = true;
+                    }
+
+                    let edge_pad = (60.0 * scale) as i32;
+                    if !fg_fs && in_top_band && (!notch_hidden || hover_active)
+                        && cursor.x >= rx - edge_pad && cursor.x <= rx + rw + edge_pad {
+                        is_click_interactive = true;
+                    }
+
+                    if left_button_held() {
+                        let over_span = cursor.x >= rx - edge_pad && cursor.x <= rx + rw + edge_pad;
+                        let over_box = cursor.x >= rx && cursor.x <= rx + rw && cursor.y >= ry_top && cursor.y <= ry_bottom;
+                        if over_box || (in_top_band && over_span) {
+                            is_click_interactive = true;
+                        }
                     }
                 }
             }
@@ -3801,7 +4038,7 @@ pub unsafe extern "system" fn enum_windows_proc(hwnd: HWND, lparam: LPARAM) -> B
                         // Extract a cleaner name from the window title for host processes (PWAs, UWP apps)
                         title.split(" - ").next().map(|s| s.trim()).unwrap_or(&title).to_string()
                     } else if name.eq_ignore_ascii_case("explorer") {
-                        "File Explorer".to_string()
+                        crate::taskbar_pins::shell_app_name("Microsoft.Windows.Explorer", "File Explorer")
                     } else {
                         let from_start_menu = INSTALLED_APPS_CACHE.get().and_then(|c| c.lock().ok()).and_then(|apps| {
                             apps.iter().find(|a| a.path.eq_ignore_ascii_case(&path)).map(|a| a.name.clone())
@@ -3836,7 +4073,7 @@ pub unsafe extern "system" fn enum_windows_proc(hwnd: HWND, lparam: LPARAM) -> B
                             ("Settings".to_string(), "fern-settings".to_string(), None)
                         } else if is_control_panel {
                             let control = format!(r"{}\System32\control.exe", std::env::var("WINDIR").unwrap_or_else(|_| r"C:\Windows".into()));
-                            ("Control Panel".to_string(), control, Some("control.exe".to_string()))
+                            (crate::taskbar_pins::shell_app_name("Microsoft.Windows.ControlPanel", "Control Panel"), control, Some("control.exe".to_string()))
                         } else {
                             (final_name, path, exe_name)
                         };
@@ -4248,19 +4485,6 @@ unsafe extern "system" fn display_monitor_proc(
     }
 }
 
-fn dock_overlap_rect(label: &str) -> Option<crate::types::IntRect> {
-    crate::state::dock_expanded_rects()
-        .lock()
-        .ok()
-        .and_then(|m| m.get(label).copied())
-        .or_else(|| {
-            crate::state::dock_rects()
-                .lock()
-                .ok()
-                .and_then(|m| m.get(label).copied())
-        })
-}
-
 fn rect_overlaps_dock(
     monitor_left: i32,
     monitor_bottom: i32,
@@ -4281,9 +4505,12 @@ fn rect_overlaps_notch(
     nr: crate::types::IntRect,
     scale: f64,
 ) -> bool {
+    if nr.width <= 0 || nr.height <= 0 {
+        return false;
+    }
     let n_left = monitor_left + (nr.x as f64 * scale) as i32;
     let n_right = n_left + (nr.width as f64 * scale) as i32;
-    let trigger_y = monitor_top + (36.0 * scale) as i32;
+    let trigger_y = monitor_top + ((nr.y.max(0) + 36) as f64 * scale) as i32;
     fg_rect.left < n_right - 4 && fg_rect.right > n_left + 4 && fg_rect.top < trigger_y - 4
 }
 
@@ -4767,5 +4994,41 @@ mod tests {
         assert!(!should_include_window_title(0, "Chrome_WidgetWin_1", true));
         assert!(!should_include_window_title(0, "ConsoleWindowClass", false));
         assert!(should_include_window_title(0, "ConsoleWindowClass", true));
+    }
+
+    #[test]
+    fn fullscreen_monitor_stays_hidden_when_focus_moves_to_another_monitor() {
+        use super::monitor_fullscreen;
+        let covered = [(0, 0)];
+        assert!(monitor_fullscreen((0, 0), Some((1920, 0)), false, &covered));
+        assert!(!monitor_fullscreen((1920, 0), Some((1920, 0)), false, &covered));
+    }
+
+    #[test]
+    fn focused_monitor_follows_the_foreground_window() {
+        use super::monitor_fullscreen;
+        assert!(!monitor_fullscreen((0, 0), Some((0, 0)), false, &[(0, 0)]));
+        assert!(monitor_fullscreen((0, 0), Some((0, 0)), true, &[]));
+        assert!(!monitor_fullscreen((0, 0), None, false, &[]));
+    }
+
+    #[test]
+    fn window_over_the_panel_strip_counts_as_overlap_on_any_monitor() {
+        use super::{rect_overlaps_dock, rect_overlaps_notch};
+        use windows::Win32::Foundation::RECT;
+
+        let dock = crate::types::IntRect { x: 880, y: 0, width: 800, height: 64 };
+        let near_bottom = RECT { left: 2560 + 1000, top: 600, right: 2560 + 1600, bottom: 1420 };
+        let above_dock = RECT { left: 2560 + 1000, top: 200, right: 2560 + 1600, bottom: 900 };
+        let beside_dock = RECT { left: 2560 + 100, top: 600, right: 2560 + 600, bottom: 1420 };
+        assert!(rect_overlaps_dock(2560, 1440, near_bottom, dock, 1.0));
+        assert!(!rect_overlaps_dock(2560, 1440, above_dock, dock, 1.0));
+        assert!(!rect_overlaps_dock(2560, 1440, beside_dock, dock, 1.0));
+
+        let notch = crate::types::IntRect { x: 1080, y: 0, width: 400, height: 40 };
+        let at_top = RECT { left: 2560 + 1200, top: 0, right: 2560 + 1800, bottom: 700 };
+        let lower = RECT { left: 2560 + 1200, top: 300, right: 2560 + 1800, bottom: 900 };
+        assert!(rect_overlaps_notch(2560, 0, at_top, notch, 1.0));
+        assert!(!rect_overlaps_notch(2560, 0, lower, notch, 1.0));
     }
 }

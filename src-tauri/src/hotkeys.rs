@@ -4,11 +4,13 @@ use windows::Win32::Foundation::{LPARAM, WPARAM};
 use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     RegisterHotKey, UnregisterHotKey, HOT_KEY_MODIFIERS, MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, MOD_SHIFT, MOD_WIN,
-    VIRTUAL_KEY, VK_BACK, VK_DELETE, VK_DOWN, VK_END, VK_ESCAPE, VK_F1, VK_F10, VK_F11, VK_F12, VK_F13, VK_F14,
-    VK_F15, VK_F16, VK_F17, VK_F18, VK_F19, VK_F2, VK_F20, VK_F21, VK_F22, VK_F23, VK_F24, VK_F3, VK_F4, VK_F5,
-    VK_F6, VK_F7, VK_F8, VK_F9, VK_HOME, VK_INSERT, VK_LCONTROL, VK_LEFT, VK_LMENU, VK_LSHIFT, VK_LWIN, VK_NEXT,
-    VK_OEM_1, VK_OEM_2, VK_OEM_3, VK_OEM_4, VK_OEM_5, VK_OEM_6, VK_OEM_7, VK_OEM_COMMA, VK_OEM_MINUS, VK_OEM_PERIOD,
-    VK_OEM_PLUS, VK_PRIOR, VK_RETURN, VK_RIGHT, VK_SPACE, VK_TAB, VK_UP,
+    VIRTUAL_KEY, VK_ADD, VK_BACK, VK_DECIMAL, VK_DELETE, VK_DIVIDE, VK_DOWN, VK_END, VK_ESCAPE, VK_F1, VK_F10,
+    VK_F11, VK_F12, VK_F13, VK_F14, VK_F15, VK_F16, VK_F17, VK_F18, VK_F19, VK_F2, VK_F20, VK_F21, VK_F22, VK_F23,
+    VK_F24, VK_F3, VK_F4, VK_F5, VK_F6, VK_F7, VK_F8, VK_F9, VK_HOME, VK_INSERT, VK_LCONTROL, VK_LEFT, VK_LMENU,
+    VK_LSHIFT, VK_LWIN, VK_MULTIPLY, VK_NEXT, VK_NUMPAD0, VK_NUMPAD1, VK_NUMPAD2, VK_NUMPAD3, VK_NUMPAD4, VK_NUMPAD5,
+    VK_NUMPAD6, VK_NUMPAD7, VK_NUMPAD8, VK_NUMPAD9, VK_OEM_1, VK_OEM_2, VK_OEM_3, VK_OEM_4, VK_OEM_5, VK_OEM_6,
+    VK_OEM_7, VK_OEM_COMMA, VK_OEM_MINUS, VK_OEM_PERIOD, VK_OEM_PLUS, VK_PRIOR, VK_RETURN, VK_RIGHT, VK_SPACE,
+    VK_SUBTRACT, VK_TAB, VK_UP,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     GetMessageW, PeekMessageW, PostThreadMessageW, MSG, PM_NOREMOVE, WM_APP, WM_HOTKEY, WM_USER,
@@ -62,6 +64,21 @@ fn key_for(name: &str) -> Option<VIRTUAL_KEY> {
         "f22" => Some(VK_F22),
         "f23" => Some(VK_F23),
         "f24" => Some(VK_F24),
+        "numpad0" => Some(VK_NUMPAD0),
+        "numpad1" => Some(VK_NUMPAD1),
+        "numpad2" => Some(VK_NUMPAD2),
+        "numpad3" => Some(VK_NUMPAD3),
+        "numpad4" => Some(VK_NUMPAD4),
+        "numpad5" => Some(VK_NUMPAD5),
+        "numpad6" => Some(VK_NUMPAD6),
+        "numpad7" => Some(VK_NUMPAD7),
+        "numpad8" => Some(VK_NUMPAD8),
+        "numpad9" => Some(VK_NUMPAD9),
+        "numpadadd" => Some(VK_ADD),
+        "numpadsubtract" => Some(VK_SUBTRACT),
+        "numpadmultiply" => Some(VK_MULTIPLY),
+        "numpaddivide" => Some(VK_DIVIDE),
+        "numpaddecimal" => Some(VK_DECIMAL),
         "`" | "~" => Some(VK_OEM_3),
         "-" | "_" => Some(VK_OEM_MINUS),
         "=" | "+" => Some(VK_OEM_PLUS),
@@ -195,5 +212,40 @@ pub fn reload() {
         unsafe {
             let _ = PostThreadMessageW(id, RELOAD, WPARAM(0), LPARAM(0));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_modifiers_letters_function_and_numpad_keys() {
+        let (mods, key) = parse_shortcut("Ctrl+Shift+N").unwrap();
+        assert_eq!(mods, vec![VK_LCONTROL, VK_LSHIFT]);
+        assert_eq!(key, VIRTUAL_KEY(b'N' as u16));
+
+        let (mods, key) = parse_shortcut("F9").unwrap();
+        assert!(mods.is_empty());
+        assert_eq!(key, VK_F9);
+
+        let (mods, key) = parse_shortcut("Ctrl+Numpad1").unwrap();
+        assert_eq!(mods, vec![VK_LCONTROL]);
+        assert_eq!(key, VK_NUMPAD1);
+
+        let (mods, key) = parse_shortcut("Alt+NumpadAdd").unwrap();
+        assert_eq!(mods, vec![VK_LMENU]);
+        assert_eq!(key, VK_ADD);
+
+        let (mods, key) = parse_shortcut("Ctrl++").unwrap();
+        assert_eq!(mods, vec![VK_LCONTROL]);
+        assert_eq!(key, VK_OEM_PLUS);
+    }
+
+    #[test]
+    fn rejects_empty_modifier_only_and_unknown_shortcuts() {
+        assert!(parse_shortcut("").is_none());
+        assert!(parse_shortcut("Ctrl+Shift").is_none());
+        assert!(parse_shortcut("Ctrl+UnknownKey").is_none());
     }
 }

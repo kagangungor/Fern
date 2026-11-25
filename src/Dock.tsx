@@ -60,6 +60,19 @@ export function appIdentity(p: string, executable?: string, name?: string) {
   return normalized;
 }
 
+// "shell:AppsFolder\Microsoft.WindowsTerminal_8wekyb3d8bbwe!App" -> "microsoft.windowsterminal_8wekyb3d8bbwe"
+export function packageFamilyFromAumid(path: string): string | undefined {
+  const m = path.match(/^(?:shell:appsfolder\\)?([a-z0-9.-]+_[a-z0-9]{13})!/i);
+  return m?.[1].toLowerCase();
+}
+
+// "C:\Program Files\WindowsApps\Microsoft.WindowsTerminal_1.25.3131.0_x64__8wekyb3d8bbwe\WindowsTerminal.exe"
+// -> "microsoft.windowsterminal_8wekyb3d8bbwe"
+export function packageFamilyFromWindowsAppsPath(path: string): string | undefined {
+  const m = path.match(/[\\/]windowsapps[\\/]([a-z0-9.-]+)_[^\\/]*__([a-z0-9]{13})[\\/]/i);
+  return m ? `${m[1]}_${m[2]}`.toLowerCase() : undefined;
+}
+
 const itemKey = (app: AppInfo) => appIdentity(app.path, app.executable, app.name);
 
 // Fuzzy identity: a running window and its installed or pinned entry can have different
@@ -394,6 +407,7 @@ interface DockPreviewTooltipProps {
   app: AppInfo;
   previews: { hwnd: number; title: string; image: string }[];
   onClosePreview: (e: React.MouseEvent, hwnd: number) => void;
+  onSelectPreview: (hwnd: number) => void;
   renderMedia: (app: AppInfo) => React.ReactNode;
   renderPreviewMedia?: (app: AppInfo) => React.ReactNode;
   onMouseEnter: () => void;
@@ -404,6 +418,7 @@ function DockPreviewTooltip({
   app,
   previews,
   onClosePreview,
+  onSelectPreview,
   renderMedia,
   renderPreviewMedia,
   onMouseEnter,
@@ -525,6 +540,7 @@ function DockPreviewTooltip({
       animate={{ opacity: 1, y: 0, scale: 1 }}
       exit={{ opacity: 0, scale: 0.95 }}
       transition={{ duration: 0.15 }}
+      onClick={(e) => e.stopPropagation()}
       onMouseEnter={onMouseEnter}
       onMouseLeave={onMouseLeave}
     >
@@ -536,7 +552,10 @@ function DockPreviewTooltip({
             <div
               key={prev.hwnd}
               className="preview-item"
-              onClick={() => invoke('focus_window', { hwnd: prev.hwnd })}
+              onClick={() => {
+                setLiveHwnds(new Set());
+                onSelectPreview(prev.hwnd);
+              }}
               onDragOver={(e) => {
                 e.preventDefault();
                 e.stopPropagation();
@@ -707,7 +726,9 @@ const Dock = memo(function Dock() {
     parseDockNames(localStorage.getItem("fern-dock-names"))
   );
   const displayName = (app: AppInfo) =>
-    resolveDockDisplayName(app, itemKey(app), dockNames, localizeAppName);
+    resolveDockDisplayName(app, itemKey(app), dockNames, (name) =>
+      app.path === 'fern-settings' && name === 'Settings' ? t('settings.title') : localizeAppName(name)
+    );
   const saveName = (app: AppInfo, name: string) => {
     const next = applyDockNameOverride(dockNames, itemKey(app), localizeAppName(app.name), name);
     setDockNames(next);
@@ -844,6 +865,7 @@ const Dock = memo(function Dock() {
   }, [dockAppVolumeScroll, volumeHuds]);
 
   const [dockAdaptive, setDockAdaptive] = useState(() => localStorage.getItem("fern-dock-adaptive") === "true");
+  const [floatGap, setFloatGap] = useState(() => Number(localStorage.getItem("fern-dock-float-gap")) || 0);
   const [dockAttentionEnabled, setDockAttentionEnabled] = useState(() => localStorage.getItem("fern-dock-attention-enabled") !== "false");
   const [dockHideDelay, setDockHideDelay] = useState(() => parseInt(localStorage.getItem("fern-dock-hide-delay") || "800", 10));
   const [attentionHwnds, setAttentionHwnds] = useState<number[]>([]);
@@ -860,6 +882,7 @@ const Dock = memo(function Dock() {
   const [isEdgeHovered, setIsEdgeHovered] = useState(false);
   const [isOverlapped, setIsOverlapped] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [isShellSurfaceFocused, setIsShellSurfaceFocused] = useState(false);
   const [showAddPopup, setShowAddPopup] = useState(false);
   const popupOpen = showAddPopup || !!renameApp;
   const [contextMenu, setContextMenu] = useState<{
@@ -964,14 +987,18 @@ const Dock = memo(function Dock() {
     }
   }, [isAnyInteraction, dockHideDelay]);
 
-  const isHidden = isFullscreen ||
+  const isHidden = !isShellSurfaceFocused && (
+    isFullscreen ||
     (!startupAnimating && (
       (dockMode === 'smart' && isOverlapped && interactionState === 'none') ||
       (dockMode === 'peek' && interactionState === 'none')
-    ));
+    ))
+  );
 
   // Adaptive mode (fixed dock): stretch to a full-width taskbar while a window is maximized.
   const isAdaptive = dockAdaptive && dockMode === 'fixed' && isMaximized && isExpanded && !isHidden;
+  const gap = isAdaptive ? 0 : floatGap;
+  const floating = gap > 0;
   // Nearly full width, 24px margin per side. Width is pre-scale, so (viewport - 48*scale) / scale.
   const adaptiveWidth = (viewportWidth - 48 * scale) / scale;
 
@@ -1026,20 +1053,13 @@ const Dock = memo(function Dock() {
           width: Math.round(rect.width) + (hasPreview ? 1000 : 0),
           height: Math.round(rect.height) + (hasPreview ? 320 : 0)
         };
-        const key = `${next.x},${next.y},${next.width},${next.height}`;
+        // Only the shown, expanded dock (no preview padding) defines the overlap footprint. The hidden
+        // pill is much narrower, and testing overlap against it made the dock flicker in and out.
+        const expanded = isExpanded && !isHidden && !hasPreview;
+        const key = `${next.x},${next.y},${next.width},${next.height},${expanded}`;
         if (key === lastSent) return;
         lastSent = key;
-        invoke('update_dock_rect', { rect: next }).catch(() => { lastSent = ""; });
-        if (isExpanded && !isHidden && !hasPreview && rect.width > 120) {
-          invoke('update_dock_expanded_rect', {
-            rect: {
-              x: Math.round(rect.x),
-              y: Math.round(rect.y),
-              width: Math.round(rect.width),
-              height: Math.round(rect.height),
-            },
-          }).catch(() => {});
-        }
+        invoke('update_dock_rect', { rect: next, expanded }).catch(() => { lastSent = ""; });
       }
       // The bar's size animates without re-rendering, this is what sees it grow.
       updateDockRegionRef.current();
@@ -1068,7 +1088,7 @@ const Dock = memo(function Dock() {
       clearInterval(poll);
       cancelAnimationFrame(rafId);
     };
-  }, [pinnedApps, activeApps, isHidden, previewData, scale, rectPollMs]);
+  }, [pinnedApps, activeApps, isHidden, isExpanded, previewData, scale, rectPollMs, gap]);
 
   const refreshDockMode = () => {
     invoke<string>('get_dock_mode_for_window').then(setDockMode).catch(() => {});
@@ -1107,6 +1127,7 @@ const Dock = memo(function Dock() {
 
       const adaptive = getVal("fern-dock-adaptive", "false");
       setDockAdaptive(adaptive === "true");
+      setFloatGap(Number(getVal("fern-dock-float-gap", "0")) || 0);
 
       const startIconVal = getVal("fern-start-icon", "default") || "default";
       setStartIcon(startIconVal);
@@ -1175,6 +1196,10 @@ const Dock = memo(function Dock() {
       }
     });
 
+    const unlistenShellSurface = thisWindow.listen<boolean>("dock-shell-surface", (event) => {
+      setIsShellSurfaceFocused(event.payload);
+    });
+
     const unlistenMonitors = listen("monitors-changed", refreshDockMode);
     const unlistenTray = listen<boolean>("tray-flyout-state", (event) => {
       setTrayOpen(event.payload);
@@ -1193,6 +1218,7 @@ const Dock = memo(function Dock() {
       unlistenEdgeHover.then(f => f());
       unlistenCursorLeft.then(f => f());
       unlistenFullscreen.then(f => f());
+      unlistenShellSurface.then(f => f());
       unlistenMonitors.then(f => f());
       unlistenTray.then(f => f());
     };
@@ -1216,6 +1242,7 @@ const Dock = memo(function Dock() {
       "fern-dock-drives": (v) => setDockDrives(parseDrives(v)),
       "fern-dock-icon-only": setDockIconOnly,
       "fern-dock-adaptive": setDockAdaptive,
+      "fern-dock-float-gap": (v) => setFloatGap(Number(v) || 0),
       "fern-dock-attention-enabled": (v) => setDockAttentionEnabled(v !== false && v !== "false"),
       "fern-dock-hide-delay": (v: string) => setDockHideDelay(parseInt(v || "800", 10)),
       "fern-start-icon": setStartIcon,
@@ -1386,6 +1413,16 @@ const Dock = memo(function Dock() {
     }
   };
 
+  const handleSelectPreview = (hwnd: number) => {
+    if (previewTimerRef.current) clearTimeout(previewTimerRef.current);
+    isPreviewHoveredRef.current = false;
+    setPreviewData(null);
+    setHoveredApp(null);
+    setPressedApp(null);
+    invoke('clear_live_thumbnails').catch(() => {});
+    invoke('bring_hwnd_to_front', { hwnd }).catch(() => {});
+  };
+
   const isTrayOnly = (app: AppInfo) => {
     if (app.is_running || !app.name) return false;
     const needle = app.name.trim().toLowerCase();
@@ -1542,19 +1579,18 @@ const Dock = memo(function Dock() {
 
   useLayoutEffect(() => {
     if (contextMenu && menuRef.current) {
-      const measured = menuRef.current.offsetHeight;
-      if (measured > 0 && measured !== contextMenuHeight) {
-        setContextMenuHeight(measured);
+      const rect = menuRef.current.getBoundingClientRect();
+      if (rect.height > 0 && Math.abs(rect.height - contextMenuHeight) > 0.5) {
+        setContextMenuHeight(rect.height);
       }
-      const measuredWidth = menuRef.current.getBoundingClientRect().width;
-      if (measuredWidth > 0 && Math.abs(measuredWidth - contextMenuWidth) > 0.5) {
-        setContextMenuWidth(measuredWidth);
+      if (rect.width > 0 && Math.abs(rect.width - contextMenuWidth) > 0.5) {
+        setContextMenuWidth(rect.width);
       }
     } else if (!contextMenu && (contextMenuHeight !== 0 || contextMenuWidth !== 0)) {
       setContextMenuHeight(0);
       setContextMenuWidth(0);
     }
-  }, [contextMenu, contextMenuHeight, contextMenuWidth]);
+  }, [contextMenu, contextMenuHeight, contextMenuWidth, scale]);
 
   useEffect(() => {
     let open = false;
@@ -1582,7 +1618,7 @@ const Dock = memo(function Dock() {
 
     invoke('set_menu_open', { open, rect }).catch(() => {});
 
-  }, [contextMenu, showAddPopup, renameApp, pinnedApps, activeApps, activeSubmenu, scale]);
+  }, [contextMenu, contextMenuHeight, contextMenuWidth, showAddPopup, renameApp, pinnedApps, activeApps, activeSubmenu, scale]);
 
   const dockItems = useMemo(() => {
     const runningMap = new Map();
@@ -1610,9 +1646,12 @@ const Dock = memo(function Dock() {
         return running;
       }
 
-      // 3. Try fallback match by executable name if defined
-      if (p.executable) {
-        const targetExe = p.executable.toLowerCase();
+      // 3. Try fallback match by executable name if defined. File Explorer pinned from Start is stored by
+      // its shell id, while its windows run as explorer.exe.
+      const pinExe = p.executable
+        ?? (/^(shell:appsfolder\\)?microsoft\.windows\.explorer$/i.test(p.path) ? 'explorer.exe' : undefined);
+      if (pinExe) {
+        const targetExe = pinExe.toLowerCase();
         const found = activeApps.find(a => !isIdentifier(a.path) && a.executable?.toLowerCase() === targetExe);
         if (found) {
           matchedRunningKeys.add(appIdentity(found.path, found.executable, found.name));
@@ -1628,6 +1667,17 @@ const Dock = memo(function Dock() {
           const runExe = a.executable?.toLowerCase() || a.path.split('/').pop()?.split('\\').pop()?.toLowerCase() || "";
           return runExe === pinFilename || runExe === `${pinFilename}.exe` || `${runExe}.exe` === pinFilename;
         });
+        if (found) {
+          matchedRunningKeys.add(appIdentity(found.path, found.executable, found.name));
+          return found;
+        }
+      }
+
+      // 5. Store app pins are stored by AUMID, but apps that set no AUMID on their windows (Windows Terminal)
+      // report their exe under WindowsApps. Match on the package family instead.
+      const pinFamily = packageFamilyFromAumid(p.path);
+      if (pinFamily) {
+        const found = activeApps.find(a => (packageFamilyFromAumid(a.path) ?? packageFamilyFromWindowsAppsPath(a.path)) === pinFamily);
         if (found) {
           matchedRunningKeys.add(appIdentity(found.path, found.executable, found.name));
           return found;
@@ -2053,7 +2103,7 @@ const Dock = memo(function Dock() {
         <motion.div
           ref={dockRef}
           layout
-          className={`dock ${isExpanded ? 'dock-expanded' : ''} ${(isImpacted || isExpanded) ? 'dock-impacted' : ''} ${dockIconOnly ? 'dock-icon-only' : ''} ${isAdaptive ? 'dock-adaptive' : ''}`}
+          className={`dock ${isExpanded ? 'dock-expanded' : ''} ${(isImpacted || isExpanded) ? 'dock-impacted' : ''} ${dockIconOnly ? 'dock-icon-only' : ''} ${isAdaptive ? 'dock-adaptive' : ''} ${floating ? 'dock-floating' : ''}`}
           onMouseEnter={() => setIsDockHovered(true)}
           // The backend may have ended the hover without the DOM knowing, then no new mouseenter comes.
           onMouseMove={() => { if (!isDockHovered) setIsDockHovered(true); }}
@@ -2077,13 +2127,13 @@ const Dock = memo(function Dock() {
           }}
         initial={{ y: -800, opacity: 1, width: 34, height: 34, borderTopLeftRadius: 17, borderTopRightRadius: 17, borderBottomLeftRadius: 17, borderBottomRightRadius: 17 }}
         animate={{
-          y: !isReady ? -800 : (isHidden ? 100 : 0),
+          y: !isReady ? -800 : (isHidden ? 100 + gap : 0),
           width: isExpanded ? (isAdaptive ? adaptiveWidth : 'auto') : 34,
           height: isExpanded ? 'auto' : 34,
           borderTopLeftRadius: (isImpacted || isExpanded) ? 18 : 17,
           borderTopRightRadius: (isImpacted || isExpanded) ? 18 : 17,
-          borderBottomLeftRadius: (isImpacted || isExpanded) ? 0 : 17,
-          borderBottomRightRadius: (isImpacted || isExpanded) ? 0 : 17,
+          borderBottomLeftRadius: (isImpacted || isExpanded) && !isHidden ? (floating ? 18 : 0) : 17,
+          borderBottomRightRadius: (isImpacted || isExpanded) && !isHidden ? (floating ? 18 : 0) : 17,
           opacity: 1,
           scale: scale,
         }}
@@ -2099,14 +2149,14 @@ const Dock = memo(function Dock() {
           opacity: { type: "tween", duration: 0.2 },
           scale: { duration: 0 },
         }}
-        style={{ originX: 0.5, originY: 1, minWidth: 34 }}
+        style={{ originX: 0.5, originY: 1, minWidth: 34, marginBottom: gap }}
         onContextMenu={(e) => handleContextMenu(e, null)}
       >
         <SurfaceShape
           edge="bottom"
-          flare={isExpanded && !isHidden ? 13 : 0}
+          flare={isExpanded && !isHidden && !floating ? 13 : 0}
           radius={(isImpacted || isExpanded) ? 18 : 17}
-          edgeRadius={(isImpacted || isExpanded) ? 0 : 17}
+          edgeRadius={(isImpacted || isExpanded) && !isHidden ? (floating ? 18 : 0) : 17}
         />
         <AnimatePresence>
           {isExpanded && (
@@ -2359,6 +2409,7 @@ const Dock = memo(function Dock() {
                       app={app}
                       previews={previewData.previews}
                       onClosePreview={handleClosePreview}
+                      onSelectPreview={handleSelectPreview}
                       renderMedia={renderAppIcon}
                       renderPreviewMedia={renderPreviewMedia}
                       onMouseEnter={() => { isPreviewHoveredRef.current = true; }}
@@ -2483,6 +2534,7 @@ const Dock = memo(function Dock() {
                         app={app}
                         previews={previewData.previews}
                         onClosePreview={handleClosePreview}
+                        onSelectPreview={handleSelectPreview}
                         renderMedia={renderAppIcon}
                         renderPreviewMedia={renderPreviewMedia}
                         onMouseEnter={() => { isPreviewHoveredRef.current = true; }}
@@ -2598,6 +2650,7 @@ const Dock = memo(function Dock() {
                       app={app}
                       previews={previewData.previews}
                       onClosePreview={handleClosePreview}
+                      onSelectPreview={handleSelectPreview}
                       renderMedia={renderAppIcon}
                       renderPreviewMedia={renderPreviewMedia}
                       onMouseEnter={() => { isPreviewHoveredRef.current = true; }}

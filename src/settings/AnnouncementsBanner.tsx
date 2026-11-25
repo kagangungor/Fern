@@ -1,13 +1,29 @@
 import { useEffect, useState } from "react";
 import { Megaphone, X } from "lucide-react";
-import { useT } from "../i18n";
+import { dateLocale, useT } from "../i18n";
+
+type LocalizedText = string | Record<string, string>;
 
 export interface AnnouncementItem {
   id: string;
   level?: "info" | "warn" | "critical";
-  title: string;
-  body: string;
+  title: LocalizedText;
+  body: LocalizedText;
   url?: string;
+}
+
+function hasText(value: unknown): value is LocalizedText {
+  if (typeof value === "string") return value.trim().length > 0;
+  return Boolean(
+    value &&
+      typeof value === "object" &&
+      Object.values(value).some((v) => typeof v === "string" && v.trim().length > 0)
+  );
+}
+
+function resolveText(value: LocalizedText, lang: string): string {
+  if (typeof value === "string") return value;
+  return value[lang] ?? value.en ?? Object.values(value)[0] ?? "";
 }
 
 const DISMISSED_KEY = "fern-dismissed-announcements";
@@ -30,6 +46,7 @@ function saveDismissed(ids: Set<string>) {
 
 export function AnnouncementsBanner() {
   const t = useT();
+  const lang = dateLocale();
   const [items, setItems] = useState<AnnouncementItem[]>([]);
   const [dismissed, setDismissed] = useState<Set<string>>(() => readDismissed());
 
@@ -39,7 +56,7 @@ export function AnnouncementsBanner() {
       .then((res) => (res.ok ? res.json() : []))
       .then((data) => {
         if (!cancelled && Array.isArray(data)) {
-          setItems(data.filter((x): x is AnnouncementItem => Boolean(x?.id && x?.title && x?.body)));
+          setItems(data.filter((x): x is AnnouncementItem => Boolean(x?.id && hasText(x?.title) && hasText(x?.body))));
         }
       })
       .catch(() => {});
@@ -68,8 +85,8 @@ export function AnnouncementsBanner() {
             <Megaphone size={14} />
           </div>
           <div className="announcement-copy">
-            <strong>{item.title}</strong>
-            <span>{item.body}</span>
+            <strong>{resolveText(item.title, lang)}</strong>
+            <span>{resolveText(item.body, lang)}</span>
           </div>
           <button
             type="button"

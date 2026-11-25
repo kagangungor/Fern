@@ -1277,3 +1277,8 @@ body {
   background: rgba(156, 163, 175, 0.8);
   box-shadow: none;
 }
+
+.dock.dock-floating::before,
+.dock.dock-floating::after {
+  display: none;
+}

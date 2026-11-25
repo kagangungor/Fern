@@ -8,6 +8,7 @@ import type { UpdateCheckResult } from "../updater";
 import { useSettingsSync } from "../hooks/useSettingsSync";
 import { DEFAULT_ACCENT_COLOR, hexToHsl, STYLE_OPACITY, THEME_STYLES, type ThemePreset } from "../theme";
 import { DEFAULT_DUAL_CLOCK_ZONE } from "../dualClock";
+import { parseNotchDateFormat, parseNotchDatePosition, type NotchDateFormat, type NotchDatePosition } from "../notchDate";
 import { normalizeWidgetConfig } from "../widgetConfig";
 import type { WidgetConfig, MonitorInfo, MonitorMode } from "./types";
 
@@ -52,6 +53,15 @@ export function useSettings() {
   const [stopwatchEnabled, setStopwatchEnabled] = useState(true);
   const [dualClockEnabled, setDualClockEnabled] = useState(
     () => localStorage.getItem("fern-dual-clock-enabled") === "true"
+  );
+  const [dateEnabled, setDateEnabled] = useState(
+    () => localStorage.getItem("fern-notch-date-enabled") === "true"
+  );
+  const [dateFormat, setDateFormat] = useState<NotchDateFormat>(
+    () => parseNotchDateFormat(localStorage.getItem("fern-notch-date-format"))
+  );
+  const [datePosition, setDatePosition] = useState<NotchDatePosition>(
+    () => parseNotchDatePosition(localStorage.getItem("fern-notch-date-position"))
   );
   const [dualClockZone, setDualClockZone] = useState(
     () => localStorage.getItem("fern-dual-clock-zone") || DEFAULT_DUAL_CLOCK_ZONE
@@ -192,6 +202,12 @@ export function useSettings() {
   const [dockAdaptive, setDockAdaptive] = useState(
     () => localStorage.getItem("fern-dock-adaptive") === "true"
   );
+  const [dockFloatGap, setDockFloatGap] = useState(
+    () => localStorage.getItem("fern-dock-float-gap") ?? "0"
+  );
+  const [dockHideOnStart, setDockHideOnStart] = useState(
+    () => localStorage.getItem("fern-dock-hide-on-start") !== "false"
+  );
   const [dockWinNumberEnabled, setDockWinNumberEnabled] = useState(
     () => localStorage.getItem("fern-dock-win-number-enabled") !== "false"
   );
@@ -210,6 +226,12 @@ export function useSettings() {
     return raw === "auto-hide" ? "smart" : raw;
   });
   const [notchMode, setNotchMode] = useState("fixed");
+  const [notchEnabled, setNotchEnabled] = useState(
+    () => localStorage.getItem("fern-notch-enabled") !== "false"
+  );
+  const [notchFloatGap, setNotchFloatGap] = useState(
+    () => localStorage.getItem("fern-notch-float-gap") ?? "0"
+  );
   const [dockMonitorMode, setDockMonitorMode] = useState<MonitorMode>(
     () => (localStorage.getItem("fern-dock-monitor-mode") as MonitorMode) || "primary"
   );
@@ -289,6 +311,9 @@ export function useSettings() {
       apply(getVal("fern-dual-clock-enabled"), setDualClockEnabled, readBool);
       apply(getVal("fern-dual-clock-zone"), setDualClockZone, (v) => v);
       apply(getVal("fern-dual-clock-label"), setDualClockLabel, (v) => v);
+      apply(getVal("fern-notch-date-enabled"), setDateEnabled, readBool);
+      apply(getVal("fern-notch-date-format"), setDateFormat, parseNotchDateFormat);
+      apply(getVal("fern-notch-date-position"), setDatePosition, parseNotchDatePosition);
       apply(getVal("fern-music-mode-enabled"), setMusicModeEnabled, readBool);
       apply(getVal("fern-music-compact-notch"), setMusicCompactNotch, readBool);
       apply(getVal("fern-notch-scroll-volume"), setNotchScrollVolume, (v) => v === "true");
@@ -346,6 +371,8 @@ export function useSettings() {
       apply(getVal("fern-dock-icon-only"), setDockIconOnly, readBool);
       apply(getVal("fern-start-icon"), setStartIcon, (v) => v);
       apply(getVal("fern-dock-adaptive"), setDockAdaptive, readBool);
+      apply(getVal("fern-dock-float-gap"), setDockFloatGap, (v) => String(v ?? "0"));
+      apply(getVal("fern-dock-hide-on-start"), setDockHideOnStart, (v) => String(v) !== "false");
       apply(getVal("fern-dock-win-number-enabled"), setDockWinNumberEnabled, readBool);
       apply(getVal("fern-dock-mixed-reorder"), setDockMixedReorder, readBool);
 
@@ -354,6 +381,8 @@ export function useSettings() {
       apply(getVal("fern-low-battery-threshold"), setLowBatteryThreshold, parseInt);
 
       apply(getVal("fern-notch-mode"), setNotchMode, (v) => (v === "auto-hide" ? "smart" : v));
+      apply(getVal("fern-notch-enabled"), setNotchEnabled, (v) => String(v) !== "false");
+      apply(getVal("fern-notch-float-gap"), setNotchFloatGap, (v) => String(v ?? "0"));
       apply(getVal("fern-dock-mode"), setDockMode, (v) => (v === "auto-hide" ? "smart" : v));
 
       apply(getVal("fern-dock-monitor-mode"), setDockMonitorMode, (v) => v as MonitorMode);
@@ -451,6 +480,8 @@ export function useSettings() {
     "fern-dock-mode-by-monitor": (v) => { try { setDockModeByMonitor(JSON.parse(v)); } catch {} },
     "fern-notch-mode-by-monitor": (v) => { try { setNotchModeByMonitor(JSON.parse(v)); } catch {} },
     "fern-dock-enabled": setDockEnabled,
+    "fern-notch-enabled": (v) => setNotchEnabled(String(v) !== "false"),
+    "fern-notch-float-gap": (v) => setNotchFloatGap(String(v ?? "0")),
     "fern-dock-tray-enabled": (v) => setDockTray(v !== false && v !== "false"),
     "fern-dock-taskview-enabled": setDockTaskView,
     "fern-dock-show-desktop-corner": setDockShowDesktop,
@@ -468,6 +499,8 @@ export function useSettings() {
     "fern-dock-icon-only": setDockIconOnly,
     "fern-start-icon": setStartIcon,
     "fern-dock-adaptive": setDockAdaptive,
+    "fern-dock-float-gap": (v) => setDockFloatGap(String(v ?? "0")),
+    "fern-dock-hide-on-start": (v) => setDockHideOnStart(v !== false && v !== "false"),
     "fern-dock-win-number-enabled": setDockWinNumberEnabled,
     "fern-dock-preview-enabled": setDockPreviewEnabled,
     "fern-dock-console-windows": (v: any) => setDockConsoleWindows(v === true || v === "true"),
@@ -485,6 +518,9 @@ export function useSettings() {
     "fern-dual-clock-enabled": setDualClockEnabled,
     "fern-dual-clock-zone": (v) => setDualClockZone(String(v)),
     "fern-dual-clock-label": (v) => setDualClockLabel(String(v)),
+    "fern-notch-date-enabled": (v) => setDateEnabled(v === true || v === "true"),
+    "fern-notch-date-format": (v) => setDateFormat(parseNotchDateFormat(v)),
+    "fern-notch-date-position": (v) => setDatePosition(parseNotchDatePosition(v)),
     "fern-music-mode-enabled": setMusicModeEnabled,
     "fern-music-compact-notch": setMusicCompactNotch,
     "fern-notch-scroll-volume": setNotchScrollVolume,
@@ -693,6 +729,22 @@ export function useSettings() {
     saveSetting("fern-dual-clock-enabled", String(next));
   };
 
+  const toggleDate = () => {
+    const next = !dateEnabled;
+    setDateEnabled(next);
+    saveSetting("fern-notch-date-enabled", String(next));
+  };
+
+  const selectDateFormat = (format: NotchDateFormat) => {
+    setDateFormat(format);
+    saveSetting("fern-notch-date-format", format);
+  };
+
+  const selectDatePosition = (position: NotchDatePosition) => {
+    setDatePosition(position);
+    saveSetting("fern-notch-date-position", position);
+  };
+
   const selectDualClockZone = ({ label, zone }: { label: string; zone: string }) => {
     setDualClockZone(zone);
     setDualClockLabel(label);
@@ -893,6 +945,17 @@ export function useSettings() {
     saveSetting("fern-dock-enabled", String(next));
   };
 
+  const toggleNotchEnabled = () => {
+    const next = !notchEnabled;
+    setNotchEnabled(next);
+    saveSetting("fern-notch-enabled", String(next));
+  };
+
+  const changeNotchFloatGap = (value: string) => {
+    setNotchFloatGap(value);
+    saveSetting("fern-notch-float-gap", value);
+  };
+
   const toggleDockConsoleWindows = () => {
     const next = !dockConsoleWindows;
     setDockConsoleWindows(next);
@@ -1052,6 +1115,17 @@ export function useSettings() {
     const next = !dockAdaptive;
     setDockAdaptive(next);
     saveSetting("fern-dock-adaptive", String(next));
+  };
+
+  const changeDockFloatGap = (value: string) => {
+    setDockFloatGap(value);
+    saveSetting("fern-dock-float-gap", value);
+  };
+
+  const toggleDockHideOnStart = () => {
+    const next = !dockHideOnStart;
+    setDockHideOnStart(next);
+    saveSetting("fern-dock-hide-on-start", String(next));
   };
 
   const toggleDockWinNumber = () => {
@@ -1390,6 +1464,10 @@ export function useSettings() {
     toggleGlassWallpaper,
 
     // Notch
+    notchEnabled,
+    toggleNotchEnabled,
+    notchFloatGap,
+    changeNotchFloatGap,
     notchMode,
     setNotchModeValue,
     calendarEnabled,
@@ -1407,6 +1485,12 @@ export function useSettings() {
     dualClockZone,
     dualClockLabel,
     selectDualClockZone,
+    dateEnabled,
+    toggleDate,
+    dateFormat,
+    selectDateFormat,
+    datePosition,
+    selectDatePosition,
     musicModeEnabled,
     toggleMusicMode,
     musicCompactNotch,
@@ -1500,6 +1584,10 @@ export function useSettings() {
     handleStartIconChange,
     dockAdaptive,
     toggleDockAdaptive,
+    dockFloatGap,
+    changeDockFloatGap,
+    dockHideOnStart,
+    toggleDockHideOnStart,
     dockWinNumberEnabled,
     toggleDockWinNumber,
     dockMixedReorder,

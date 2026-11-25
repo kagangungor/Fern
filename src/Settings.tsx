@@ -206,6 +206,10 @@ function SettingsApp() {
           {activeTab === "notch" && (
             <NotchTab
               onOpenCalendarSync={() => setActiveTab("calendar-sync")}
+              notchEnabled={settings.notchEnabled}
+              toggleNotchEnabled={settings.toggleNotchEnabled}
+              notchFloatGap={settings.notchFloatGap}
+              changeNotchFloatGap={settings.changeNotchFloatGap}
               notchMode={settings.notchMode}
               setNotchModeValue={settings.setNotchModeValue}
               monitors={settings.monitors}
@@ -231,6 +235,12 @@ function SettingsApp() {
               dualClockZone={settings.dualClockZone}
               dualClockLabel={settings.dualClockLabel}
               selectDualClockZone={settings.selectDualClockZone}
+              dateEnabled={settings.dateEnabled}
+              toggleDate={settings.toggleDate}
+              dateFormat={settings.dateFormat}
+              selectDateFormat={settings.selectDateFormat}
+              datePosition={settings.datePosition}
+              selectDatePosition={settings.selectDatePosition}
               musicModeEnabled={settings.musicModeEnabled}
               toggleMusicMode={settings.toggleMusicMode}
               musicCompactNotch={settings.musicCompactNotch}
@@ -332,6 +342,10 @@ function SettingsApp() {
               toggleDockIconOnly={settings.toggleDockIconOnly}
               dockAdaptive={settings.dockAdaptive}
               toggleDockAdaptive={settings.toggleDockAdaptive}
+              dockFloatGap={settings.dockFloatGap}
+              changeDockFloatGap={settings.changeDockFloatGap}
+              dockHideOnStart={settings.dockHideOnStart}
+              toggleDockHideOnStart={settings.toggleDockHideOnStart}
               startIcon={settings.startIcon}
               handleStartIconChange={settings.handleStartIconChange}
               dockWinNumberEnabled={settings.dockWinNumberEnabled}

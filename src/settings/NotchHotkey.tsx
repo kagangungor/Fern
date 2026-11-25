@@ -12,8 +12,9 @@ export function NotchHotkey() {
   const commit = (next: string) => {
     setValue(next);
     localStorage.setItem("fern-notch-hotkey", next);
-    invoke("save_setting", { key: "fern-notch-hotkey", value: next }).catch(() => { });
-    invoke("reload_hotkeys").catch(() => { });
+    invoke("save_setting", { key: "fern-notch-hotkey", value: next })
+      .catch(() => { })
+      .finally(() => { invoke("reload_hotkeys").catch(() => { }); });
   };
 
   return (

@@ -1,8 +1,14 @@
 [
   {
-    "id": "fern-1.6.3",
+    "id": "fern-1.7.0",
     "level": "info",
-    "title": "Fern 1.6.3 — Discord Preview Controls, Instant App Picker & Icon Fixes",
-    "body": "Toggle camera, mic, deafen, and disconnect right from Discord's dock preview, enjoy instant Add App loading with proper app icons and localized names, and see untitled console windows in the dock."
+    "title": {
+      "en": "Fern 1.7.0 — Floating Notch & Dock, Date Display & Ping Widget",
+      "tr": "Fern 1.7.0 — Yüzen Çentik & Dock, Tarih Gösterimi ve Ping Widget'ı"
+    },
+    "body": {
+      "en": "Float the notch and dock off the screen edges, disable the notch to use the dock solo, show the date next to the clock, monitor live ping, hide the dock on Start/Search, and enjoy improved shortcut recording and tray icon fixes.",
+      "tr": "Çentik ve dock'u ekran kenarlarından ayırarak yüzen modda kullanın, sadece dock için çentiği kapatın, saatin yanında tarih ve canlı ping görüntüleyin, Başlat/Arama açıldığında dock'u gizleyin ve geliştirilmiş kısayol kaydı ile sistem tepsisi düzeltmelerinden yararlanın."
+    }
   }
 ]

@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import type { ChangeEvent, CSSProperties } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { emit } from "@tauri-apps/api/event";
-import { Monitor, Eye, Terminal, Volume2, EyeOff, Circle, Search, Shuffle, MonitorCheck, CalendarDays, Maximize2, Keyboard, Sparkles, RotateCcw, LayoutGrid, Trash2, HardDrive, ChevronUp, Clock, BellRing } from "lucide-react";
+import { Monitor, Eye, Terminal, Volume2, EyeOff, Circle, Search, Shuffle, MonitorCheck, CalendarDays, Maximize2, Keyboard, Sparkles, RotateCcw, LayoutGrid, Trash2, HardDrive, ChevronUp, Clock, BellRing, PanelBottom } from "lucide-react";
 import { SettingRow } from "./SettingRow";
 import { SettingSection } from "./SettingSection";
 import { Dropdown } from "./Dropdown";
@@ -69,6 +69,10 @@ interface DockTabProps {
   toggleDockIconOnly: () => void;
   dockAdaptive: boolean;
   toggleDockAdaptive: () => void;
+  dockFloatGap: string;
+  changeDockFloatGap: (value: string) => void;
+  dockHideOnStart: boolean;
+  toggleDockHideOnStart: () => void;
   startIcon: string;
   handleStartIconChange: (icon: string) => void;
   dockWinNumberEnabled: boolean;
@@ -128,6 +132,10 @@ export function DockTab({
   toggleDockIconOnly,
   dockAdaptive,
   toggleDockAdaptive,
+  dockFloatGap,
+  changeDockFloatGap,
+  dockHideOnStart,
+  toggleDockHideOnStart,
   startIcon,
   handleStartIconChange,
   dockWinNumberEnabled,
@@ -242,6 +250,13 @@ export function DockTab({
             {(dockMode !== "fixed" || (showPerMonitor && monitors.some((m) => (dockModeByMonitor[m.id] || dockMode) !== "fixed"))) && (
               <EdgeArea settingKey="fern-dock-edge-area" />
             )}
+
+            <SettingRow icon={EyeOff} label={t("dock.hideOnStart")} desc={t("dock.hideOnStart.desc")}>
+              <label className="toggle-switch">
+                <input type="checkbox" checked={dockHideOnStart} onChange={toggleDockHideOnStart} />
+                <span className="slider"></span>
+              </label>
+            </SettingRow>
 
             <SettingRow icon={MonitorCheck} label={t("common.showOn")} desc={t("dock.showOn.desc")}>
               <Dropdown
@@ -453,6 +468,19 @@ export function DockTab({
                 </label>
               </SettingRow>
             )}
+
+            <SettingRow icon={PanelBottom} label={t("dock.float")} desc={t("dock.float.desc")}>
+              <Dropdown
+                value={dockFloatGap}
+                options={[
+                  { value: "0", label: t("dock.float.off") },
+                  { value: "8", label: t("dock.float.small") },
+                  { value: "16", label: t("dock.float.medium") },
+                  { value: "28", label: t("dock.float.large") },
+                ]}
+                onChange={changeDockFloatGap}
+              />
+            </SettingRow>
 
             <SettingRow
               icon={Shuffle}

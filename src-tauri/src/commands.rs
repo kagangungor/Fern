@@ -65,7 +65,12 @@ pub async fn set_dock_dragging(dragging: bool) {
 }
 
 #[tauri::command]
-pub async fn update_dock_rect(window: Window, rect: IntRect) {
+pub async fn update_dock_rect(window: Window, rect: IntRect, expanded: Option<bool>) {
+    if expanded == Some(true) {
+        if let Ok(mut m) = crate::state::dock_overlap_rects().lock() {
+            m.insert(window.label().to_string(), rect);
+        }
+    }
     if let Ok(mut m) = crate::state::dock_rects().lock() {
         m.insert(window.label().to_string(), rect);
     }
@@ -786,6 +791,15 @@ fn gui_launcher_for(path: &str) -> Option<String> {
     (twin.exists() && pe_subsystem(twin_str) == Some(2)).then(|| twin_str.to_string())
 }
 
+/// ShellExecuteW can't resolve some shell:AppsFolder ids; explorer.exe can.
+fn open_with_explorer(target: &str) {
+    use std::os::windows::process::CommandExt;
+    let _ = std::process::Command::new("explorer.exe")
+        .arg(target)
+        .creation_flags(0x0800_0000)
+        .spawn();
+}
+
 /// Opens a path, shortcut or shell app id through the shell.
 fn launch_path(path: &str, args: Option<&str>) {
     unsafe {
@@ -815,11 +829,18 @@ fn launch_path(path: &str, args: Option<&str>) {
             );
             if res.0 as usize <= 32 {
                 eprintln!("Failed to open {}: error code {}", target, res.0 as usize);
+                if target.starts_with("shell:AppsFolder\\") {
+                    open_with_explorer(&target);
+                }
             }
             return;
         }
 
-        if let Some(uwp_cmd) = crate::commands::get_uwp_launch_cmd(path) {
+        if let Some(derived_cmd) = crate::commands::get_uwp_launch_cmd(path) {
+            let exact = package_family_from_windows_apps_path(path)
+                .and_then(|family| find_aumid_by_family(&family))
+                .map(|id| format!("shell:AppsFolder\\{}", id.trim_start_matches("shell:AppsFolder\\")));
+            let uwp_cmd = exact.clone().unwrap_or(derived_cmd);
             let wide_cmd: Vec<u16> = uwp_cmd.encode_utf16().chain(std::iter::once(0)).collect();
             
             let res = ShellExecuteW(
@@ -833,6 +854,9 @@ fn launch_path(path: &str, args: Option<&str>) {
             
             if res.0 as usize <= 32 {
                 eprintln!("Failed to open UWP app {}: error code {}", uwp_cmd, res.0 as usize);
+                if exact.is_some() {
+                    open_with_explorer(&uwp_cmd);
+                }
             }
             return;
         }
@@ -1158,11 +1182,13 @@ pub async fn focus_window(app: AppHandle, hwnd: isize) {
         }
 
         if !IsWindowVisible(hwnd).as_bool() {
+            crate::diagnostics::log(&format!("focus: showing hidden {:?} with SW_RESTORE", hwnd.0));
             let _ = ShowWindow(hwnd, SW_SHOW);
             bring_restore_position_on_screen(hwnd);
             let _ = ShowWindow(hwnd, SW_RESTORE);
             force_set_foreground(hwnd);
         } else if IsIconic(hwnd).as_bool() {
+            crate::diagnostics::log(&format!("focus: restoring iconic {:?} with SW_RESTORE", hwnd.0));
             bring_restore_position_on_screen(hwnd);
             let _ = ShowWindow(hwnd, SW_RESTORE);
             force_set_foreground(hwnd);
@@ -1198,6 +1224,7 @@ pub async fn focus_window(app: AppHandle, hwnd: isize) {
                     send_behind(hwnd);
                 }
             } else {
+                crate::diagnostics::log(&format!("focus: bringing {:?} to foreground", hwnd.0));
                 force_set_foreground(hwnd);
             }
         }
@@ -1270,16 +1297,19 @@ pub async fn focus_app_windows(hwnds: Vec<isize>) {
 
         let hwnd = HWND(target as *mut _);
         if !IsWindowVisible(hwnd).as_bool() {
+            crate::diagnostics::log(&format!("focus_app_windows: showing hidden {:?} with SW_SHOW", hwnd.0));
             let _ = ShowWindow(hwnd, SW_SHOW);
         }
         if IsIconic(hwnd).as_bool() {
+            crate::diagnostics::log(&format!("focus_app_windows: restoring iconic {:?} with SW_RESTORE", hwnd.0));
             bring_restore_position_on_screen(hwnd);
             let _ = ShowWindow(hwnd, SW_RESTORE);
         }
         if IsIconic(hwnd).as_bool() {
             let _ = ShowWindow(hwnd, SW_RESTORE);
         }
-        let _ = SetForegroundWindow(hwnd);
+        let fg_ok = SetForegroundWindow(hwnd).as_bool();
+        crate::diagnostics::log(&format!("focus_app_windows: SetForegroundWindow({:?}) -> {fg_ok}", hwnd.0));
     })
     .await
     .unwrap_or_default();
@@ -1345,7 +1375,14 @@ pub fn is_aumid_path(path: &str) -> bool {
     if p.to_lowercase().starts_with("shell:appsfolder\\") { return true; }
     if p.starts_with("::{") { return true; }
     if p.starts_with('{') && p.contains("}\\") { return true; }
-    if p.contains('\\') || p.contains('/') || p.contains(':') { return false; }
+    if p.contains('\\') || p.contains('/') { return false; }
+    // Some installers (e.g. CapCut) register dot-flattened path AppIDs in AppsFolder like
+    // `c:.users.user.appdata.local.capcut.apps.9.7.0.4153.capcut.exe`.
+    let bytes = p.as_bytes();
+    if bytes[0].is_ascii_alphabetic() && bytes[1] == b':' && bytes[2] == b'.' {
+        return true;
+    }
+    if p.contains(':') { return false; }
     if p.to_lowercase().ends_with(".exe") { return false; }
     if std::path::Path::new(p).exists() { return false; }
     true
@@ -2094,9 +2131,9 @@ pub async fn load_pinned_apps(app: AppHandle) -> Vec<AppInfo> {
     }
 
     vec![
-        AppInfo { name: "File Explorer".into(), path: "C:\\Windows\\explorer.exe".into(), icon: None, is_running: false, hwnd: None, executable: Some("explorer.exe".into()), all_hwnds: None, args: None },
+        AppInfo { name: crate::taskbar_pins::shell_app_name("Microsoft.Windows.Explorer", "File Explorer"), path: "C:\\Windows\\explorer.exe".into(), icon: None, is_running: false, hwnd: None, executable: Some("explorer.exe".into()), all_hwnds: None, args: None },
         AppInfo { name: "Microsoft Edge".into(), path: "msedge".into(), icon: None, is_running: false, hwnd: None, executable: Some("msedge.exe".into()), all_hwnds: None, args: None },
-        AppInfo { name: "Notepad".into(), path: "notepad.exe".into(), icon: None, is_running: false, hwnd: None, executable: Some("notepad.exe".into()), all_hwnds: None, args: None },
+        AppInfo { name: crate::taskbar_pins::shell_app_name("Microsoft.WindowsNotepad_8wekyb3d8bbwe!App", "Notepad"), path: "notepad.exe".into(), icon: None, is_running: false, hwnd: None, executable: Some("notepad.exe".into()), all_hwnds: None, args: None },
         AppInfo { name: "Settings".into(), path: "fern-settings".into(), icon: None, is_running: false, hwnd: None, executable: None, all_hwnds: None, args: None },
     ]
 }
@@ -3717,6 +3754,22 @@ fn compute_cpu_usage_percent(prev: (u64, u64, u64), curr: (u64, u64, u64)) -> u3
 }
 
 #[tauri::command]
+pub async fn get_ping_ms(app: AppHandle) -> Option<u32> {
+    let target = crate::utils::get_setting_str(&app, "fern-ping-host")
+        .unwrap_or_else(|| "1.1.1.1:443".to_string());
+    tauri::async_runtime::spawn_blocking(move || {
+        use std::net::{TcpStream, ToSocketAddrs};
+        let addr = target.to_socket_addrs().ok()?.next()?;
+        let start = std::time::Instant::now();
+        TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(1500)).ok()?;
+        Some(start.elapsed().as_millis() as u32)
+    })
+    .await
+    .ok()
+    .flatten()
+}
+
+#[tauri::command]
 pub fn get_cpu_usage() -> Result<u32, String> {
     static LAST_TIMES: std::sync::OnceLock<std::sync::Mutex<(u64, u64, u64)>> = std::sync::OnceLock::new();
     let lock = LAST_TIMES.get_or_init(|| std::sync::Mutex::new((0, 0, 0)));
@@ -4251,6 +4304,7 @@ mod pwa_icon_tests {
         assert!(is_aumid_path("{6D809377-6AF0-444B-8957-A3773F02200E}\\Blender Foundation\\Blender 4.5\\blender.exe"));
         assert!(is_aumid_path("{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\\compmgmt.msc"));
         assert!(is_aumid_path("::{4234D49B-0245-4DF3-B780-3893943456E1}\\Microsoft.Getstarted_8wekyb3d8bbwe!App"));
+        assert!(is_aumid_path("c:.users.user.appdata.local.capcut.apps.9.7.0.4153.capcut.exe"));
         assert!(!is_aumid_path("C:\\Windows\\explorer.exe"));
         assert!(!is_aumid_path("msedge.exe"));
         assert!(!is_aumid_path(""));
@@ -4270,6 +4324,10 @@ mod pwa_icon_tests {
         assert_eq!(
             shell_parsing_name_for_aumid("4DF9E0F8.Netflix_mcm4njqhnhss8!Netflix.App"),
             "shell:AppsFolder\\4DF9E0F8.Netflix_mcm4njqhnhss8!Netflix.App"
+        );
+        assert_eq!(
+            shell_parsing_name_for_aumid("c:.users.user.appdata.local.capcut.apps.9.7.0.4153.capcut.exe"),
+            "shell:AppsFolder\\c:.users.user.appdata.local.capcut.apps.9.7.0.4153.capcut.exe"
         );
     }
 
@@ -4557,11 +4615,12 @@ pub fn pointer_over_notch(window: Window) -> bool {
     }
     let Some((win_pos, _)) = main_window_rects().lock().ok().and_then(|m| m.get(&label).copied()) else { return false };
     let Some(r) = notch_rects().lock().ok().and_then(|m| m.get(&label).copied()) else { return false };
+    if r.width <= 0 || r.height <= 0 { return false; }
     let scale = window.scale_factor().unwrap_or(1.0);
     let left = win_pos.x + (r.x as f64 * scale) as i32;
     let right = left + (r.width as f64 * scale) as i32;
-    let top = win_pos.y;
-    let bottom = win_pos.y + (r.height as f64 * scale) as i32;
+    let top = win_pos.y + (r.y.max(0) as f64 * scale) as i32;
+    let bottom = top + (r.height as f64 * scale) as i32;
     pt.x >= left && pt.x <= right && pt.y >= top && pt.y <= bottom
 }
 

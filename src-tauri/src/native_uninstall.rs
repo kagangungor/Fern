@@ -76,6 +76,12 @@ fn run_hidden(program: &str, args: &[&str]) -> Option<String> {
         .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
 }
 
+fn remove_logon_task() {
+    for task in ["Fern", "Nectar"] {
+        let _ = run_hidden("schtasks", &["/delete", "/tn", task, "/f"]);
+    }
+}
+
 fn stop_running_fern() {
     let not_self = format!("PID ne {}", std::process::id());
     let filters = ["/FI", "IMAGENAME eq fern.exe", "/FI", not_self.as_str()];
@@ -244,6 +250,7 @@ pub fn run() {
 
     stop_running_fern();
     restore_taskbar_if_left_hidden();
+    remove_logon_task();
     remove_shortcuts(all_users);
     remove_registry(all_users);
 

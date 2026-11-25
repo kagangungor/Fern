@@ -15,8 +15,9 @@ export function MicMuteHotkey() {
   const commit = (next: string) => {
     setValue(next);
     localStorage.setItem("fern-mic-mute-hotkey", next);
-    invoke("save_setting", { key: "fern-mic-mute-hotkey", value: next }).catch(() => { });
-    invoke("reload_hotkeys").catch(() => { });
+    invoke("save_setting", { key: "fern-mic-mute-hotkey", value: next })
+      .catch(() => { })
+      .finally(() => { invoke("reload_hotkeys").catch(() => { }); });
   };
 
   return (

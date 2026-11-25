@@ -226,6 +226,11 @@ img {
     mask-image: radial-gradient(circle at 100% 100%, transparent 12.5px, black 13px);
 }
 
+.fern.notch-floating::before,
+.fern.notch-floating::after {
+    display: none;
+}
+
 .time-center {
     position: relative;
     display: flex;
@@ -276,6 +281,36 @@ img {
     color: var(--fern-text-muted, rgba(255, 255, 255, 0.6));
 }
 
+/* Date beside the time. Widths here feed measureNotchDate in dualClock.ts. */
+.time-date {
+    font-size: 13px;
+    font-weight: 500;
+    letter-spacing: 0.3px;
+    line-height: 1;
+    white-space: nowrap;
+    color: var(--fern-text, white);
+    cursor: pointer;
+    user-select: none;
+    -webkit-user-select: none;
+    transition: color 0.2s ease;
+}
+
+.time-date:hover {
+    color: var(--fern-text-muted, rgba(255, 255, 255, 0.8));
+}
+
+.time-date.left {
+    margin-right: 9px;
+    padding-right: 9px;
+    border-right: 1px solid var(--fern-border, rgba(255, 255, 255, 0.12));
+}
+
+.time-date.right {
+    margin-left: 9px;
+    padding-left: 9px;
+    border-left: 1px solid var(--fern-border, rgba(255, 255, 255, 0.12));
+}
+
 .time-flip-container {
     min-width: 60px;
     height: 24px;
@@ -288,6 +323,21 @@ img {
     user-select: none;
     -webkit-user-select: none;
     transition: transform 0.1s ease;
+}
+
+.time-flip-container.tight {
+    min-width: 0;
+    position: relative;
+}
+
+.time-sizer {
+    font-size: 13px;
+    font-weight: 500;
+    letter-spacing: 0.3px;
+    line-height: 1;
+    white-space: nowrap;
+    visibility: hidden;
+    pointer-events: none;
 }
 
 .time-flip-container:hover .time {

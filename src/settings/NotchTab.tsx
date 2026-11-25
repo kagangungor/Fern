@@ -28,9 +28,12 @@ import {
   SlidersHorizontal,
   Activity,
   CalendarDays,
+  CalendarClock,
+  ArrowLeftRight,
   Inbox,
 } from "lucide-react";
 import type { ComponentType } from "react";
+import { formatNotchDate, type NotchDateFormat, type NotchDatePosition } from "../notchDate";
 import { DEFAULT_PANEL_ORDER, type CcLayout, type PanelId } from "../panelOrder";
 import { ControlCenterConfig } from "../components/ControlCenterConfig";
 import { OrderList } from "./OrderList";
@@ -57,6 +60,10 @@ import { AgentIntro } from "./AgentIntro";
 import { AgentSounds } from "./AgentSounds";
 
 interface NotchTabProps {
+  notchEnabled: boolean;
+  toggleNotchEnabled: () => void;
+  notchFloatGap: string;
+  changeNotchFloatGap: (value: string) => void;
   notchMode: string;
   setNotchModeValue: (mode: string) => void;
   monitors: MonitorInfo[];
@@ -82,6 +89,12 @@ interface NotchTabProps {
   dualClockZone: string;
   selectDualClockZone: (entry: { label: string; zone: string }) => void;
   dualClockLabel: string;
+  dateEnabled: boolean;
+  toggleDate: () => void;
+  dateFormat: NotchDateFormat;
+  selectDateFormat: (format: NotchDateFormat) => void;
+  datePosition: NotchDatePosition;
+  selectDatePosition: (position: NotchDatePosition) => void;
   musicModeEnabled: boolean;
   toggleMusicMode: () => void;
   musicCompactNotch: boolean;
@@ -145,6 +158,10 @@ interface NotchTabProps {
 }
 
 export function NotchTab({
+  notchEnabled,
+  toggleNotchEnabled,
+  notchFloatGap,
+  changeNotchFloatGap,
   notchMode,
   setNotchModeValue,
   monitors,
@@ -170,6 +187,12 @@ export function NotchTab({
   dualClockZone,
   selectDualClockZone,
   dualClockLabel,
+  dateEnabled,
+  toggleDate,
+  dateFormat,
+  selectDateFormat,
+  datePosition,
+  selectDatePosition,
   musicModeEnabled,
   toggleMusicMode,
   musicCompactNotch,
@@ -242,6 +265,13 @@ export function NotchTab({
     <>
       {/* ─── 1. GÖRÜNÜM VE GİZLİLİK (DISPLAY & PRIVACY) ─── */}
       <SettingSection id="notch-display" title={t("notch.section.display")} defaultOpen>
+        <SettingRow icon={PanelTop} label={t("notch.enabled")} desc={t("notch.enabled.desc")}>
+          <label className="toggle-switch">
+            <input type="checkbox" checked={notchEnabled} onChange={toggleNotchEnabled} />
+            <span className="slider"></span>
+          </label>
+        </SettingRow>
+
         {!showPerMonitor && (
           <>
             <SettingRow icon={PanelTop} label={t("notch.behavior")} desc={t("notch.behavior.desc")}>
@@ -275,6 +305,19 @@ export function NotchTab({
         {(notchMode !== "fixed" || (showPerMonitor && monitors.some((m) => (notchModeByMonitor[m.id] || notchMode) !== "fixed"))) && (
           <EdgeArea settingKey="fern-notch-edge-area" />
         )}
+
+        <SettingRow icon={PanelTop} label={t("notch.float")} desc={t("notch.float.desc")}>
+          <Dropdown
+            value={notchFloatGap}
+            options={[
+              { value: "0", label: t("notch.float.off") },
+              { value: "8", label: t("notch.float.small") },
+              { value: "16", label: t("notch.float.medium") },
+              { value: "28", label: t("notch.float.large") },
+            ]}
+            onChange={changeNotchFloatGap}
+          />
+        </SettingRow>
 
         <SettingRow icon={MonitorCheck} label={t("common.showOn")} desc={t("notch.showOn.desc")}>
           <Dropdown
@@ -611,6 +654,43 @@ export function NotchTab({
           <>
             <DualClockPicker onSelect={selectDualClockZone} />
             <div className="setting-divider" />
+          </>
+        )}
+
+        <SettingRow
+          icon={CalendarDays}
+          label={t("notch.date")}
+          desc={dateEnabled ? formatNotchDate(new Date(), dateFormat) : t("notch.date.desc")}
+        >
+          <label className="toggle-switch">
+            <input type="checkbox" checked={dateEnabled} onChange={toggleDate} />
+            <span className="slider"></span>
+          </label>
+        </SettingRow>
+
+        {dateEnabled && (
+          <>
+            <SettingRow icon={CalendarClock} label={t("notch.dateFormat")} desc={t("notch.dateFormat.desc")}>
+              <div className="unit-toggle-minimal wide">
+                <span className={dateFormat === "weekday" ? "active" : ""} onClick={() => selectDateFormat("weekday")}>
+                  {formatNotchDate(new Date(), "weekday")}
+                </span>
+                <span className={dateFormat === "date" ? "active" : ""} onClick={() => selectDateFormat("date")}>
+                  {formatNotchDate(new Date(), "date")}
+                </span>
+              </div>
+            </SettingRow>
+
+            <SettingRow icon={ArrowLeftRight} label={t("notch.datePosition")} desc={t("notch.datePosition.desc")}>
+              <div className="unit-toggle-minimal wide">
+                <span className={datePosition === "left" ? "active" : ""} onClick={() => selectDatePosition("left")}>
+                  {t("notch.datePosition.left")}
+                </span>
+                <span className={datePosition === "right" ? "active" : ""} onClick={() => selectDatePosition("right")}>
+                  {t("notch.datePosition.right")}
+                </span>
+              </div>
+            </SettingRow>
           </>
         )}
 

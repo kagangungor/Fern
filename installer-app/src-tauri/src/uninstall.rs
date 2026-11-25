@@ -122,6 +122,15 @@ fn run_agent_hooks(exe: &Path, command: &str) {
         .status();
 }
 
+fn remove_logon_task() {
+    for task in ["Fern", "Nectar"] {
+        let _ = std::process::Command::new("schtasks")
+            .args(["/delete", "/tn", task, "/f"])
+            .creation_flags(CREATE_NO_WINDOW)
+            .output();
+    }
+}
+
 pub fn uninstall(install_dir: &Path, all_users: bool, shortcuts: &[PathBuf]) -> Result<(), String> {
     let exe = install_dir.join("fern.exe");
     if exe.exists() {
@@ -129,6 +138,7 @@ pub fn uninstall(install_dir: &Path, all_users: bool, shortcuts: &[PathBuf]) -> 
     }
 
     stop_running_fern();
+    remove_logon_task();
 
     for s in shortcuts {
         let _ = std::fs::remove_file(s);

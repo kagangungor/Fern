@@ -151,9 +151,22 @@ export function dayShiftLabel(shift: number): string {
   return shift > 0 ? `+${shift}` : `−${-shift}`;
 }
 
+// Keep in step with .time-date in App.css: 9px margin + 9px padding + 1px divider.
+const DATE_CHROME = 19;
+
+/** Width of the main clock text at .time font metrics. */
+export function measureMainClock(time: string): number {
+  return Math.ceil(textWidth(time, `500 13px ${NOTCH_FONT}`, 0.3));
+}
+
+/** Extra notch width the date beside the time takes. */
+export function measureNotchDate(text: string): number {
+  return Math.ceil(DATE_CHROME + textWidth(text, `500 13px ${NOTCH_FONT}`, 0.3));
+}
+
 // The notch width is animated explicitly, so it has to know how much room the second clock takes.
 export function measureDualClock(time: string, label: string, otherTime: string, shift: number) {
-  const main = Math.ceil(textWidth(time, `500 13px ${NOTCH_FONT}`, 0.3));
+  const main = measureMainClock(time);
   let secondary =
     SECONDARY_CHROME +
     Math.min(textWidth(label.toUpperCase(), `600 9px ${NOTCH_FONT}`, 0.4), LABEL_MAX_WIDTH) +

@@ -65,14 +65,24 @@ import {
   dayShiftLabel,
   formatZoneTime,
   measureDualClock,
+  measureMainClock,
+  measureNotchDate,
   zoneDayShift,
   zoneDifferenceLabel,
   zoneOffsetLabel,
 } from "./dualClock";
 import {
+  formatNotchDate,
+  parseNotchDateFormat,
+  parseNotchDatePosition,
+  type NotchDateFormat,
+  type NotchDatePosition,
+} from "./notchDate";
+import {
   Mic2,
   Cpu,
   MemoryStick,
+  Activity,
   HardDrive,
   ArrowUpDown,
   Wifi,
@@ -669,6 +679,7 @@ function App() {
   const [diskSpace, setDiskSpace] = useState(0);
   const [netUpSpeed, setNetUpSpeed] = useState(0);
   const [netDownSpeed, setNetDownSpeed] = useState(0);
+  const [pingMs, setPingMs] = useState<number | null>(null);
   const [netWidgetMode, setNetWidgetMode] = useState<"speed" | "status">(() => localStorage.getItem("fern-net-widget-mode") === "status" ? "status" : "speed");
   const [statusWidgets, setStatusWidgets] = useState<WidgetConfig>({ left: ["weather"], right: ["battery"] });
 
@@ -730,6 +741,8 @@ function App() {
   });
   const [dndActive, setDndActive] = useState(false);
   const [dockEnabled, setDockEnabled] = useState(() => localStorage.getItem("fern-dock-enabled") !== "false");
+  const [notchEnabled, setNotchEnabled] = useState(() => localStorage.getItem("fern-notch-enabled") !== "false");
+  const [notchFloatGap, setNotchFloatGap] = useState(() => Number(localStorage.getItem("fern-notch-float-gap")) || 0);
   const [isNotchHovered, setIsNotchHovered] = useState(false);
   const [agentActivity, setAgentActivity] = useState<AgentActivity | null>(null);
   const [agentPicks, setAgentPicks] = useState<{ id: number; choices: number[] }>({ id: 0, choices: [] });
@@ -760,7 +773,8 @@ function App() {
   const connectedDevices = useConnectedDevices(windowLabel === "main");
 
   const isAnyInteraction = isHovered || isNotchHovered || isEdgeHovered;
-  const isHidden = (notchMode !== 'fixed' && isFullscreen) ||
+  const isHidden = !isVisible ||
+    (notchMode !== 'fixed' && isFullscreen) ||
     (!startupAnimating && !tourActive && !deviceAlertOnScreen && !(agentActivity && isNotchWindow) && (
       (notchMode === 'smart' && isOverlapped && interactionState === 'none') ||
       (notchMode === 'peek' && interactionState === 'none' && !eventPeek)
@@ -777,22 +791,37 @@ function App() {
   }, [isAnyInteraction]);
 
   useEffect(() => {
-    if (isNotchWindow) {
-      invoke('set_notch_hovered', { hovered: isNotchHovered }).catch(() => { });
+    if (!notchEnabled) {
+      setIsHovered(false);
+      setIsNotchHovered(false);
     }
-  }, [isNotchHovered, isNotchWindow]);
+  }, [notchEnabled]);
 
-  // Tell the backend when the notch is hidden (smart/peek) so it stays click-through.
   useEffect(() => {
     if (isNotchWindow) {
-      invoke('set_notch_hidden', { hidden: !isVisible || isHidden }).catch(() => { });
+      invoke('set_notch_hovered', { hovered: notchEnabled && isNotchHovered }).catch(() => { });
     }
-  }, [isVisible, isHidden, isNotchWindow]);
+  }, [isNotchHovered, notchEnabled, isNotchWindow]);
+
+  // Tell the backend when the notch is hidden (smart/peek) or disabled so it stays click-through.
+  useEffect(() => {
+    if (isNotchWindow) {
+      invoke('set_notch_hidden', { hidden: !isVisible || isHidden || !notchEnabled }).catch(() => { });
+    }
+  }, [isVisible, isHidden, notchEnabled, isNotchWindow]);
 
   useEffect(() => {
     let lastSent = "";
     const updateRect = () => {
-      if (fernRef.current && isNotchWindow) {
+      if (!isNotchWindow) return;
+      if (!notchEnabled) {
+        const key = "0,0,0,0";
+        if (key === lastSent) return;
+        lastSent = key;
+        invoke('update_notch_rect', { rect: { x: 0, y: 0, width: 0, height: 0 } }).catch(() => { lastSent = ""; });
+        return;
+      }
+      if (fernRef.current) {
         const rect = fernRef.current.getBoundingClientRect();
         const card = tourActive ? document.querySelector('.tour-bar')?.getBoundingClientRect() : undefined;
         const left = card ? Math.min(rect.left, card.left) : rect.left;
@@ -834,7 +863,7 @@ function App() {
       clearInterval(poll);
       cancelAnimationFrame(rafId);
     };
-  }, [isExpanded, isHidden, windowLabel, scale, tourActive, tourStep, fernMode, ccView]);
+  }, [isExpanded, isHidden, notchEnabled, notchFloatGap, windowLabel, scale, tourActive, tourStep, fernMode, ccView]);
 
   useEffect(() => {
     if (!windowLabel) return;
@@ -922,6 +951,10 @@ function App() {
   const [settingsDualClockEnabled, setSettingsDualClockEnabled] = useState(() => localStorage.getItem("fern-dual-clock-enabled") === "true");
   const [dualClockZone, setDualClockZone] = useState(() => localStorage.getItem("fern-dual-clock-zone") || DEFAULT_DUAL_CLOCK_ZONE);
   const [dualClockLabel, setDualClockLabel] = useState(() => localStorage.getItem("fern-dual-clock-label") || DEFAULT_DUAL_CLOCK_ZONE);
+  const [settingsDateEnabled, setSettingsDateEnabled] = useState(() => localStorage.getItem("fern-notch-date-enabled") === "true");
+  const [dateFormat, setDateFormat] = useState<NotchDateFormat>(() => parseNotchDateFormat(localStorage.getItem("fern-notch-date-format")));
+  const [datePosition, setDatePosition] = useState<NotchDatePosition>(() => parseNotchDatePosition(localStorage.getItem("fern-notch-date-position")));
+  const [dateText, setDateText] = useState("");
   const productivityEnabled = settingsCalendarEnabled || showClockColumn;
   const [settingsMusicModeEnabled, setSettingsMusicModeEnabled] = useState(() => localStorage.getItem("fern-music-mode-enabled") !== "false");
   const [settingsMusicCompactNotch, setSettingsMusicCompactNotch] = useState(() => localStorage.getItem("fern-music-compact-notch") !== "false");
@@ -1150,6 +1183,9 @@ function App() {
       setSettingsDualClockEnabled(getVal("fern-dual-clock-enabled", "false") === "true");
       setDualClockZone(getVal("fern-dual-clock-zone") || DEFAULT_DUAL_CLOCK_ZONE);
       setDualClockLabel(getVal("fern-dual-clock-label") || DEFAULT_DUAL_CLOCK_ZONE);
+      setSettingsDateEnabled(getVal("fern-notch-date-enabled", "false") === "true");
+      setDateFormat(parseNotchDateFormat(getVal("fern-notch-date-format")));
+      setDatePosition(parseNotchDatePosition(getVal("fern-notch-date-position")));
       setSettingsMusicModeEnabled(getVal("fern-music-mode-enabled", "true") !== "false");
       setSettingsMusicCompactNotch(getVal("fern-music-compact-notch", "true") !== "false");
       const viz = getVal("fern-media-visualizer-enabled") ?? getVal("fern-visualizer-enabled", "true");
@@ -1159,6 +1195,8 @@ function App() {
       setSettingsArtworkTheme(getVal("fern-media-artwork-theme", "true") !== "false");
       setSettingsCompactGlowEnabled(getVal("fern-media-compact-glow-enabled", "true") !== "false");
       setSettingsCornersEnabled(getVal("fern-corners-enabled", "false") === "true");
+      setNotchEnabled(getVal("fern-notch-enabled", "true") !== "false");
+      setNotchFloatGap(Number(getVal("fern-notch-float-gap", "0")) || 0);
       setTimeFormat24h(getVal("fern-time-format-24h") === "true");
       setSettingsLegacyMode(getVal("fern-legacy-mode") === "true");
       const scrollVolume = getVal("fern-notch-scroll-volume") === "true";
@@ -1335,6 +1373,9 @@ function App() {
       "fern-dual-clock-enabled": setSettingsDualClockEnabled,
       "fern-dual-clock-zone": (value) => setDualClockZone(String(value)),
       "fern-dual-clock-label": (value) => setDualClockLabel(String(value)),
+      "fern-notch-date-enabled": (value) => setSettingsDateEnabled(value === true || value === "true"),
+      "fern-notch-date-format": (value) => setDateFormat(parseNotchDateFormat(value)),
+      "fern-notch-date-position": (value) => setDatePosition(parseNotchDatePosition(value)),
       "fern-music-mode-enabled": setSettingsMusicModeEnabled,
       "fern-music-compact-notch": setSettingsMusicCompactNotch,
       "fern-notch-scroll-volume": setSettingsScrollVolume,
@@ -1360,6 +1401,8 @@ function App() {
       "fern-scale": setScale,
       "fern-low-battery-threshold": setLowBatteryThreshold,
       "fern-dock-enabled": setDockEnabled,
+      "fern-notch-enabled": (v) => setNotchEnabled(String(v) !== "false"),
+      "fern-notch-float-gap": (v) => setNotchFloatGap(Number(v) || 0),
       "fern-dock-mode": refreshDockMode,
       "fern-dock-mode-by-monitor": refreshDockMode,
       "fern-dock-monitor-mode": refreshDockMode,
@@ -1757,6 +1800,23 @@ function App() {
     };
   }, [timeFormat24h, settingsDualClockEnabled, settingsLegacyMode, dualClockZone]);
 
+  // Date beside the time. Re-read every 30s so it rolls over at midnight.
+  useEffect(() => {
+    if (!settingsDateEnabled) { setDateText(""); return; }
+    const update = () => {
+      if (document.hidden) return;
+      setDateText(formatNotchDate(new Date(), dateFormat));
+    };
+    update();
+    const interval = setInterval(update, 30000);
+    const onVis = () => { if (!document.hidden) update(); };
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener("visibilitychange", onVis);
+    };
+  }, [settingsDateEnabled, dateFormat]);
+
   // Toggle compact timer view every 5 seconds if running
   useEffect(() => {
     if ((isTimerRunning || stopwatch.running) && fernMode !== 'calendar') {
@@ -1903,6 +1963,23 @@ function App() {
     const interval = setInterval(fetchMetrics, 3000);
     return () => clearInterval(interval);
   }, []);
+
+  const pingActive = statusWidgets.left.includes("ping") || statusWidgets.right.includes("ping");
+  useEffect(() => {
+    if (!pingActive) { setPingMs(null); return; }
+    const measure = () => {
+      if (document.hidden) return;
+      invoke<number | null>("get_ping_ms").then(setPingMs).catch(() => setPingMs(null));
+    };
+    measure();
+    const interval = setInterval(measure, 5000);
+    const onVis = () => { if (!document.hidden) measure(); };
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener("visibilitychange", onVis);
+    };
+  }, [pingActive]);
 
   // Listen for brightness changes
   useEffect(() => {
@@ -2260,6 +2337,13 @@ function App() {
             <span className="label">{diskSpace}GB</span>
           </div>
         );
+      case "ping":
+        return (
+          <div className="passive-feature" key="ping" {...tip(t("widgets.ping.tip"))}>
+            <Activity size={12} strokeWidth={2} />
+            <span className="label">{pingMs === null ? "—" : `${pingMs}ms`}</span>
+          </div>
+        );
       case "net": {
         if (netWidgetMode === "status") {
           const online = wifiConnected || !!lanStatus?.connected;
@@ -2342,7 +2426,18 @@ function App() {
     () => (showDualClock ? measureDualClock(dualClock.main, dualClockLabel, dualClock.dual, dualClock.shift) : null),
     [showDualClock, dualClock, dualClockLabel]
   );
-  const dualClockExtra = dualClockSize?.extra ?? 0;
+  const showDate = settingsDateEnabled && !settingsLegacyMode && dateText !== "";
+  const dateWidth = useMemo(() => (showDate ? measureNotchDate(dateText) : 0), [showDate, dateText]);
+  const mainClockSampleWidth = useMemo(
+    () => (showDate && !showDualClock ? measureMainClock(formatLocalClock(new Date(2026, 0, 1, 22, 58), !timeFormat24h)) : 0),
+    [showDate, showDualClock, timeFormat24h]
+  );
+  // Room the dual clock and the date take beside the time.
+  const dualClockExtra = showDualClock
+    ? (dualClockSize?.extra ?? 0) + dateWidth
+    : showDate
+      ? Math.max(0, mainClockSampleWidth + dateWidth - 60)
+      : 0;
   const dualClockTooltip = useMemo(
     () => (showDualClock ? [dualClockLabel, zoneOffsetLabel(dualClockZone), zoneDifferenceLabel(dualClockZone)].filter(Boolean).join(" · ") : ""),
     // dualClock.dual changes every minute, which picks up DST changes in either zone.
@@ -2504,6 +2599,9 @@ function App() {
 
   const pillWidth = !isReady ? 34 : ((isExpanded || fernMode === "device") && !isHidden ? getDynamicWidth() : (isImpacted ? 39.1 : 30.6));
   const pillHeight = !isReady ? 34 : getDynamicHeight();
+  const notchFloating = notchFloatGap > 0;
+  const notchFlare = isImpacted && !notchFloating ? 13 : 0;
+  const notchTopRadius = isImpacted && !notchFloating ? 0 : 18;
 
 
 
@@ -2512,7 +2610,7 @@ function App() {
     <div className="screen" style={{ overflow: 'hidden' }}>
       {/* Screen Corners (Top) */}
       <AnimatePresence>
-        {isVisible && settingsCornersEnabled && (
+        {isVisible && settingsCornersEnabled && notchEnabled && (
           <>
             <motion.div
               className="screen-corner top-left"
@@ -2530,23 +2628,23 @@ function App() {
         )}
       </AnimatePresence>
 
-      <div style={{ zoom: scale, width: '100%', display: 'flex', justifyContent: 'center' }}>
+      <div style={{ zoom: scale, width: '100%', display: notchEnabled ? 'flex' : 'none', justifyContent: 'center' }}>
         <motion.div
           ref={fernRef}
-          className={`fern ${isHovered || fernMode === 'agent' ? 'expanded' : ''} ${isImpacted ? 'is-impacted' : ''}`}
+          className={`fern ${isHovered || fernMode === 'agent' ? 'expanded' : ''} ${isImpacted ? 'is-impacted' : ''} ${notchFloating ? 'notch-floating' : ''}`}
           onMouseEnter={() => setIsNotchHovered(true)}
         onMouseLeave={() => setIsNotchHovered(false)}
         onWheel={handleWheel}
         initial={{ y: 250, width: 30.6, height: 44.2, borderTopLeftRadius: 18, borderTopRightRadius: 18, borderBottomLeftRadius: 18, borderBottomRightRadius: 18, scaleX: 1, scaleY: 1, opacity: 0 }}
         animate={{
-          y: !isReady ? 250 : (isHidden ? -100 : 0),
+          y: !isReady ? 250 : (isHidden ? -(100 + notchFloatGap) : 0),
           width: pillWidth,
           height: pillHeight,
-          opacity: isReady ? 1 : 0,
+          opacity: isReady && isVisible ? 1 : 0,
           scaleX: 1,
           scaleY: 1,
-          borderTopLeftRadius: isImpacted ? 0 : 18,
-          borderTopRightRadius: isImpacted ? 0 : 18,
+          borderTopLeftRadius: notchTopRadius,
+          borderTopRightRadius: notchTopRadius,
           borderBottomLeftRadius: isCalendarMode ? 28 : 18,
           borderBottomRightRadius: isCalendarMode ? 28 : 18,
           filter: "blur(0px)",
@@ -2592,7 +2690,7 @@ function App() {
             setFernMode(targetMode);
           }
         }}
-        style={{ originY: 0, ...musicTint }}
+        style={{ originY: 0, marginTop: notchFloatGap, ...musicTint }}
         transition={{
           width: { type: "spring", stiffness: 400, damping: 31 },
           height: { type: "spring", stiffness: 450, damping: 29 },
@@ -2608,7 +2706,7 @@ function App() {
         {/* Privacy Aura (SVG halo tracing notch flares and bottom perimeter) */}
         {privacyAuraEnabled && (micActive || camActive) && (
           <PrivacyAura
-            flare={isImpacted ? 13 : 0}
+            flare={notchFlare}
             radius={isCalendarMode ? 28 : 18}
             type={camActive && micActive ? "both" : camActive ? "cam" : "mic"}
           />
@@ -2933,11 +3031,29 @@ function App() {
 
                             {/* Center - Time (always visible) */}
                             <div className="time-center">
+                              {showDate && datePosition === "left" && (
+                                <span className="time-date left" onClick={toggleCalendarMode}>{dateText}</span>
+                              )}
                               <div
-                                className="time-flip-container"
+                                className={`time-flip-container${showDate && !batteryLow ? ' tight' : ''}`}
                                 onClick={toggleCalendarMode}
-                                style={batteryLow ? { minWidth: Math.max(96, Math.ceil(t("battery.low").length * 10), dualClockSize?.main ?? 0) } : dualClockSize ? { minWidth: dualClockSize.main } : undefined}
+                                style={
+                                  batteryLow
+                                    ? { minWidth: Math.max(96, Math.ceil(t("battery.low").length * 10), dualClockSize?.main ?? 0) }
+                                    : !showDate && dualClockSize
+                                      ? { minWidth: dualClockSize.main }
+                                      : undefined
+                                }
                               >
+                                {showDate && !batteryLow && (
+                                  <span className="time-sizer" aria-hidden="true">
+                                    {isCompactTimerVisible || isTimerFinished
+                                      ? (isTimerRunning || isTimerFinished
+                                          ? formatTimerTime(timerSeconds)
+                                          : <StopwatchReadout base={stopwatch.base} startedAt={stopwatch.startedAt} precise={false} />)
+                                      : <TimeDisplay hour12={!timeFormat24h} />}
+                                  </span>
+                                )}
                                 <AnimatePresence initial={false}>
                                   {isCompactTimerVisible || isTimerFinished ? (
                                     <motion.span
@@ -2983,6 +3099,9 @@ function App() {
                                   <span className="time-secondary-value">{dualClock.dual}</span>
                                   {dualClock.shift !== 0 && <span className="time-secondary-shift">{dayShiftLabel(dualClock.shift)}</span>}
                                 </div>
+                              )}
+                              {showDate && datePosition === "right" && (
+                                <span className="time-date right" onClick={toggleCalendarMode}>{dateText}</span>
                               )}
                             </div>
 
@@ -3507,7 +3626,7 @@ function App() {
           )}
         </AnimatePresence>
 
-        <SurfaceShape edge="top" flare={isImpacted ? 13 : 0} radius={isCalendarMode ? 28 : 18} edgeRadius={18}>
+        <SurfaceShape edge="top" flare={notchFlare} radius={isCalendarMode ? 28 : 18} edgeRadius={18}>
           <AnimatePresence>
             {isMusicMode && settingsAmbienceEnabled && albumArtUrl && isHovered && !isCalendarMode && (
               <motion.div
@@ -3537,8 +3656,8 @@ function App() {
         {showTimerProgressBar && (
           <NotchProgressBorder
             progress={timerProgressPercent}
-            topRadius={isImpacted ? 0 : 18}
-            flare={isImpacted ? 13 : 0}
+            topRadius={notchTopRadius}
+            flare={notchFlare}
             bottomRadius={isCalendarMode ? 28 : 18}
             paused={!isTimerRunning}
             finished={isTimerFinished}

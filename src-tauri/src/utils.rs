@@ -889,7 +889,59 @@ fn encode_thumbnail(mut pixels: Vec<u8>, width: u32, height: u32, max_width: u32
 }
 
 /// Captures an HWND to a base64-encoded PNG thumbnail, scaling it down if it exceeds max_width x max_height.
+/// The GDI/screen copy goes first; a Windows.Graphics.Capture session per frame leaks GPU memory,
+/// so it only runs as a strictly rate-limited fallback when GDI capture fails.
 pub fn capture_hwnd_to_base64(hwnd: HWND, max_width: u32, max_height: u32) -> Option<String> {
+    capture_hwnd_gdi(hwnd, max_width, max_height).or_else(|| {
+        if !wgc_allowed(hwnd) {
+            return None;
+        }
+        crate::diagnostics::log("capture: window copy failed, using Graphics Capture");
+        let (pixels, w, h) = crate::capture::capture_window_bgra(hwnd)?;
+        if !mostly_painted(&pixels) {
+            return None;
+        }
+        encode_thumbnail(pixels, w, h, max_width, max_height)
+    })
+}
+
+fn wgc_allowed_with_state(
+    total: &std::sync::atomic::AtomicU32,
+    map: &mut std::collections::HashMap<isize, i64>,
+    hwnd_key: isize,
+    now: i64,
+) -> bool {
+    use std::sync::atomic::Ordering;
+    if total.load(Ordering::Relaxed) >= 12
+        || map.get(&hwnd_key).is_some_and(|t| now - t < 600_000)
+    {
+        return false;
+    }
+    map.insert(hwnd_key, now);
+    total.fetch_add(1, Ordering::Relaxed);
+    true
+}
+
+/// Each Graphics Capture session leaks about 4 MB of GPU memory, so it is limited per window and in total.
+fn wgc_allowed(hwnd: HWND) -> bool {
+    use std::collections::HashMap;
+    use std::sync::atomic::AtomicU32;
+    use std::sync::Mutex;
+    static TOTAL: AtomicU32 = AtomicU32::new(0);
+    static LAST: Mutex<Option<HashMap<isize, i64>>> = Mutex::new(None);
+    let now = get_now_ms();
+    let Ok(mut guard) = LAST.lock() else { return false };
+    let map = guard.get_or_insert_with(Default::default);
+    wgc_allowed_with_state(&TOTAL, map, hwnd.0 as isize, now)
+}
+
+fn is_chrome_window(hwnd: HWND) -> bool {
+    let mut buf = [0u16; 64];
+    let len = unsafe { windows::Win32::UI::WindowsAndMessaging::GetClassNameW(hwnd, &mut buf) }.max(0) as usize;
+    String::from_utf16_lossy(&buf[..len]).starts_with("Chrome_WidgetWin")
+}
+
+fn capture_hwnd_gdi(hwnd: HWND, max_width: u32, max_height: u32) -> Option<String> {
     unsafe {
         use windows::Win32::Foundation::RECT;
         use windows::Win32::Graphics::Gdi::{
@@ -902,14 +954,6 @@ pub fn capture_hwnd_to_base64(hwnd: HWND, max_width: u32, max_height: u32) -> Op
         extern "system" { pub fn PrintWindow(hwnd: HWND, hdcBlt: HDC, nFlags: u32) -> i32; }
 
         if !IsWindow(Some(hwnd)).as_bool() { return None; }
-
-        if let Some((pixels, w, h)) = crate::capture::capture_window_bgra(hwnd) {
-            if mostly_painted(&pixels) {
-                if let Some(png) = encode_thumbnail(pixels, w, h, max_width, max_height) {
-                    return Some(png);
-                }
-            }
-        }
 
         let mut rect = RECT::default();
         let _ = DwmGetWindowAttribute(hwnd, DWMWA_EXTENDED_FRAME_BOUNDS, &mut rect as *mut _ as *mut _, std::mem::size_of::<RECT>() as u32);
@@ -929,7 +973,8 @@ pub fn capture_hwnd_to_base64(hwnd: HWND, max_width: u32, max_height: u32) -> Op
         let hdc_mem = CreateCompatibleDC(Some(hdc_screen));
         let hbm_mem = CreateCompatibleBitmap(hdc_screen, width, height);
         let h_old = SelectObject(hdc_mem, hbm_mem.into());
-        let printed = PrintWindow(hwnd, hdc_mem, 2) != 0;
+        // PrintWindow can stall/break Chrome's GPU compositor and leave the window blank, so copy from the screen instead.
+        let printed = !is_chrome_window(hwnd) && PrintWindow(hwnd, hdc_mem, 2) != 0;
 
         let mut bmi = BITMAPINFO {
             bmiHeader: BITMAPINFOHEADER {
@@ -1049,6 +1094,25 @@ mod capture_tests {
     fn blank_ignores_alpha() {
         assert!(is_blank_bgrx(&[0, 0, 0, 255, 0, 0, 0, 0]));
         assert!(!is_blank_bgrx(&[0, 0, 0, 255, 0, 1, 0, 0]));
+    }
+
+    #[test]
+    fn wgc_allowed_enforces_per_window_cooldown_and_total_cap() {
+        use std::collections::HashMap;
+        use std::sync::atomic::AtomicU32;
+
+        let total = AtomicU32::new(0);
+        let mut map = HashMap::new();
+
+        assert!(super::wgc_allowed_with_state(&total, &mut map, 100, 1_000_000));
+        assert!(!super::wgc_allowed_with_state(&total, &mut map, 100, 1_599_999));
+        assert!(super::wgc_allowed_with_state(&total, &mut map, 100, 1_600_000));
+
+        // 2 calls already made; allow 10 more distinct windows to reach total cap of 12.
+        for i in 1..=10 {
+            assert!(super::wgc_allowed_with_state(&total, &mut map, 200 + i, 2_000_000));
+        }
+        assert!(!super::wgc_allowed_with_state(&total, &mut map, 999, 3_000_000));
     }
 }
 

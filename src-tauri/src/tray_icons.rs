@@ -97,6 +97,22 @@ fn invoke_element(el: &IUIAutomationElement) -> bool {
     }
 }
 
+fn is_show_hidden_icons_button(el: &IUIAutomationElement) -> bool {
+    unsafe {
+        let automation_id = el.CurrentAutomationId().map(|s| s.to_string()).unwrap_or_default();
+        if automation_id == "NotificationChevron" || automation_id == "OverflowButton" {
+            return true;
+        }
+        let name = el.CurrentName().map(|s| s.to_string()).unwrap_or_default();
+        let lower: String = name.chars().flat_map(|c| c.to_lowercase()).collect();
+        if lower.contains("hidden") || lower.contains("gizli") || lower.contains("chevron") || lower.contains("overflow") {
+            return true;
+        }
+        automation_id == "SystemTrayIcon"
+            && (lower.contains("simgeler") || lower.contains("icons") || lower.contains("bildirim") || lower.contains("notification"))
+    }
+}
+
 fn find_show_hidden_icons_button(automation: &IUIAutomation, tray_hwnd: HWND) -> Option<IUIAutomationElement> {
     unsafe {
         let mut candidates = Vec::new();
@@ -132,16 +148,7 @@ fn find_show_hidden_icons_button(automation: &IUIAutomation, tray_hwnd: HWND) ->
                     if let Ok(all) = root.FindAll(TreeScope_Descendants, &condition) {
                         for i in 0..all.Length().unwrap_or(0) {
                             if let Ok(el) = all.GetElement(i) {
-                                let automation_id = el.CurrentAutomationId().map(|s| s.to_string()).unwrap_or_default();
-                                if automation_id == "NotificationChevron" || automation_id == "OverflowButton" {
-                                    return Some(el);
-                                }
-                                let name = el.CurrentName().map(|s| s.to_string()).unwrap_or_default();
-                                let lower: String = name.chars().flat_map(|c| c.to_lowercase()).collect();
-                                if lower.contains("hidden") || lower.contains("gizli") || lower.contains("chevron") || lower.contains("overflow") {
-                                    return Some(el);
-                                }
-                                if automation_id == "SystemTrayIcon" && (lower.contains("simgeler") || lower.contains("icons") || lower.contains("bildirim") || lower.contains("notification")) {
+                                if is_show_hidden_icons_button(&el) {
                                     return Some(el);
                                 }
                             }
@@ -251,6 +258,21 @@ fn leave_taskbar_focus(flyout: HWND, open_count: u64) {
     }
 }
 
+fn give_focus_back() {
+    if !taskbar_has_focus() {
+        return;
+    }
+    let mut previous = HWND(PREVIOUS_FOREGROUND.load(Ordering::SeqCst) as *mut _);
+    if previous.0.is_null() || !unsafe { IsWindow(Some(previous)) }.as_bool() {
+        previous = unsafe { GetShellWindow() };
+    }
+    let restored = restore_foreground(previous);
+    crate::diagnostics::log(&format!(
+        "tray: gave focus back to {} after a failed open: {restored}",
+        class_name(previous)
+    ));
+}
+
 fn open_with_shortcut(anchor: Option<(i32, i32)>) -> bool {
     use windows::Win32::UI::Input::KeyboardAndMouse::{VK_B, VK_LWIN, VK_RETURN};
     send_keys(&[(VK_LWIN, false), (VK_B, false), (VK_B, true), (VK_LWIN, true)]);
@@ -268,38 +290,88 @@ fn open_with_shortcut(anchor: Option<(i32, i32)>) -> bool {
         return false;
     }
 
-    let (stop_tx, stop_rx) = std::sync::mpsc::channel();
-    let placer = std::thread::spawn(move || {
-        for _ in 0..200 {
-            if stop_rx.try_recv().is_ok() {
+    // Right after Explorer starts, Win+B can leave keyboard focus on the Start button
+    // instead of the hidden icons button, and Return would then open Start.
+    let Ok(auto) = automation() else {
+        crate::diagnostics::log("tray: UI Automation unavailable, not sending Return");
+        give_focus_back();
+        return false;
+    };
+    let mut focused_desc = String::from("nothing");
+    let mut on_button = false;
+    for _ in 0..30 {
+        if let Ok(el) = unsafe { auto.GetFocusedElement() } {
+            if is_show_hidden_icons_button(&el) {
+                on_button = true;
                 break;
             }
+            let id = unsafe { el.CurrentAutomationId() }.map(|s| s.to_string()).unwrap_or_default();
+            let name = unsafe { el.CurrentName() }.map(|s| s.to_string()).unwrap_or_default();
+            focused_desc = format!("{id}|{name}");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+
+    let spawn_placer = || {
+        let (stop_tx, stop_rx) = std::sync::mpsc::channel();
+        let placer = std::thread::spawn(move || {
+            for _ in 0..200 {
+                if stop_rx.try_recv().is_ok() {
+                    break;
+                }
+                if let Some(flyout) = find_overflow_window() {
+                    if unsafe { IsWindowVisible(flyout) }.as_bool() {
+                        place_flyout(flyout, anchor);
+                        break;
+                    }
+                }
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+        });
+        (stop_tx, placer)
+    };
+    let wait_flyout = || {
+        for _ in 0..100 {
             if let Some(flyout) = find_overflow_window() {
                 if unsafe { IsWindowVisible(flyout) }.as_bool() {
                     place_flyout(flyout, anchor);
-                    break;
+                    return true;
                 }
             }
-            std::thread::sleep(std::time::Duration::from_millis(1));
+            std::thread::sleep(std::time::Duration::from_millis(2));
         }
-    });
+        false
+    };
 
-    send_keys(&[(VK_RETURN, false), (VK_RETURN, true)]);
-
-    let mut opened = false;
-    for _ in 0..100 {
-        if let Some(flyout) = find_overflow_window() {
-            if unsafe { IsWindowVisible(flyout) }.as_bool() {
-                place_flyout(flyout, anchor);
-                opened = true;
-                break;
-            }
+    if on_button {
+        let (stop_tx, placer) = spawn_placer();
+        send_keys(&[(VK_RETURN, false), (VK_RETURN, true)]);
+        let opened = wait_flyout();
+        let _ = stop_tx.send(());
+        let _ = placer.join();
+        if !opened {
+            give_focus_back();
         }
-        std::thread::sleep(std::time::Duration::from_millis(2));
+        return opened;
     }
-    let _ = stop_tx.send(());
-    let _ = placer.join();
-    opened
+
+    crate::diagnostics::log(&format!(
+        "tray: Win+B focused {focused_desc}, not the hidden icons button; invoking it instead of sending Return"
+    ));
+    let button = find_window(c"Shell_TrayWnd")
+        .ok()
+        .and_then(|tray| find_show_hidden_icons_button(&auto, tray));
+    if let Some(button) = button {
+        let (stop_tx, placer) = spawn_placer();
+        let opened = invoke_element(&button) && wait_flyout();
+        let _ = stop_tx.send(());
+        let _ = placer.join();
+        if opened {
+            return true;
+        }
+    }
+    give_focus_back();
+    false
 }
 
 fn place_flyout(flyout: HWND, anchor: Option<(i32, i32)>) {

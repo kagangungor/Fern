@@ -135,11 +135,19 @@ export const SETTINGS_SEARCH_INDEX: SearchableSetting[] = [
 
   // Notch Tab
   {
+    id: "notch-enabled",
+    tab: "notch",
+    sectionId: "notch-display",
+    titleKey: "notch.enabled",
+    descKey: "notch.enabled.desc",
+    keywords: ["notch", "çentik", "enable", "show", "göster", "kapat", "hide", "disable"],
+  },
+  {
     id: "notch-mode",
     tab: "notch",
     sectionId: "notch-display",
-    titleKey: "notch.mode",
-    descKey: "notch.mode.desc",
+    titleKey: "notch.behavior",
+    descKey: "notch.behavior.desc",
     keywords: ["notch", "çentik", "ada", "island", "smart", "fixed", "peek", "otomatik gizle"],
   },
   {
@@ -149,6 +157,14 @@ export const SETTINGS_SEARCH_INDEX: SearchableSetting[] = [
     titleKey: "edgeArea.label",
     descKey: "edgeArea.notch.desc",
     keywords: ["edge", "hover", "narrow", "full", "corner", "kenar", "tetikleme", "yakını", "alan"],
+  },
+  {
+    id: "notch-float",
+    tab: "notch",
+    sectionId: "notch-display",
+    titleKey: "notch.float",
+    descKey: "notch.float.desc",
+    keywords: ["floating", "float", "gap", "yüzen", "boşluk", "ada", "island", "kenar"],
   },
   {
     id: "notch-panel-cc",
@@ -194,8 +210,8 @@ export const SETTINGS_SEARCH_INDEX: SearchableSetting[] = [
     id: "notch-music",
     tab: "notch",
     sectionId: "notch-music",
-    titleKey: "notch.music",
-    descKey: "notch.music.desc",
+    titleKey: "notch.musicMode",
+    descKey: "notch.musicMode.desc",
     keywords: ["music", "müzik", "spotify", "şarkı", "album", "parıltı", "glow", "ambience"],
   },
   {
@@ -203,8 +219,32 @@ export const SETTINGS_SEARCH_INDEX: SearchableSetting[] = [
     tab: "notch",
     sectionId: "notch-widgets",
     titleKey: "notch.weather",
-    descKey: "notch.weather.desc",
+    descKey: "notch.weather.auto",
     keywords: ["weather", "hava", "durumu", "sıcaklık", "şehir", "city"],
+  },
+  {
+    id: "notch-date",
+    tab: "notch",
+    sectionId: "notch-calendar",
+    titleKey: "notch.date",
+    descKey: "notch.date.desc",
+    keywords: ["date", "tarih", "clock", "saat", "gün", "day", "weekday"],
+  },
+  {
+    id: "notch-date-format",
+    tab: "notch",
+    sectionId: "notch-calendar",
+    titleKey: "notch.dateFormat",
+    descKey: "notch.dateFormat.desc",
+    keywords: ["date", "format", "tarih", "biçim", "weekday", "gün"],
+  },
+  {
+    id: "notch-date-position",
+    tab: "notch",
+    sectionId: "notch-calendar",
+    titleKey: "notch.datePosition",
+    descKey: "notch.datePosition.desc",
+    keywords: ["date", "position", "tarih", "konum", "left", "right", "sol", "sağ"],
   },
   {
     id: "notch-agent",
@@ -220,8 +260,8 @@ export const SETTINGS_SEARCH_INDEX: SearchableSetting[] = [
     id: "dock-mode",
     tab: "dock",
     sectionId: "dock-main",
-    titleKey: "dock.mode",
-    descKey: "dock.mode.desc",
+    titleKey: "dock.behavior",
+    descKey: "dock.behavior.desc",
     keywords: ["dock", "görev çubuğu", "taskbar", "smart", "fixed", "peek", "gizle"],
   },
   {
@@ -231,6 +271,14 @@ export const SETTINGS_SEARCH_INDEX: SearchableSetting[] = [
     titleKey: "edgeArea.label",
     descKey: "edgeArea.dock.desc",
     keywords: ["edge", "hover", "narrow", "full", "corner", "kenar", "tetikleme", "yakını", "alan"],
+  },
+  {
+    id: "dock-hide-on-start",
+    tab: "dock",
+    sectionId: "dock-main",
+    titleKey: "dock.hideOnStart",
+    descKey: "dock.hideOnStart.desc",
+    keywords: ["start", "search", "başlat", "arama", "hide", "gizle", "menü", "menu"],
   },
   {
     id: "dock-preview",
@@ -279,6 +327,14 @@ export const SETTINGS_SEARCH_INDEX: SearchableSetting[] = [
     titleKey: "dock.startIcon",
     descKey: "dock.startIcon.desc",
     keywords: ["start icon", "başlat", "logo", "fern", "windows"],
+  },
+  {
+    id: "dock-float",
+    tab: "dock",
+    sectionId: "dock-style",
+    titleKey: "dock.float",
+    descKey: "dock.float.desc",
+    keywords: ["floating", "float", "gap", "yüzen", "boşluk", "ada", "island", "kenar"],
   },
   {
     id: "dock-menu-items",
