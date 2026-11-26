@@ -190,26 +190,6 @@ bun run tauri dev
 
 ## Roadmap
 
-### Shipped highlights (v1.6.0 – v1.6.1)
-
-#### Dock, Tray & Web Apps
-- [x] **Background Tray & Native Menus** — Tray-only apps in the dock with status dots, click actions, and native Windows 11 tray context menus (`ShowContextMenu`)
-- [x] **Full Web App (PWA) Support** — Installed Chromium/Firefox PWAs in **Add App** with `AppsFolder` names, `.url` icons, and legacy pin repair
-
-#### Notch, Hardware & UX
-- [x] **In-Notch Bluetooth & Rich Battery** — Connect/disconnect, discovery, PIN/confirm pairing, and detailed battery health/time/power-mode tooltips
-- [x] **Shelf Previews, Panel Memory & Odometer Pomodoro** — Image/PDF/Office/Shell previews in Shelf, persistent last active panel, and click-to-edit flip-clock timer
-- [x] **Hardware Brightness Keys** — Intercept `0x216`/`0x217` keys and replace the native Windows OSD with Fern's brightness HUD
-
-#### AI Agents, Settings & Localization
-- [x] **Multi-Agent Support (Claude Code, Codex, OpenCode)** — Dedicated Integrations tab with live status, async hooks, PID owner tracking, and quiet gating
-- [x] **Interactive Feature Preview, Announcements & i18n** — Live Settings previewer, dismissible `announcements.json` notices, and `i18n-check` translation tooling
-
-#### Stability, Shell & v1.6.1 Fixes
-- [x] **Taskbar Watchdog & Elevated/Updater Apps** — `--taskbar-watchdog` crash recovery, parked UAC (`consent.exe`) visibility, and Squirrel app versioning/icon recovery
-- [x] **Windowing, Start Menu & Smart-Hide** — Same-process minimize/multi-monitor restore fixes, Start Menu double-click toggle, Smart Dock overlap geometry, and Fixed-mode click-through
-- [x] **Performance, Glass & Media/Settings Polish (v1.6.1)** — Faster startup (`<TimeDisplay>` isolation, SMTC artwork backoff), clean glass opacity, synced notch flare, active SMTC session priority, `eCapture` mic detection, and Settings maximize/corner/scale fixes
-
 ### Upcoming milestones
 
 #### Core Vision & Productivity
