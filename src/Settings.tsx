@@ -210,6 +210,8 @@ function SettingsApp() {
               toggleNotchEnabled={settings.toggleNotchEnabled}
               notchFloatGap={settings.notchFloatGap}
               changeNotchFloatGap={settings.changeNotchFloatGap}
+              notchRespectWorkArea={settings.notchRespectWorkArea}
+              toggleNotchRespectWorkArea={settings.toggleNotchRespectWorkArea}
               notchMode={settings.notchMode}
               setNotchModeValue={settings.setNotchModeValue}
               monitors={settings.monitors}
@@ -342,6 +344,8 @@ function SettingsApp() {
               toggleDockIconOnly={settings.toggleDockIconOnly}
               dockAdaptive={settings.dockAdaptive}
               toggleDockAdaptive={settings.toggleDockAdaptive}
+              dockReserveSpace={settings.dockReserveSpace}
+              toggleDockReserveSpace={settings.toggleDockReserveSpace}
               dockFloatGap={settings.dockFloatGap}
               changeDockFloatGap={settings.changeDockFloatGap}
               dockHideOnStart={settings.dockHideOnStart}

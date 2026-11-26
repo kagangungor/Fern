@@ -473,7 +473,7 @@ body {
 /* Active application indicator */
 .window-dots {
   position: absolute;
-  bottom: -4px;
+  bottom: -7px;
   display: flex;
   gap: 3px;
 }
@@ -506,7 +506,7 @@ body {
 
 .active-indicator {
   position: absolute;
-  bottom: -4px;
+  bottom: -7px;
   width: 4px;
   height: 4px;
   background: var(--fern-highlight, white);
@@ -1067,12 +1067,19 @@ body {
 
 .preview-item-icon-fallback {
   width: 100%;
-  height: 96px;
+  height: 100%;
   display: flex;
   align-items: center;
   justify-content: center;
   background: rgba(255, 255, 255, 0.05);
   border-radius: 6px;
+  transition: opacity 0.15s ease-out;
+}
+
+.preview-item-icon-fallback.is-live,
+.preview-item-icon-fallback.is-pending {
+  opacity: 0;
+  pointer-events: none;
 }
 
 .dock-icon-wrapper.dock-icon-drag-hover .dock-icon {
@@ -1102,7 +1109,6 @@ body {
 }
 
 .preview-surface.has-live {
-  background: transparent !important;
   box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.14);
 }
 

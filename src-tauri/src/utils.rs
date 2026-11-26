@@ -64,6 +64,7 @@ pub fn resolve_shortcut(path: &str) -> Option<(String, String)> {
 pub static ORIGINAL_TRAY_RECT: std::sync::Mutex<Option<windows::Win32::Foundation::RECT>> = std::sync::Mutex::new(None);
 static ORIGINAL_SEC_TRAY_RECTS: std::sync::Mutex<Vec<(isize, windows::Win32::Foundation::RECT)>> = std::sync::Mutex::new(Vec::new());
 static ORIGINAL_TASKBAR_STATE: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(-1);
+static TASKBAR_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 static TASKBAR_MARKER: OnceLock<PathBuf> = OnceLock::new();
 static TASKBAR_WATCHDOG_STARTED: std::sync::Mutex<bool> = std::sync::Mutex::new(false);
@@ -151,6 +152,39 @@ pub fn run_taskbar_watchdog(parent_pid: u32, marker: PathBuf) {
 
 pub fn taskbar_marker_exists() -> bool {
     TASKBAR_MARKER.get().is_some_and(|p| p.exists())
+}
+
+pub fn needs_taskbar_restore() -> bool {
+    crate::state::NATIVE_TASKBAR_HIDDEN.load(std::sync::atomic::Ordering::SeqCst)
+        || ORIGINAL_TASKBAR_STATE.load(std::sync::atomic::Ordering::SeqCst) != -1
+        || taskbar_marker_exists()
+}
+
+fn resolve_restore_taskbar_state(orig: i32, always_on_top: bool) -> isize {
+    if orig != -1 {
+        orig as isize
+    } else if always_on_top {
+        2
+    } else {
+        1
+    }
+}
+
+fn write_taskbar_marker() {
+    if let Some(p) = TASKBAR_MARKER.get() {
+        let original = ORIGINAL_TASKBAR_STATE.load(std::sync::atomic::Ordering::SeqCst);
+        let primary = ORIGINAL_TRAY_RECT.lock().ok().and_then(|g| *g);
+        let secondaries = ORIGINAL_SEC_TRAY_RECTS.lock().ok().map(|g| g.clone()).unwrap_or_default();
+        let contents = marker_contents(original, std::process::id(), primary, &secondaries);
+        let existing = std::fs::read_to_string(p).ok();
+        if existing.as_deref() != Some(contents.as_str()) {
+            use std::io::Write;
+            let _ = std::fs::File::create(p).and_then(|mut file| {
+                file.write_all(contents.as_bytes())?;
+                file.sync_all()
+            });
+        }
+    }
 }
 
 fn rect_is_on_screen(r: &windows::Win32::Foundation::RECT) -> bool {
@@ -341,85 +375,47 @@ pub fn secondary_taskbars() -> Vec<windows::Win32::Foundation::HWND> {
 }
 
 pub fn set_taskbar_visibility(visible: bool, always_on_top: bool) {
+    use std::sync::atomic::Ordering;
+
+    let _guard = TASKBAR_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+    // Startup retries and display handlers can try to hide the taskbar after shutdown restored it.
+    if !visible && crate::state::SHUTTING_DOWN.load(Ordering::SeqCst) {
+        return;
+    }
+
     if visible {
-        crate::state::NATIVE_TASKBAR_HIDDEN.store(false, std::sync::atomic::Ordering::SeqCst);
+        crate::state::NATIVE_TASKBAR_HIDDEN.store(false, Ordering::SeqCst);
     }
 
     unsafe {
-        use windows::Win32::UI::WindowsAndMessaging::{FindWindowA, ShowWindow, SW_HIDE, SW_SHOW, GetWindowRect};
+        use windows::Win32::UI::WindowsAndMessaging::{FindWindowA, ShowWindow, SW_HIDE, SW_SHOW, GetWindowRect, IsWindowVisible};
         use windows::Win32::UI::Shell::{SHAppBarMessage, APPBARDATA, ABM_SETSTATE, ABM_GETSTATE};
 
-        // Startup retries and display handlers can try to hide the taskbar after shutdown restored it.
-        if !visible && crate::state::SHUTTING_DOWN.load(std::sync::atomic::Ordering::Relaxed) {
-            return;
-        }
-
         let tray_class = windows::core::PCSTR(c"Shell_TrayWnd".as_ptr() as *const u8);
+        let tray_hwnd_opt = FindWindowA(tray_class, windows::core::PCSTR::null())
+            .ok()
+            .filter(|h| !h.0.is_null());
 
-        // Save original taskbar state before modifying
-        if ORIGINAL_TASKBAR_STATE.load(std::sync::atomic::Ordering::Relaxed) == -1 {
-            let mut get_abd = APPBARDATA { cbSize: std::mem::size_of::<APPBARDATA>() as u32, ..Default::default() };
-            let original_state = SHAppBarMessage(ABM_GETSTATE, &mut get_abd);
-            ORIGINAL_TASKBAR_STATE.store(original_state as i32, std::sync::atomic::Ordering::Relaxed);
-        }
-
-        if visible {
-            if let Some(p) = TASKBAR_MARKER.get() {
-                let _ = std::fs::remove_file(p);
+        if !visible {
+            if start_taskbar_watchdog().is_err() {
+                // Never hide the taskbar without the watchdog guarding recovery.
+                return;
             }
-        } else if start_taskbar_watchdog().is_err() {
-            // Never hide the taskbar without the watchdog guarding recovery.
-            return;
-        }
 
-        let state_val = if visible {
-            let orig = ORIGINAL_TASKBAR_STATE.load(std::sync::atomic::Ordering::Relaxed);
-            if orig != -1 {
-                orig as isize
-            } else if always_on_top {
-                2
-            } else {
-                1
+            // Capture original taskbar state only when hiding, before mutating anything.
+            if ORIGINAL_TASKBAR_STATE.load(Ordering::SeqCst) == -1 {
+                let mut get_abd = APPBARDATA {
+                    cbSize: std::mem::size_of::<APPBARDATA>() as u32,
+                    hWnd: tray_hwnd_opt.unwrap_or_default(),
+                    ..Default::default()
+                };
+                let original_state = SHAppBarMessage(ABM_GETSTATE, &mut get_abd);
+                ORIGINAL_TASKBAR_STATE.store(original_state as i32, Ordering::SeqCst);
             }
-        } else {
-            1
-        };
 
-        // 1. Set the taskbar state (Auto-hide or Always-on-top)
-        let mut abd = APPBARDATA { 
-            cbSize: std::mem::size_of::<APPBARDATA>() as u32, 
-            lParam: windows::Win32::Foundation::LPARAM(state_val), 
-            ..Default::default() 
-        };
-        SHAppBarMessage(ABM_SETSTATE, &mut abd);
-
-        // 2. Control visibility of the primary taskbar
-        if let Ok(tray_hwnd) = FindWindowA(tray_class, windows::core::PCSTR::null()) {
-            use windows::Win32::UI::WindowsAndMessaging::{IsWindowVisible, GetWindowLongA, SetWindowLongA, GWL_EXSTYLE, WS_EX_LAYERED, WS_EX_TRANSPARENT, SetLayeredWindowAttributes, LWA_ALPHA};
-            if visible {
-                // Revert any lingering WS_EX_LAYERED / WS_EX_TRANSPARENT left by
-                // open_system_tray if the user quit before the tray thread cleaned up.
-                let ex = GetWindowLongA(tray_hwnd, GWL_EXSTYLE);
-                let cleaned = ex & !(WS_EX_LAYERED.0 as i32) & !(WS_EX_TRANSPARENT.0 as i32);
-                if cleaned != ex {
-                    let _ = SetWindowLongA(tray_hwnd, GWL_EXSTYLE, cleaned);
-                    let _ = SetLayeredWindowAttributes(tray_hwnd, windows::Win32::Foundation::COLORREF(0), 255, LWA_ALPHA);
-                }
-                let saved = ORIGINAL_TRAY_RECT.lock().ok().and_then(|g| *g);
-                restore_tray_position(tray_hwnd, true, saved);
-                let _ = ShowWindow(tray_hwnd, SW_SHOW);
-
-                {
-                    use windows::Win32::Graphics::Gdi::{RedrawWindow, RDW_INVALIDATE, RDW_ALLCHILDREN, RDW_UPDATENOW, RDW_FRAME, RDW_ERASE};
-                    let _ = RedrawWindow(Some(tray_hwnd), None, None, RDW_INVALIDATE | RDW_ALLCHILDREN | RDW_UPDATENOW | RDW_FRAME | RDW_ERASE);
-
-                    use windows::Win32::UI::WindowsAndMessaging::{SendMessageTimeoutA, HWND_BROADCAST, WM_SETTINGCHANGE, SMTO_ABORTIFHUNG};
-                    use windows::Win32::Foundation::{WPARAM, LPARAM};
-                    let param = c"TraySettings";
-                    let mut result: usize = 0;
-                    let _ = SendMessageTimeoutA(HWND_BROADCAST, WM_SETTINGCHANGE, WPARAM(0), LPARAM(param.as_ptr() as isize), SMTO_ABORTIFHUNG, 100, Some(&mut result));
-                }
-            } else {
+            // Capture primary and secondary tray rects before writing the crash-recovery marker.
+            if let Some(tray_hwnd) = tray_hwnd_opt {
                 let has_rect = ORIGINAL_TRAY_RECT.lock().map(|g| g.is_some()).unwrap_or(false);
                 if !has_rect {
                     let mut rect = windows::Win32::Foundation::RECT::default();
@@ -430,26 +426,15 @@ pub fn set_taskbar_visibility(visible: bool, always_on_top: bool) {
                         }
                     }
                 }
-                let _ = ShowWindow(tray_hwnd, SW_HIDE);
-                // Move it far off-screen to prevent any "thin line" artifacts or flashes
-                park_below_monitor(tray_hwnd, true);
             }
-        }
 
-        // 3. Control visibility of secondary taskbars (multi-monitor)
-        for secondary_tray_hwnd in secondary_taskbars() {
-            use windows::Win32::UI::WindowsAndMessaging::{IsWindowVisible};
-            let key = secondary_tray_hwnd.0 as isize;
-            if visible {
-                let saved = ORIGINAL_SEC_TRAY_RECTS.lock().ok().and_then(|g| g.iter().find(|(k, _)| *k == key).map(|(_, r)| *r));
-                restore_tray_position(secondary_tray_hwnd, false, saved);
-                let _ = ShowWindow(secondary_tray_hwnd, SW_SHOW);
-                {
-                    use windows::Win32::Graphics::Gdi::{RedrawWindow, RDW_INVALIDATE, RDW_ALLCHILDREN, RDW_UPDATENOW, RDW_FRAME, RDW_ERASE};
-                    let _ = RedrawWindow(Some(secondary_tray_hwnd), None, None, RDW_INVALIDATE | RDW_ALLCHILDREN | RDW_UPDATENOW | RDW_FRAME | RDW_ERASE);
-                }
-            } else {
-                let has_sec_rect = ORIGINAL_SEC_TRAY_RECTS.lock().map(|g| g.iter().any(|(k, _)| *k == key)).unwrap_or(false);
+            let sec_taskbars = secondary_taskbars();
+            for &secondary_tray_hwnd in &sec_taskbars {
+                let key = secondary_tray_hwnd.0 as isize;
+                let has_sec_rect = ORIGINAL_SEC_TRAY_RECTS
+                    .lock()
+                    .map(|g| g.iter().any(|(k, _)| *k == key))
+                    .unwrap_or(false);
                 if !has_sec_rect {
                     let mut rect = windows::Win32::Foundation::RECT::default();
                     let _ = GetWindowRect(secondary_tray_hwnd, &mut rect);
@@ -459,31 +444,103 @@ pub fn set_taskbar_visibility(visible: bool, always_on_top: bool) {
                         }
                     }
                 }
+            }
+
+            // Persist the marker before hiding the taskbar so no crash window exists.
+            write_taskbar_marker();
+
+            // 1. Set the taskbar state to Auto-hide
+            let mut abd = APPBARDATA {
+                cbSize: std::mem::size_of::<APPBARDATA>() as u32,
+                hWnd: tray_hwnd_opt.unwrap_or_default(),
+                lParam: windows::Win32::Foundation::LPARAM(1),
+                ..Default::default()
+            };
+            SHAppBarMessage(ABM_SETSTATE, &mut abd);
+
+            // 2. Hide primary taskbar
+            if let Some(tray_hwnd) = tray_hwnd_opt {
+                let _ = ShowWindow(tray_hwnd, SW_HIDE);
+                // Move it far off-screen to prevent any "thin line" artifacts or flashes
+                park_below_monitor(tray_hwnd, true);
+            }
+
+            // 3. Hide secondary taskbars (multi-monitor)
+            for secondary_tray_hwnd in sec_taskbars {
                 let _ = ShowWindow(secondary_tray_hwnd, SW_HIDE);
                 park_below_monitor(secondary_tray_hwnd, false);
             }
+            return;
         }
 
-        if !visible {
-            if let Some(p) = TASKBAR_MARKER.get() {
-                let original = ORIGINAL_TASKBAR_STATE.load(std::sync::atomic::Ordering::Relaxed);
-                let primary = ORIGINAL_TRAY_RECT.lock().ok().and_then(|g| *g);
-                let secondaries = ORIGINAL_SEC_TRAY_RECTS.lock().ok().map(|g| g.clone()).unwrap_or_default();
-                let contents = marker_contents(original, std::process::id(), primary, &secondaries);
-                let existing = std::fs::read_to_string(p).ok();
-                let owned_by_other = (existing.is_some() || p.exists())
-                    && existing.as_deref().and_then(parse_marker_pid) != Some(std::process::id());
-                if !owned_by_other && existing.as_deref() != Some(contents.as_str()) {
-                    use std::io::Write;
-                    let _ = std::fs::File::create(p).and_then(|mut file| {
-                        file.write_all(contents.as_bytes())?;
-                        file.sync_all()
-                    });
-                }
+        let state_val = resolve_restore_taskbar_state(
+            ORIGINAL_TASKBAR_STATE.load(Ordering::SeqCst),
+            always_on_top,
+        );
+
+        // 1. Restore the taskbar state (original or fallback)
+        let mut abd = APPBARDATA {
+            cbSize: std::mem::size_of::<APPBARDATA>() as u32,
+            hWnd: tray_hwnd_opt.unwrap_or_default(),
+            lParam: windows::Win32::Foundation::LPARAM(state_val),
+            ..Default::default()
+        };
+        SHAppBarMessage(ABM_SETSTATE, &mut abd);
+
+        // 2. Restore visibility of the primary taskbar
+        if let Some(tray_hwnd) = tray_hwnd_opt {
+            use windows::Win32::UI::WindowsAndMessaging::{GetWindowLongA, SetWindowLongA, GWL_EXSTYLE, WS_EX_LAYERED, WS_EX_TRANSPARENT, SetLayeredWindowAttributes, LWA_ALPHA};
+            // Revert any lingering WS_EX_LAYERED / WS_EX_TRANSPARENT left by
+            // open_system_tray if the user quit before the tray thread cleaned up.
+            let ex = GetWindowLongA(tray_hwnd, GWL_EXSTYLE);
+            let cleaned = ex & !(WS_EX_LAYERED.0 as i32) & !(WS_EX_TRANSPARENT.0 as i32);
+            if cleaned != ex {
+                let _ = SetWindowLongA(tray_hwnd, GWL_EXSTYLE, cleaned);
+                let _ = SetLayeredWindowAttributes(tray_hwnd, windows::Win32::Foundation::COLORREF(0), 255, LWA_ALPHA);
+            }
+            let saved = ORIGINAL_TRAY_RECT.lock().ok().and_then(|g| *g);
+            restore_tray_position(tray_hwnd, true, saved);
+            let _ = ShowWindow(tray_hwnd, SW_SHOW);
+
+            {
+                use windows::Win32::Graphics::Gdi::{RedrawWindow, RDW_INVALIDATE, RDW_ALLCHILDREN, RDW_UPDATENOW, RDW_FRAME, RDW_ERASE};
+                let _ = RedrawWindow(Some(tray_hwnd), None, None, RDW_INVALIDATE | RDW_ALLCHILDREN | RDW_UPDATENOW | RDW_FRAME | RDW_ERASE);
+
+                use windows::Win32::UI::WindowsAndMessaging::{SendMessageTimeoutA, HWND_BROADCAST, WM_SETTINGCHANGE, SMTO_ABORTIFHUNG};
+                use windows::Win32::Foundation::{WPARAM, LPARAM};
+                let param = c"TraySettings";
+                let mut result: usize = 0;
+                let _ = SendMessageTimeoutA(HWND_BROADCAST, WM_SETTINGCHANGE, WPARAM(0), LPARAM(param.as_ptr() as isize), SMTO_ABORTIFHUNG, 100, Some(&mut result));
             }
         }
 
-        if visible {
+        // 3. Restore visibility of secondary taskbars (multi-monitor)
+        for secondary_tray_hwnd in secondary_taskbars() {
+            let key = secondary_tray_hwnd.0 as isize;
+            let saved = ORIGINAL_SEC_TRAY_RECTS.lock().ok().and_then(|g| g.iter().find(|(k, _)| *k == key).map(|(_, r)| *r));
+            restore_tray_position(secondary_tray_hwnd, false, saved);
+            let _ = ShowWindow(secondary_tray_hwnd, SW_SHOW);
+            {
+                use windows::Win32::Graphics::Gdi::{RedrawWindow, RDW_INVALIDATE, RDW_ALLCHILDREN, RDW_UPDATENOW, RDW_FRAME, RDW_ERASE};
+                let _ = RedrawWindow(Some(secondary_tray_hwnd), None, None, RDW_INVALIDATE | RDW_ALLCHILDREN | RDW_UPDATENOW | RDW_FRAME | RDW_ERASE);
+            }
+        }
+
+        // Only remove the marker and reset captured state after Shell_TrayWnd was actually restored.
+        if tray_hwnd_opt.is_some() {
+            if let Some(p) = TASKBAR_MARKER.get() {
+                let _ = std::fs::remove_file(p);
+            }
+            ORIGINAL_TASKBAR_STATE.store(-1, Ordering::SeqCst);
+            if let Ok(mut guard) = ORIGINAL_TRAY_RECT.lock() {
+                *guard = None;
+            }
+            if let Ok(mut guard) = ORIGINAL_SEC_TRAY_RECTS.lock() {
+                guard.clear();
+            }
+        }
+
+        {
             use windows::Win32::UI::WindowsAndMessaging::{SendMessageTimeoutW, HWND_BROADCAST, WM_SETTINGCHANGE, SMTO_ABORTIFHUNG};
             let setting: Vec<u16> = "TraySettings".encode_utf16().chain(std::iter::once(0)).collect();
             let _ = SendMessageTimeoutW(
@@ -742,6 +799,149 @@ pub fn get_now_ms() -> i64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as i64
 }
 
+pub fn is_transient_windows_io_error(err: &std::io::Error) -> bool {
+    err.kind() == std::io::ErrorKind::PermissionDenied
+        || matches!(err.raw_os_error(), Some(5 | 32 | 33))
+}
+
+pub fn retry_io<T, F>(mut op: F) -> std::io::Result<T>
+where
+    F: FnMut() -> std::io::Result<T>,
+{
+    const DELAYS_MS: [u64; 5] = [15, 30, 60, 120, 200];
+    let mut attempt = 0usize;
+    loop {
+        match op() {
+            Ok(val) => return Ok(val),
+            Err(err) if attempt < DELAYS_MS.len() && is_transient_windows_io_error(&err) => {
+                std::thread::sleep(std::time::Duration::from_millis(DELAYS_MS[attempt]));
+                attempt += 1;
+            }
+            Err(err) => return Err(err),
+        }
+    }
+}
+
+pub fn settings_backup_path(path: &std::path::Path) -> PathBuf {
+    let mut os = path.as_os_str().to_os_string();
+    os.push(".bak");
+    PathBuf::from(os)
+}
+
+fn write_temp_synced(tmp_path: &std::path::Path, content: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut file = std::fs::File::create(tmp_path)?;
+    file.write_all(content.as_bytes())?;
+    file.sync_all()?;
+    Ok(())
+}
+
+pub fn write_json_atomic_with_backup(path: &std::path::Path, content: &str) -> std::io::Result<()> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    let parent = path.parent().unwrap_or_else(|| std::path::Path::new("."));
+    if !parent.as_os_str().is_empty() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    let file_name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("settings.json");
+    let pid = std::process::id();
+    let seq = TMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let tmp_path = parent.join(format!("{file_name}.{pid}.{seq}.tmp"));
+
+    if let Err(err) = write_temp_synced(&tmp_path, content) {
+        let _ = std::fs::remove_file(&tmp_path);
+        return Err(err);
+    }
+
+    // Best-effort rotation of previous valid settings.json into settings.json.bak
+    if path.exists() {
+        if let Ok(existing) = retry_io(|| std::fs::read_to_string(path)) {
+            if !existing.trim().is_empty()
+                && serde_json::from_str::<std::collections::HashMap<String, serde_json::Value>>(
+                    &existing,
+                )
+                .is_ok()
+            {
+                let bak_path = settings_backup_path(path);
+                let bak_seq = TMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+                let bak_tmp = parent.join(format!("{file_name}.bak.{pid}.{bak_seq}.tmp"));
+                let bak_res = write_temp_synced(&bak_tmp, &existing)
+                    .and_then(|()| retry_io(|| std::fs::rename(&bak_tmp, &bak_path)));
+                if let Err(err) = bak_res {
+                    let _ = std::fs::remove_file(&bak_tmp);
+                    crate::diagnostics::log(&format!(
+                        "Failed to update settings backup {}: {err}",
+                        bak_path.display()
+                    ));
+                }
+            }
+        }
+    }
+
+    if let Err(err) = retry_io(|| std::fs::rename(&tmp_path, path)) {
+        let _ = std::fs::remove_file(&tmp_path);
+        return Err(err);
+    }
+
+    Ok(())
+}
+
+pub fn read_settings_map_with_fallback(
+    path: &std::path::Path,
+) -> Result<std::collections::HashMap<String, serde_json::Value>, String> {
+    let bak_path = settings_backup_path(path);
+    let read_backup = || -> Result<std::collections::HashMap<String, serde_json::Value>, std::io::Error> {
+        let bak_content = retry_io(|| std::fs::read_to_string(&bak_path))?;
+        serde_json::from_str(&bak_content)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+    };
+
+    match retry_io(|| std::fs::read_to_string(path)) {
+        Ok(content) => match serde_json::from_str(&content) {
+            Ok(map) => Ok(map),
+            Err(parse_err) => match read_backup() {
+                Ok(bak_map) => {
+                    crate::diagnostics::log(&format!(
+                        "settings.json parse failed ({parse_err}); recovered from backup"
+                    ));
+                    Ok(bak_map)
+                }
+                Err(bak_err) => Err(format!(
+                    "Failed to parse settings.json ({parse_err}) and backup recovery failed ({bak_err})"
+                )),
+            },
+        },
+        Err(io_err) if io_err.kind() == std::io::ErrorKind::NotFound => match read_backup() {
+            Ok(bak_map) => {
+                crate::diagnostics::log("settings.json missing; recovered from backup");
+                Ok(bak_map)
+            }
+            Err(bak_err) if bak_err.kind() == std::io::ErrorKind::NotFound => {
+                Ok(std::collections::HashMap::new())
+            }
+            Err(bak_err) => Err(format!(
+                "settings.json missing and backup recovery failed ({bak_err})"
+            )),
+        },
+        Err(io_err) => match read_backup() {
+            Ok(bak_map) => {
+                crate::diagnostics::log(&format!(
+                    "settings.json read failed ({io_err}); recovered from backup"
+                ));
+                Ok(bak_map)
+            }
+            Err(bak_err) => Err(format!(
+                "Failed to read settings.json ({io_err}) and backup recovery failed ({bak_err})"
+            )),
+        },
+    }
+}
+
 fn settings_cache() -> &'static std::sync::Mutex<std::collections::HashMap<String, serde_json::Value>> {
     crate::state::SETTINGS_CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
 }
@@ -750,16 +950,26 @@ fn settings_cache() -> &'static std::sync::Mutex<std::collections::HashMap<Strin
 pub fn init_settings_cache(app: &tauri::AppHandle) {
     use tauri::Manager;
 
-
     if let Some(path) = app.path().app_config_dir().ok().map(|p| p.join("settings.json")) {
-        if let Ok(content) = std::fs::read_to_string(path) {
-            if let Ok(settings) = serde_json::from_str::<std::collections::HashMap<String, serde_json::Value>>(&content) {
+        match read_settings_map_with_fallback(&path) {
+            Ok(settings) => {
                 if let Ok(mut cache) = settings_cache().lock() {
                     *cache = settings;
                 }
             }
+            Err(err) => {
+                crate::diagnostics::log(&format!("init_settings_cache failed: {err}"));
+            }
         }
     }
+}
+
+/// Clone the current in-memory settings cache (used as a fallback when disk read fails).
+pub fn clone_settings_cache() -> std::collections::HashMap<String, serde_json::Value> {
+    settings_cache()
+        .lock()
+        .map(|guard| guard.clone())
+        .unwrap_or_default()
 }
 
 /// Replace the entire settings cache (used by the file watcher on external changes).
@@ -872,20 +1082,24 @@ fn mostly_painted(pixels: &[u8]) -> bool {
     pixels.chunks_exact(4).step_by(7).filter(|c| c[0] != 0 || c[1] != 0 || c[2] != 0).count() * 50 > pixels.len() / 28
 }
 
-fn encode_thumbnail(mut pixels: Vec<u8>, width: u32, height: u32, max_width: u32, max_height: u32) -> Option<String> {
+pub fn encode_thumbnail(mut pixels: Vec<u8>, width: u32, height: u32, max_width: u32, max_height: u32) -> Option<String> {
     for chunk in pixels.chunks_exact_mut(4) {
         chunk.swap(0, 2);
         chunk[3] = 255;
     }
-    let mut img = image::RgbaImage::from_raw(width, height, pixels)?;
-    if img.width() > max_width || img.height() > max_height {
-        let dyn_img = image::DynamicImage::ImageRgba8(img);
-        img = dyn_img.resize(max_width, max_height, image::imageops::FilterType::Lanczos3).into_rgba8();
-    }
-    let mut buf = std::io::Cursor::new(Vec::new());
-    image::write_buffer_with_format(&mut buf, &img, img.width(), img.height(), image::ColorType::Rgba8, image::ImageFormat::Png).ok()?;
-    use base64::Engine;
-    Some(format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(buf.into_inner())))
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let mut img = image::RgbaImage::from_raw(width, height, pixels)?;
+        if img.width() > max_width || img.height() > max_height {
+            let dyn_img = image::DynamicImage::ImageRgba8(img);
+            img = dyn_img.resize(max_width, max_height, image::imageops::FilterType::Triangle).into_rgba8();
+        }
+        let mut buf = std::io::Cursor::new(Vec::new());
+        image::write_buffer_with_format(&mut buf, &img, img.width(), img.height(), image::ColorType::Rgba8, image::ImageFormat::Png).ok()?;
+        use base64::Engine;
+        Some(format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(buf.into_inner())))
+    }))
+    .ok()
+    .flatten()
 }
 
 /// Captures an HWND to a base64-encoded PNG thumbnail, scaling it down if it exceeds max_width x max_height.
@@ -941,7 +1155,74 @@ fn is_chrome_window(hwnd: HWND) -> bool {
     String::from_utf16_lossy(&buf[..len]).starts_with("Chrome_WidgetWin")
 }
 
+/// Returns true if any other visible, uncloaked top-level app window sits above `hwnd` in the
+/// z-order and overlaps `target_rect`. Used to prevent `BitBlt(hdc_screen)` from capturing
+/// another program on top of the target window.
+unsafe fn is_window_occluded(hwnd: HWND, target_rect: windows::Win32::Foundation::RECT) -> bool {
+    use windows::Win32::Foundation::RECT;
+    use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED, DWMWA_EXTENDED_FRAME_BOUNDS};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetWindow, GetWindowLongW, GetWindowRect, GetWindowThreadProcessId, IsIconic,
+        IsWindowVisible, GW_HWNDPREV, GWL_EXSTYLE, WS_EX_TOOLWINDOW,
+    };
+
+    let own_pid = std::process::id();
+    let mut cur = GetWindow(hwnd, GW_HWNDPREV).unwrap_or_default();
+    let mut steps = 0;
+    while !cur.is_invalid() && steps < 64 {
+        steps += 1;
+        if IsWindowVisible(cur).as_bool() && !IsIconic(cur).as_bool() {
+            let mut pid = 0u32;
+            GetWindowThreadProcessId(cur, Some(&mut pid));
+            let ex = GetWindowLongW(cur, GWL_EXSTYLE) as u32;
+            let is_tool = (ex & WS_EX_TOOLWINDOW.0) != 0;
+            if pid != own_pid && !is_tool {
+                let mut cloaked = 0u32;
+                let is_cloaked = DwmGetWindowAttribute(
+                    cur,
+                    DWMWA_CLOAKED,
+                    &mut cloaked as *mut _ as *mut _,
+                    std::mem::size_of::<u32>() as u32,
+                )
+                .is_ok()
+                    && cloaked != 0;
+                if !is_cloaked {
+                    let mut r = RECT::default();
+                    let has_rect = DwmGetWindowAttribute(
+                        cur,
+                        DWMWA_EXTENDED_FRAME_BOUNDS,
+                        &mut r as *mut _ as *mut _,
+                        std::mem::size_of::<RECT>() as u32,
+                    )
+                    .is_ok()
+                        || GetWindowRect(cur, &mut r).is_ok();
+                    if has_rect && r.right > r.left && r.bottom > r.top {
+                        let ox = r.right.min(target_rect.right) - r.left.max(target_rect.left);
+                        let oy = r.bottom.min(target_rect.bottom) - r.top.max(target_rect.top);
+                        if ox > 8 && oy > 8 {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+        cur = GetWindow(cur, GW_HWNDPREV).unwrap_or_default();
+    }
+    false
+}
+
 fn capture_hwnd_gdi(hwnd: HWND, max_width: u32, max_height: u32) -> Option<String> {
+    let (pixels, w, h) = capture_hwnd_raw_bgra_inner(hwnd, false)?;
+    encode_thumbnail(pixels, w, h, max_width, max_height)
+}
+
+/// Fast raw BGRA copy for a window known to be frontmost (e.g. immediately before minimizing).
+/// Does NOT resize or PNG-encode on the caller's thread so minimizing stays instantaneous.
+pub fn capture_hwnd_raw_bgra_in_front(hwnd: HWND) -> Option<(Vec<u8>, u32, u32)> {
+    capture_hwnd_raw_bgra_inner(hwnd, true)
+}
+
+fn capture_hwnd_raw_bgra_inner(hwnd: HWND, assume_in_front: bool) -> Option<(Vec<u8>, u32, u32)> {
     unsafe {
         use windows::Win32::Foundation::RECT;
         use windows::Win32::Graphics::Gdi::{
@@ -953,7 +1234,9 @@ fn capture_hwnd_gdi(hwnd: HWND, max_width: u32, max_height: u32) -> Option<Strin
         #[link(name = "user32")]
         extern "system" { pub fn PrintWindow(hwnd: HWND, hdcBlt: HDC, nFlags: u32) -> i32; }
 
-        if !IsWindow(Some(hwnd)).as_bool() { return None; }
+        if !IsWindow(Some(hwnd)).as_bool() || windows::Win32::UI::WindowsAndMessaging::IsIconic(hwnd).as_bool() {
+            return None;
+        }
 
         let mut rect = RECT::default();
         let _ = DwmGetWindowAttribute(hwnd, DWMWA_EXTENDED_FRAME_BOUNDS, &mut rect as *mut _ as *mut _, std::mem::size_of::<RECT>() as u32);
@@ -995,7 +1278,8 @@ fn capture_hwnd_gdi(hwnd: HWND, max_width: u32, max_height: u32) -> Option<Strin
         let mut pixels = vec![0u8; (width * height * 4) as usize];
         let mut captured = printed
             && GetDIBits(hdc_mem, hbm_mem, 0, height as u32, Some(pixels.as_mut_ptr() as *mut _), &mut bmi, DIB_RGB_COLORS) != 0;
-        let in_front = windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow() == hwnd;
+        let in_front = (assume_in_front || windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow() == hwnd)
+            && !is_window_occluded(hwnd, rect);
         match capture_source(captured, captured && is_blank_bgrx(&pixels), in_front) {
             CaptureSource::Printed => {}
             CaptureSource::Screen => {
@@ -1006,39 +1290,16 @@ fn capture_hwnd_gdi(hwnd: HWND, max_width: u32, max_height: u32) -> Option<Strin
             CaptureSource::Nothing => captured = false,
         }
 
-        let mut result = None;
-        if captured {
-            for chunk in pixels.chunks_exact_mut(4) {
-                let b = chunk[0];
-                let r = chunk[2];
-                chunk[0] = r;
-                chunk[2] = b;
-                chunk[3] = 255;
-            }
-            if let Ok(Some(png_base64)) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                if let Some(mut img) = image::RgbaImage::from_raw(width as u32, height as u32, pixels) {
-                    if img.width() > max_width || img.height() > max_height {
-                        let dyn_img = image::DynamicImage::ImageRgba8(img);
-                        img = dyn_img.resize(max_width, max_height, image::imageops::FilterType::Lanczos3).into_rgba8();
-                    }
-                    let mut buf = std::io::Cursor::new(Vec::new());
-                    if image::write_buffer_with_format(&mut buf, &img, img.width(), img.height(), image::ColorType::Rgba8, image::ImageFormat::Png).is_ok() {
-                        use base64::Engine;
-                        let b64 = base64::engine::general_purpose::STANDARD.encode(buf.into_inner());
-                        return Some(format!("data:image/png;base64,{}", b64));
-                    }
-                }
-                None
-            })) {
-                result = Some(png_base64);
-            }
-        }
         SelectObject(hdc_mem, h_old);
         let _ = DeleteObject(hbm_mem.into());
         let _ = DeleteDC(hdc_mem);
         ReleaseDC(None, hdc_screen);
 
-        result
+        if captured {
+            Some((pixels, width as u32, height as u32))
+        } else {
+            None
+        }
     }
 }
 
@@ -1585,5 +1846,75 @@ mod tests {
         assert_eq!(parse_marker_pid(&raw), Some(4242));
         assert_eq!(parse_marker_rect(&raw, "primary="), Some(primary));
         assert_eq!(parse_marker_secondaries(&raw), vec![(999, sec)]);
+    }
+
+    #[test]
+    fn resolve_restore_taskbar_state_respects_original_and_fallbacks() {
+        use super::resolve_restore_taskbar_state;
+
+        assert_eq!(resolve_restore_taskbar_state(0, true), 0);
+        assert_eq!(resolve_restore_taskbar_state(0, false), 0);
+        assert_eq!(resolve_restore_taskbar_state(1, true), 1);
+        assert_eq!(resolve_restore_taskbar_state(2, false), 2);
+        assert_eq!(resolve_restore_taskbar_state(-1, true), 2);
+        assert_eq!(resolve_restore_taskbar_state(-1, false), 1);
+    }
+
+    #[test]
+    fn atomic_write_creates_settings_and_rotates_backup() {
+        use super::{read_settings_map_with_fallback, settings_backup_path, write_json_atomic_with_backup};
+
+        let root = std::env::temp_dir().join(format!("fern-settings-atomic-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let path = root.join("settings.json");
+        let bak = settings_backup_path(&path);
+
+        write_json_atomic_with_backup(&path, r#"{"fern-theme":"dark"}"#).unwrap();
+        assert!(path.exists());
+        assert!(!bak.exists());
+
+        write_json_atomic_with_backup(&path, r#"{"fern-theme":"light"}"#).unwrap();
+        assert!(bak.exists());
+        assert_eq!(std::fs::read_to_string(&bak).unwrap(), r#"{"fern-theme":"dark"}"#);
+
+        let loaded = read_settings_map_with_fallback(&path).unwrap();
+        assert_eq!(loaded.get("fern-theme").and_then(|v| v.as_str()), Some("light"));
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn corrupt_settings_recovers_from_valid_backup() {
+        use super::{read_settings_map_with_fallback, settings_backup_path};
+
+        let root = std::env::temp_dir().join(format!("fern-settings-recover-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("settings.json");
+        let bak = settings_backup_path(&path);
+
+        std::fs::write(&path, "{corrupt json").unwrap();
+        std::fs::write(&bak, r#"{"fern-scale":"1.25"}"#).unwrap();
+
+        let recovered = read_settings_map_with_fallback(&path).unwrap();
+        assert_eq!(recovered.get("fern-scale").and_then(|v| v.as_str()), Some("1.25"));
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn corrupt_settings_without_backup_returns_err() {
+        use super::read_settings_map_with_fallback;
+
+        let root = std::env::temp_dir().join(format!("fern-settings-corrupt-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("settings.json");
+
+        std::fs::write(&path, "{not valid json").unwrap();
+
+        assert!(read_settings_map_with_fallback(&path).is_err());
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

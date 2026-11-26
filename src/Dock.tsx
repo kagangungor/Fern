@@ -17,6 +17,7 @@ import { useRestState } from './hooks/useRestState';
 import { appAttention, appUnreadCount } from './attention';
 import {
   applyDockNameOverride,
+  areDistinctExeInstalls,
   hideIdentifierForApp,
   isAppHiddenInDock,
   parseDockNames,
@@ -82,6 +83,7 @@ export function isSameApp(a: AppInfo, b: AppInfo): boolean {
   if (itemKey(a) === itemKey(b)) return true;
   // Browser hosts run many apps under one exe, only the full identity can match those.
   if (isBrowserHost(a.path) || isBrowserHost(b.path)) return false;
+  if (areDistinctExeInstalls(a.path, b.path)) return false;
   const aId = isIdentifier(a.path);
   const bId = isIdentifier(b.path);
   // Two opaque shell ids match only exactly (checked above).
@@ -105,7 +107,17 @@ export function isSameApp(a: AppInfo, b: AppInfo): boolean {
   const aExe = a.executable?.toLowerCase() || fileOf(a.path);
   const bExe = b.executable?.toLowerCase() || fileOf(b.path);
   if (!aExe || !bExe) return false;
-  return normExe(aExe) === normExe(bExe);
+  if (normExe(aExe) !== normExe(bExe)) return false;
+  const aIsLnk = a.path.toLowerCase().endsWith('.lnk');
+  const bIsLnk = b.path.toLowerCase().endsWith('.lnk');
+  if (aIsLnk !== bIsLnk) {
+    const na = a.name.trim().toLowerCase();
+    const nb = b.name.trim().toLowerCase();
+    if (na && nb && na !== nb && !na.includes(nb) && !nb.includes(na)) {
+      return false;
+    }
+  }
+  return true;
 }
 
 const fileOf = (p: string) =>
@@ -314,8 +326,6 @@ function AttentionBadge({ count, isFlashing }: { count: number | null; isFlashin
   );
 }
 
-let liveThumbnailGeneration = 0;
-
 type CommActionKind = 'camera' | 'mic' | 'deafen' | 'disconnect';
 
 interface CommThumbarAction {
@@ -406,6 +416,7 @@ function CommActionIcon({ kind, toggled }: { kind: CommActionKind; toggled: bool
 interface DockPreviewTooltipProps {
   app: AppInfo;
   previews: { hwnd: number; title: string; image: string }[];
+  capturePending?: boolean;
   onClosePreview: (e: React.MouseEvent, hwnd: number) => void;
   onSelectPreview: (hwnd: number) => void;
   renderMedia: (app: AppInfo) => React.ReactNode;
@@ -417,6 +428,7 @@ interface DockPreviewTooltipProps {
 function DockPreviewTooltip({
   app,
   previews,
+  capturePending = false,
   onClosePreview,
   onSelectPreview,
   renderMedia,
@@ -425,17 +437,6 @@ function DockPreviewTooltip({
   onMouseLeave,
 }: DockPreviewTooltipProps) {
   const t = useT();
-  const isPresent = useIsPresent();
-  const [liveHwnds, setLiveHwnds] = useState<Set<number>>(() => new Set());
-
-  useEffect(() => {
-    if (isPresent) {
-      invoke('set_live_thumbnails_opacity', { opacity: 255 }).catch(() => {});
-    } else {
-      invoke('set_live_thumbnails_opacity', { opacity: 0 }).catch(() => {});
-    }
-  }, [isPresent]);
-  const surfaceRefs = useRef<Map<number, HTMLDivElement>>(new Map());
   const commProfile = useMemo(() => commProfileForApp(app), [app]);
   const [privacy, setPrivacy] = useState<{ mic_active: boolean; cam_active: boolean; active_apps: string[] } | null>(null);
   const [, setToggleTick] = useState(0);
@@ -480,58 +481,93 @@ function DockPreviewTooltip({
     }
   }, [privacy, showCommActions, previews]);
 
-  useLayoutEffect(() => {
-    const generation = ++liveThumbnailGeneration;
-    let cancelled = false;
-    let rafId: number | null = null;
-    let t1: any = null;
-    let t2: any = null;
+  const isPresent = useIsPresent();
+  const surfaceRefs = useRef<Map<number, HTMLDivElement>>(new Map());
+  const [fallbackLiveHwnds, setFallbackLiveHwnds] = useState<Set<number>>(() => new Set());
+  const hasFallbackLiveRef = useRef(false);
+  hasFallbackLiveRef.current = fallbackLiveHwnds.size > 0;
+  const missingHwnds = useMemo(
+    () => (capturePending ? [] : previews.filter((p) => !p.image).map((p) => p.hwnd)),
+    [capturePending, previews]
+  );
+  const missingKey = missingHwnds.join(',');
 
-    const syncThumbnails = async () => {
+  // Sync DWM fallback opacity fade-out with the 150ms framer-motion exit animation.
+  useEffect(() => {
+    if (isPresent || !hasFallbackLiveRef.current) return;
+    let cancelled = false;
+    let rafId = 0;
+    let lastSent = 255;
+    const start = performance.now();
+    const duration = 150;
+    const step = (now: number) => {
+      if (cancelled) return;
+      const progress = Math.min(1, (now - start) / duration);
+      const opacity = Math.round(255 * (1 - progress));
+      if (opacity !== lastSent) {
+        lastSent = opacity;
+        invoke('set_live_thumbnails_opacity', { opacity }).catch(() => {});
+      }
+      if (progress < 1) {
+        rafId = requestAnimationFrame(step);
+      } else {
+        invoke('clear_live_thumbnails').catch(() => {});
+      }
+    };
+    rafId = requestAnimationFrame(step);
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(rafId);
+    };
+  }, [isPresent]);
+
+  useEffect(() => {
+    if (!isPresent) return;
+    if (!missingKey) {
+      setFallbackLiveHwnds(new Set());
+      invoke('clear_live_thumbnails').catch(() => {});
+      return;
+    }
+    let cancelled = false;
+    let t1: ReturnType<typeof setTimeout> | null = null;
+    let t2: ReturnType<typeof setTimeout> | null = null;
+    const syncFallback = async () => {
       if (cancelled) return;
       const dpr = window.devicePixelRatio || 1;
       const targets: { hwnd: number; x: number; y: number; width: number; height: number }[] = [];
-
-      for (const p of previews) {
-        const el = surfaceRefs.current.get(p.hwnd);
-        if (el) {
-          const r = el.getBoundingClientRect();
-          if (r.width > 0 && r.height > 0) {
-            targets.push({
-              hwnd: p.hwnd,
-              x: Math.round(r.left * dpr),
-              y: Math.round(r.top * dpr),
-              width: Math.round(r.width * dpr),
-              height: Math.round(r.height * dpr),
-            });
-          }
+      for (const hwnd of missingHwnds) {
+        const el = surfaceRefs.current.get(hwnd);
+        if (!el) continue;
+        const r = el.getBoundingClientRect();
+        if (r.width > 0 && r.height > 0) {
+          targets.push({
+            hwnd,
+            x: Math.round(r.left * dpr),
+            y: Math.round(r.top * dpr),
+            width: Math.round(r.width * dpr),
+            height: Math.round(r.height * dpr),
+          });
         }
       }
-
-      if (targets.length > 0) {
-        try {
-          const active = await invoke<number[]>('set_live_thumbnails', { targets, clientAreaOnly: false });
-          if (!cancelled && active) {
-            setLiveHwnds(new Set(active));
-          }
-        } catch {}
-      }
+      if (targets.length === 0) return;
+      try {
+        const active = await invoke<number[]>('set_live_thumbnails', { targets, clientAreaOnly: false });
+        if (!cancelled && active) setFallbackLiveHwnds(new Set(active));
+      } catch {}
     };
-
-    rafId = requestAnimationFrame(() => {
-      syncThumbnails();
-      t1 = setTimeout(syncThumbnails, 80);
-      t2 = setTimeout(syncThumbnails, 220);
+    const rafId = requestAnimationFrame(() => {
+      syncFallback();
+      t1 = setTimeout(syncFallback, 80);
+      t2 = setTimeout(syncFallback, 200);
     });
-
     return () => {
       cancelled = true;
-      if (rafId) cancelAnimationFrame(rafId);
+      cancelAnimationFrame(rafId);
       if (t1) clearTimeout(t1);
       if (t2) clearTimeout(t2);
-      if (generation === liveThumbnailGeneration) invoke('clear_live_thumbnails').catch(() => {});
+      invoke('clear_live_thumbnails').catch(() => {});
     };
-  }, [previews, showCommActions]);
+  }, [missingKey, showCommActions]);
 
   return (
     <motion.div
@@ -546,14 +582,12 @@ function DockPreviewTooltip({
     >
       {renderPreviewMedia && renderPreviewMedia(app)}
       <div className="preview-items">
-        {previews.map((prev, idx) => {
-          const isLive = liveHwnds.has(prev.hwnd);
-          return (
+        {previews.map((prev, idx) => (
             <div
               key={prev.hwnd}
               className="preview-item"
               onClick={() => {
-                setLiveHwnds(new Set());
+                invoke('clear_live_thumbnails').catch(() => {});
                 onSelectPreview(prev.hwnd);
               }}
               onDragOver={(e) => {
@@ -569,6 +603,7 @@ function DockPreviewTooltip({
                   className="preview-close-btn"
                   onClick={(e) => {
                     e.stopPropagation();
+                    invoke('clear_live_thumbnails').catch(() => {});
                     onClosePreview(e, prev.hwnd);
                   }}
                   data-tooltip={t("dockmenu.closeWindow")}
@@ -580,21 +615,24 @@ function DockPreviewTooltip({
                 </button>
               </div>
               <div
-                className={`preview-surface${isLive ? ' has-live' : ''}`}
+                className="preview-surface"
                 ref={(el) => {
                   if (el) surfaceRefs.current.set(prev.hwnd, el);
                   else surfaceRefs.current.delete(prev.hwnd);
                 }}
               >
-                <div className="preview-live-mount" />
                 {prev.image ? (
                   <img
                     src={prev.image}
                     alt={`Preview ${idx}`}
-                    className={`preview-thumb-img${isLive ? ' is-live' : ''}`}
+                    className="preview-thumb-img"
                   />
                 ) : (
-                  <div className="preview-item-icon-fallback">{renderMedia(app)}</div>
+                  <div
+                    className={`preview-item-icon-fallback${fallbackLiveHwnds.has(prev.hwnd) ? ' is-live' : capturePending ? ' is-pending' : ''}`}
+                  >
+                    {renderMedia(app)}
+                  </div>
                 )}
               </div>
               {showCommActions && commProfile && (
@@ -649,8 +687,7 @@ function DockPreviewTooltip({
                 </div>
               )}
             </div>
-          );
-        })}
+        ))}
       </div>
     </motion.div>
   );
@@ -661,6 +698,7 @@ const tourDockAction = () => { emit('tour-dock-action').catch(() => {}); };
 const Dock = memo(function Dock() {
   const rest = useRestState();
   const rectPollMs = restingInterval(500, rest);
+  const lastPreviewImagesRef = useRef<Map<number, string>>(new Map());
   const windowsPollMs = restingInterval(10000, rest);
   const t = useT();
   useEffect(() => {
@@ -763,7 +801,6 @@ const Dock = memo(function Dock() {
     if (previewTimerRef.current) clearTimeout(previewTimerRef.current);
     isPreviewHoveredRef.current = false;
     setPreviewData(null);
-    invoke('clear_live_thumbnails').catch(() => {});
     setActiveVolumeKey(key);
 
     // Immediately close all other apps' volume HUDs and cancel their anim loops
@@ -877,7 +914,7 @@ const Dock = memo(function Dock() {
   const [menuItems, setMenuItems] = useState<string[]>(() => parseMenuItems(localStorage.getItem("fern-dock-menu-items")));
   const isPickingProgramRef = useRef(false);
   const [mixedOrder, setMixedOrder] = useState<string[]>([]);
-  const [previewData, setPreviewData] = useState<{ id: string, previews: { hwnd: number, title: string, image: string }[] } | null>(null);
+  const [previewData, setPreviewData] = useState<{ id: string, previews: { hwnd: number, title: string, image: string }[], capturePending?: boolean } | null>(null);
   const [isDockHovered, setIsDockHovered] = useState(false);
   const [isEdgeHovered, setIsEdgeHovered] = useState(false);
   const [isOverlapped, setIsOverlapped] = useState(false);
@@ -1040,6 +1077,11 @@ const Dock = memo(function Dock() {
   // The widest and tallest the expanded bar has been, set by the region code further down.
   const dockBarExtentRef = useRef({ width: 0, height: 0 });
   const updateDockRegionRef = useRef<() => void>(() => {});
+  const updateRectRef = useRef<() => void>(() => {});
+
+  useEffect(() => {
+    dockBarExtentRef.current = { width: 0, height: 0 };
+  }, [scale, isAdaptive]);
 
   useEffect(() => {
     let lastSent = "";
@@ -1047,11 +1089,15 @@ const Dock = memo(function Dock() {
       if (dockRef.current) {
         const rect = dockRef.current.getBoundingClientRect();
         const hasPreview = !!previewData;
+        const left = Math.floor(rect.left);
+        const top = Math.floor(rect.top);
+        const right = Math.ceil(rect.right);
+        const bottom = Math.ceil(rect.bottom);
         const next = {
-          x: Math.round(rect.x) - (hasPreview ? 500 : 0),
-          y: Math.round(rect.y) - (hasPreview ? 320 : 0),
-          width: Math.round(rect.width) + (hasPreview ? 1000 : 0),
-          height: Math.round(rect.height) + (hasPreview ? 320 : 0)
+          x: left - (hasPreview ? 500 : 0),
+          y: top - (hasPreview ? 320 : 0),
+          width: (right - left) + (hasPreview ? 1000 : 0),
+          height: (bottom - top) + (hasPreview ? 320 : 0)
         };
         // Only the shown, expanded dock (no preview padding) defines the overlap footprint. The hidden
         // pill is much narrower, and testing overlap against it made the dock flicker in and out.
@@ -1064,6 +1110,7 @@ const Dock = memo(function Dock() {
       // The bar's size animates without re-rendering, this is what sees it grow.
       updateDockRegionRef.current();
     };
+    updateRectRef.current = updateRect;
 
     updateRect();
     window.addEventListener('resize', updateRect);
@@ -1088,7 +1135,7 @@ const Dock = memo(function Dock() {
       clearInterval(poll);
       cancelAnimationFrame(rafId);
     };
-  }, [pinnedApps, activeApps, isHidden, isExpanded, previewData, scale, rectPollMs, gap]);
+  }, [pinnedApps, activeApps, isHidden, isExpanded, previewData, scale, rectPollMs, gap, dockSearchEnabled, dockCalendarEnabled, dockTray, dockTaskView, dockRecycle, dockDrives, dockShowDesktop, isAdaptive, dockIconOnly, dockMixedReorder, activeOrder]);
 
   const refreshDockMode = () => {
     invoke<string>('get_dock_mode_for_window').then(setDockMode).catch(() => {});
@@ -1419,7 +1466,6 @@ const Dock = memo(function Dock() {
     setPreviewData(null);
     setHoveredApp(null);
     setPressedApp(null);
-    invoke('clear_live_thumbnails').catch(() => {});
     invoke('bring_hwnd_to_front', { hwnd }).catch(() => {});
   };
 
@@ -1509,7 +1555,6 @@ const Dock = memo(function Dock() {
     isPreviewHoveredRef.current = false;
     setPreviewData(null);
     setHoveredApp(null);
-    invoke('clear_live_thumbnails').catch(() => {});
     setContextMenuHeight(0);
     setContextMenuWidth(0);
     const dockRect = dockRef.current?.getBoundingClientRect();
@@ -1573,8 +1618,7 @@ const Dock = memo(function Dock() {
       isPreviewHoveredRef.current = false;
       setPreviewData(null);
       setHoveredApp(null);
-      invoke('clear_live_thumbnails').catch(() => {});
-    }
+      }
   }, [contextMenu]);
 
   useLayoutEffect(() => {
@@ -1652,7 +1696,12 @@ const Dock = memo(function Dock() {
         ?? (/^(shell:appsfolder\\)?microsoft\.windows\.explorer$/i.test(p.path) ? 'explorer.exe' : undefined);
       if (pinExe) {
         const targetExe = pinExe.toLowerCase();
-        const found = activeApps.find(a => !isIdentifier(a.path) && a.executable?.toLowerCase() === targetExe);
+        const found = activeApps.find(a =>
+          !matchedRunningKeys.has(itemKey(a))
+          && !isIdentifier(a.path)
+          && !areDistinctExeInstalls(p.path, a.path)
+          && a.executable?.toLowerCase() === targetExe
+        );
         if (found) {
           matchedRunningKeys.add(appIdentity(found.path, found.executable, found.name));
           return found;
@@ -1663,7 +1712,9 @@ const Dock = memo(function Dock() {
       const pinFilename = p.path.split('/').pop()?.split('\\').pop()?.toLowerCase() || "";
       if (pinFilename) {
         const found = activeApps.find(a => {
+          if (matchedRunningKeys.has(itemKey(a))) return false;
           if (isIdentifier(a.path)) return false;
+          if (areDistinctExeInstalls(p.path, a.path)) return false;
           const runExe = a.executable?.toLowerCase() || a.path.split('/').pop()?.split('\\').pop()?.toLowerCase() || "";
           return runExe === pinFilename || runExe === `${pinFilename}.exe` || `${runExe}.exe` === pinFilename;
         });
@@ -1871,8 +1922,7 @@ const Dock = memo(function Dock() {
       if (previewTimerRef.current) clearTimeout(previewTimerRef.current);
       isPreviewHoveredRef.current = false;
       setPreviewData(null);
-      invoke('clear_live_thumbnails').catch(() => {});
-      return;
+        return;
     }
 
     if (previewTimerRef.current) clearTimeout(previewTimerRef.current);
@@ -1892,36 +1942,55 @@ const Dock = memo(function Dock() {
       const app = dockItemsRef.current.find(a => itemKey(a) === hoveredApp);
       if (app && app.is_running) {
         const hwndsToCapture = app.all_hwnds || (app.hwnd ? [[app.hwnd, app.name]] : []);
+        const appKey = itemKey(app);
 
-        previewTimerRef.current = setTimeout(async () => {
-          try {
-            const results = await Promise.all(
-              hwndsToCapture.map(async ([hwnd, title]) => {
-                try {
-                  const res = await invoke<[string, number] | null>("capture_window_thumbnail", { hwnd, maxWidth: 320, maxHeight: 200 });
-                  if (res) {
-                    const [image, lastFocused] = res;
-                    return { hwnd, title, image, lastFocused };
-                  }
-                } catch {}
-                return { hwnd, title, image: "", lastFocused: 0 };
-              })
-            );
-
-            const captured = results
-              .sort((a, b) => b.lastFocused - a.lastFocused)
-              .map(({ hwnd, title, image }) => ({ hwnd, title, image }));
-
-            const currentHovered = hoveredAppRef.current;
-            if (!contextMenu && captured.length > 0 && currentHovered === itemKey(app)) {
-              setPreviewData({ id: itemKey(app), previews: captured });
-            } else if (currentHovered === itemKey(app)) {
-              setPreviewData(null);
-            }
-          } catch (e) {
-            console.error("Failed to capture thumbnails:", e);
+        previewTimerRef.current = setTimeout(() => {
+          if (contextMenu || hoveredAppRef.current !== appKey) return;
+          if (hwndsToCapture.length === 0) {
             setPreviewData(null);
+            return;
           }
+
+          const initialPreviews = hwndsToCapture.map(([hwnd, title]) => ({
+            hwnd,
+            title,
+            image: lastPreviewImagesRef.current.get(hwnd) ?? "",
+          }));
+          setPreviewData({ id: appKey, previews: initialPreviews, capturePending: true });
+
+          Promise.all(
+            hwndsToCapture.map(async ([hwnd, title]) => {
+              try {
+                const res = await invoke<[string, number] | null>("capture_window_thumbnail", { hwnd, maxWidth: 320, maxHeight: 200 });
+                if (res) {
+                  const [image, lastFocused] = res;
+                  if (image) lastPreviewImagesRef.current.set(hwnd, image);
+                  return { hwnd, title, image: image || (lastPreviewImagesRef.current.get(hwnd) ?? ""), lastFocused };
+                }
+              } catch {}
+              return { hwnd, title, image: lastPreviewImagesRef.current.get(hwnd) ?? "", lastFocused: 0 };
+            })
+          )
+            .then((results) => {
+              if (hoveredAppRef.current !== appKey) return;
+              const captured = results
+                .sort((a, b) => b.lastFocused - a.lastFocused)
+                .map(({ hwnd, title, image }) => ({ hwnd, title, image }));
+
+              setPreviewData((prev) => {
+                if (!prev || prev.id !== appKey) return prev;
+                const remainingHwnds = new Set(prev.previews.map((p) => p.hwnd));
+                const filtered = captured.filter((p) => remainingHwnds.has(p.hwnd));
+                if (filtered.length === 0) return null;
+                return { id: appKey, previews: filtered, capturePending: false };
+              });
+            })
+            .catch((e) => {
+              console.error("Failed to capture thumbnails:", e);
+              setPreviewData((prev) =>
+                prev && prev.id === appKey ? { ...prev, capturePending: false } : prev
+              );
+            });
         }, previewDelay);
       } else {
         setPreviewData(null);
@@ -2068,7 +2137,7 @@ const Dock = memo(function Dock() {
         w,
         h,
         isAdaptive ? w : Math.max(extent.width, 72 * scale),
-        Math.max(extent.height, 72 * scale),
+        Math.max(extent.height, 72 * scale) + gap,
         DOCK_REGION_WIDTH_PAD * scale,
         DOCK_REGION_LIFT * scale,
       ),
@@ -2103,6 +2172,10 @@ const Dock = memo(function Dock() {
         <motion.div
           ref={dockRef}
           layout
+          onLayoutAnimationComplete={() => {
+            updateRectRef.current();
+            updateDockRegionRef.current();
+          }}
           className={`dock ${isExpanded ? 'dock-expanded' : ''} ${(isImpacted || isExpanded) ? 'dock-impacted' : ''} ${dockIconOnly ? 'dock-icon-only' : ''} ${isAdaptive ? 'dock-adaptive' : ''} ${floating ? 'dock-floating' : ''}`}
           onMouseEnter={() => setIsDockHovered(true)}
           // The backend may have ended the hover without the DOM knowing, then no new mouseenter comes.
@@ -2286,8 +2359,7 @@ const Dock = memo(function Dock() {
                   isPreviewHoveredRef.current = false;
                   setPreviewData(null);
                   setHoveredApp(null);
-                  invoke('clear_live_thumbnails').catch(() => {});
-                  setContextMenuHeight(0);
+                                setContextMenuHeight(0);
                   setContextMenuWidth(0);
                   refreshDriveDetails();
                   const target = e.currentTarget.getBoundingClientRect();
@@ -2316,8 +2388,7 @@ const Dock = memo(function Dock() {
                   isPreviewHoveredRef.current = false;
                   setPreviewData(null);
                   setHoveredApp(null);
-                  invoke('clear_live_thumbnails').catch(() => {});
-                  setContextMenuHeight(0);
+                                setContextMenuHeight(0);
                   setContextMenuWidth(0);
                   refreshRecycleStatus();
                   const target = e.currentTarget.getBoundingClientRect();
@@ -2408,6 +2479,7 @@ const Dock = memo(function Dock() {
                     <DockPreviewTooltip
                       app={app}
                       previews={previewData.previews}
+                      capturePending={previewData.capturePending}
                       onClosePreview={handleClosePreview}
                       onSelectPreview={handleSelectPreview}
                       renderMedia={renderAppIcon}
@@ -2533,6 +2605,7 @@ const Dock = memo(function Dock() {
                             <DockPreviewTooltip
                         app={app}
                         previews={previewData.previews}
+                        capturePending={previewData.capturePending}
                         onClosePreview={handleClosePreview}
                         onSelectPreview={handleSelectPreview}
                         renderMedia={renderAppIcon}
@@ -2649,6 +2722,7 @@ const Dock = memo(function Dock() {
                           <DockPreviewTooltip
                       app={app}
                       previews={previewData.previews}
+                      capturePending={previewData.capturePending}
                       onClosePreview={handleClosePreview}
                       onSelectPreview={handleSelectPreview}
                       renderMedia={renderAppIcon}
@@ -2991,6 +3065,7 @@ function AddAppPopup({
     };
   }, []);
   const [selectedIndex, setSelectedIndex] = useState(0);
+  const selectionSourceRef = useRef<"keyboard" | "mouse">("keyboard");
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const mountedRef = useRef(false);
@@ -3043,7 +3118,14 @@ function AddAppPopup({
     }
     const starts: AppInfo[] = [];
     const contains: AppInfo[] = [];
-    for (const a of apps) {
+    const candidates: AppInfo[] = [...apps];
+    for (const r of runningApps) {
+      if (r.path === "start") continue;
+      if (!candidates.some((a) => isSameApp(a, r))) {
+        candidates.push(r);
+      }
+    }
+    for (const a of candidates) {
       // Search covers pinned apps too.
       if (a.path === "start") continue;
       const n = a.name.toLowerCase();
@@ -3055,7 +3137,7 @@ function AddAppPopup({
     starts.sort(byName);
     contains.sort(byName);
     return [{ title: null, items: [...starts, ...contains].slice(0, 50) }];
-  }, [apps, debouncedSearch, pinned, runningSuggestions]);
+  }, [apps, debouncedSearch, pinned, runningApps, runningSuggestions]);
 
   // Flat selectable list; section headers are not selectable.
   const flat = useMemo(() => sections.flatMap((s) => s.items), [sections]);
@@ -3066,12 +3148,13 @@ function AddAppPopup({
     setSelectedIndex((i) => Math.min(i, Math.max(0, flat.length - 1)));
   }, [flat.length]);
 
-  // Scroll on keyboard nav only, doing it on mount yanks the list.
+  // Scroll on keyboard nav only, doing it on mount or mouse hover yanks the list.
   useEffect(() => {
     if (!mountedRef.current) {
       mountedRef.current = true;
       return;
     }
+    if (selectionSourceRef.current !== "keyboard") return;
     if (!listRef.current) return;
     const row = listRef.current.querySelector(
       `[data-idx="${selectedIndex}"]`
@@ -3101,9 +3184,11 @@ function AddAppPopup({
       }
       if (e.key === "ArrowDown") {
         e.preventDefault();
+        selectionSourceRef.current = "keyboard";
         setSelectedIndex((i) => Math.min(i + 1, flat.length - 1));
       } else if (e.key === "ArrowUp") {
         e.preventDefault();
+        selectionSourceRef.current = "keyboard";
         setSelectedIndex((i) => Math.max(i - 1, 0));
       } else if (e.key === "Enter") {
         e.preventDefault();
@@ -3114,6 +3199,13 @@ function AddAppPopup({
         else onAdd(target);
       }
     };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [onClose, flat, selectedIndex, onAdd, pinned]);
+
+  useEffect(() => {
     const handleMouseDown = (e: MouseEvent) => {
       const popup = containerRef.current;
       if (popup && !popup.contains(e.target as Node)) {
@@ -3123,15 +3215,13 @@ function AddAppPopup({
     const handleBlur = () => {
       if (!isPickingProgramRef?.current) onClose();
     };
-    window.addEventListener("keydown", handleKeyDown);
     window.addEventListener("blur", handleBlur);
     document.addEventListener("mousedown", handleMouseDown, true);
     return () => {
-      window.removeEventListener("keydown", handleKeyDown);
       window.removeEventListener("blur", handleBlur);
       document.removeEventListener("mousedown", handleMouseDown, true);
     };
-  }, [onClose, containerRef, flat, selectedIndex, onAdd, pinned, isPickingProgramRef]);
+  }, [onClose, containerRef, isPickingProgramRef]);
 
   // Lazy-load icons as rows enter (or approach) the visible scroll viewport.
   useEffect(() => {
@@ -3244,7 +3334,10 @@ function AddAppPopup({
                       data-idx={gi}
                       className={`popup-app-row${gi === selectedIndex ? " selected" : ""}${alreadyPinned ? " is-pinned" : ""}`}
                       onClick={() => (alreadyPinned ? onClose() : onAdd(app))}
-                      onMouseEnter={() => setSelectedIndex(gi)}
+                      onMouseEnter={() => {
+                        selectionSourceRef.current = "mouse";
+                        setSelectedIndex(gi);
+                      }}
                     >
                       <div className="popup-app-icon">
                         {icon ? (

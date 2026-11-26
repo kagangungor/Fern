@@ -167,6 +167,14 @@ export const SETTINGS_SEARCH_INDEX: SearchableSetting[] = [
     keywords: ["floating", "float", "gap", "yüzen", "boşluk", "ada", "island", "kenar"],
   },
   {
+    id: "notch-respect-workarea",
+    tab: "notch",
+    sectionId: "notch-display",
+    titleKey: "notch.respectWorkArea",
+    descKey: "notch.respectWorkArea.desc",
+    keywords: ["yasb", "zebar", "komorebi", "appbar", "overlay", "workarea", "top bar", "status bar", "offset", "üst çubuk"],
+  },
+  {
     id: "notch-panel-cc",
     tab: "notch",
     sectionId: "notch-panels",
@@ -263,6 +271,14 @@ export const SETTINGS_SEARCH_INDEX: SearchableSetting[] = [
     titleKey: "dock.behavior",
     descKey: "dock.behavior.desc",
     keywords: ["dock", "görev çubuğu", "taskbar", "smart", "fixed", "peek", "gizle"],
+  },
+  {
+    id: "dock-reserve-space",
+    tab: "dock",
+    sectionId: "dock-main",
+    titleKey: "dock.reserveSpace",
+    descKey: "dock.reserveSpace.desc",
+    keywords: ["yasb", "zebar", "komorebi", "appbar", "overlay", "reserve", "workarea", "ekran alanı", "ayır"],
   },
   {
     id: "dock-edge-area",

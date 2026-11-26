@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { Power, Download, Clock, CalendarDays, BatteryWarning, RefreshCw, LogOut, Languages, MemoryStick, Cpu } from "lucide-react";
 import { SettingRow } from "./SettingRow";
 import { SettingSection } from "./SettingSection";
@@ -44,6 +45,7 @@ export function GeneralTab({
   quitFern,
 }: GeneralTabProps) {
   const t = useT();
+  const [gpuToggleDirty, setGpuToggleDirty] = useState(false);
   const languageOptions = [
     { value: "system", label: t("general.language.system") },
     ...Object.entries(LANGUAGES).map(([value, { name }]) => ({ value, label: name })),
@@ -105,10 +107,25 @@ export function GeneralTab({
           desc={t("general.webviewDisableGpu.desc")}
           divider={hasBattery}
         >
-          <label className="toggle-switch">
-            <input type="checkbox" checked={webviewDisableGpu} onChange={toggleWebviewDisableGpu} />
-            <span className="slider"></span>
-          </label>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            {gpuToggleDirty && (
+              <button type="button" className="settings-btn" onClick={restartFern}>
+                <RefreshCw size={12} strokeWidth={1.75} />
+                {t("general.webviewDisableGpu.restartNow")}
+              </button>
+            )}
+            <label className="toggle-switch">
+              <input
+                type="checkbox"
+                checked={webviewDisableGpu}
+                onChange={() => {
+                  setGpuToggleDirty((prev) => !prev);
+                  toggleWebviewDisableGpu();
+                }}
+              />
+              <span className="slider"></span>
+            </label>
+          </div>
         </SettingRow>
 
         {hasBattery && (

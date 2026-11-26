@@ -69,6 +69,8 @@ interface DockTabProps {
   toggleDockIconOnly: () => void;
   dockAdaptive: boolean;
   toggleDockAdaptive: () => void;
+  dockReserveSpace: boolean;
+  toggleDockReserveSpace: () => void;
   dockFloatGap: string;
   changeDockFloatGap: (value: string) => void;
   dockHideOnStart: boolean;
@@ -132,6 +134,8 @@ export function DockTab({
   toggleDockIconOnly,
   dockAdaptive,
   toggleDockAdaptive,
+  dockReserveSpace,
+  toggleDockReserveSpace,
   dockFloatGap,
   changeDockFloatGap,
   dockHideOnStart,
@@ -228,6 +232,15 @@ export function DockTab({
                     { value: "peek", label: t("common.peek") },
                   ]}
                 />
+              </SettingRow>
+            )}
+
+            {(dockMode === "fixed" || (showPerMonitor && monitors.some((m) => (dockModeByMonitor[m.id] || dockMode) === "fixed"))) && (
+              <SettingRow icon={Maximize2} label={t("dock.reserveSpace")} desc={t("dock.reserveSpace.desc")}>
+                <label className="toggle-switch">
+                  <input type="checkbox" checked={dockReserveSpace} onChange={toggleDockReserveSpace} />
+                  <span className="slider"></span>
+                </label>
               </SettingRow>
             )}
 

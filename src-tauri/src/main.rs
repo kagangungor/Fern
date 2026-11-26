@@ -57,9 +57,9 @@ use crate::commands::*;
 
 unsafe extern "system" fn ctrl_handler(ctrl_type: u32) -> BOOL {
     if ctrl_type == CTRL_C_EVENT || ctrl_type == CTRL_BREAK_EVENT || ctrl_type == CTRL_CLOSE_EVENT {
+        SHUTTING_DOWN.store(true, Ordering::SeqCst);
         set_taskbar_visibility(true, true);
-        NATIVE_TASKBAR_HIDDEN.store(false, Ordering::Relaxed);
-
+        NATIVE_TASKBAR_HIDDEN.store(false, Ordering::SeqCst);
     }
     BOOL(0)
 }
@@ -495,9 +495,11 @@ fn main() {
         .expect("error while building tauri application");
     app.run(|_, event| {
         if let tauri::RunEvent::Exit = event {
-            set_taskbar_visibility(true, true);
-            NATIVE_TASKBAR_HIDDEN.store(false, Ordering::Relaxed);
-
+            SHUTTING_DOWN.store(true, Ordering::SeqCst);
+            if needs_taskbar_restore() {
+                set_taskbar_visibility(true, true);
+            }
+            NATIVE_TASKBAR_HIDDEN.store(false, Ordering::SeqCst);
         }
     });
 }

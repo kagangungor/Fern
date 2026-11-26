@@ -384,6 +384,8 @@ pub fn setup_window_change_hook(app_handle: AppHandle) {
             WINEVENT_OUTOFCONTEXT, EVENT_OBJECT_CREATE, EVENT_OBJECT_DESTROY,
             EVENT_OBJECT_SHOW, EVENT_OBJECT_HIDE,
         };
+        const EVENT_OBJECT_CLOAKED: u32 = 0x8017;
+        const EVENT_OBJECT_UNCLOAKED: u32 = 0x8018;
 
         // Hook create and destroy events for top-level windows
         let _create_hook = SetWinEventHook(
@@ -403,10 +405,18 @@ pub fn setup_window_change_hook(app_handle: AppHandle) {
             EVENT_OBJECT_HIDE, EVENT_OBJECT_HIDE,
             None, Some(window_change_event_proc), 0, 0, WINEVENT_OUTOFCONTEXT,
         );
+        // Hook cloak/uncloak events so UWP Snipping Tool dismissal is detected promptly
+        let _cloak_hook = SetWinEventHook(
+            EVENT_OBJECT_CLOAKED, EVENT_OBJECT_UNCLOAKED,
+            None, Some(window_change_event_proc), 0, 0, WINEVENT_OUTOFCONTEXT,
+        );
 
         // Store hooks to prevent them from being dropped
         Box::leak(Box::new(_create_hook));
         Box::leak(Box::new(_destroy_hook));
+        Box::leak(Box::new(_show_hook));
+        Box::leak(Box::new(_hide_hook));
+        Box::leak(Box::new(_cloak_hook));
     }
 }
 
@@ -425,10 +435,16 @@ unsafe extern "system" fn window_change_event_proc(
     // Child controls, carets, scrollbars and menus must NOT trigger dock rescans.
     if id_object != 0 || id_child != 0 { return; }
 
-    // A top-level window appeared/disappeared (or focus moved): capture UI
+    // A top-level window appeared/disappeared (or cloaked/uncloaked): capture UI
     // state may have changed. Cheap flag; the worker thread does the scan.
     {
         use windows::Win32::UI::WindowsAndMessaging::{EVENT_OBJECT_SHOW, EVENT_OBJECT_HIDE, EVENT_OBJECT_DESTROY};
+        const EVENT_OBJECT_CLOAKED: u32 = 0x8017;
+        const EVENT_OBJECT_UNCLOAKED: u32 = 0x8018;
+        if event == EVENT_OBJECT_CLOAKED || event == EVENT_OBJECT_UNCLOAKED {
+            CAPTURE_RECHECK.store(true, Ordering::Relaxed);
+            return;
+        }
         if event == EVENT_OBJECT_SHOW || event == EVENT_OBJECT_HIDE || event == EVENT_OBJECT_DESTROY {
             CAPTURE_RECHECK.store(true, Ordering::Relaxed);
         }
@@ -1410,10 +1426,12 @@ pub fn setup_system_worker(app_handle: AppHandle) -> Sender<SystemCommand> {
                 use windows::Win32::Graphics::Gdi::{MonitorFromWindow, GetMonitorInfoA, MONITORINFO, MONITOR_DEFAULTTONEAREST};
                 let settings_hwnd = handle_visibility.get_webview_window("settings").and_then(|w| w.hwnd().ok()).map(|h| h.0 as isize);
                 let calendar_hwnd = handle_visibility.get_webview_window("calendar").and_then(|w| w.hwnd().ok()).map(|h| h.0 as isize);
+                use windows::Win32::UI::WindowsAndMessaging::{GWL_EXSTYLE, WS_EX_TOOLWINDOW};
                 let mut hwnd = GetForegroundWindow();
                 
                 // Find the first meaningful window for overlap detection.
                 let mut check_count = 0;
+                let mut found_meaningful = false;
                 while !hwnd.is_invalid() && check_count < 15 {
                     let mut process_id = 0u32;
                     GetWindowThreadProcessId(hwnd, Some(&mut process_id));
@@ -1429,13 +1447,19 @@ pub fn setup_system_worker(app_handle: AppHandle) -> Sender<SystemCommand> {
 
                     let mut rect = RECT::default();
                     let has_valid_rect = GetWindowRect(hwnd, &mut rect).is_ok() && (rect.right - rect.left) > 0 && (rect.bottom - rect.top) > 0;
+                    let is_bg_toolwindow = check_count > 0
+                        && (GetWindowLongW(hwnd, GWL_EXSTYLE) as u32 & WS_EX_TOOLWINDOW.0) != 0;
                     
-                    if is_fern || !is_visible || is_iconic || is_cloaked || !has_valid_rect {
+                    if is_fern || !is_visible || is_iconic || is_cloaked || !has_valid_rect || is_bg_toolwindow {
                         hwnd = windows::Win32::UI::WindowsAndMessaging::GetWindow(hwnd, windows::Win32::UI::WindowsAndMessaging::GW_HWNDNEXT).unwrap_or_default();
                         check_count += 1;
                     } else {
+                        found_meaningful = true;
                         break;
                     }
+                }
+                if !found_meaningful {
+                    hwnd = HWND(std::ptr::null_mut());
                 }
 
                 let mut should_overlap = false;
@@ -1475,7 +1499,6 @@ pub fn setup_system_worker(app_handle: AppHandle) -> Sender<SystemCommand> {
                         current_is_fs = false;
                     } else {
                         // Current hwnd is now guaranteed to be visible, non-iconic and non-cloaked
-                        use windows::Win32::UI::WindowsAndMessaging::{GWL_EXSTYLE, WS_EX_TOOLWINDOW};
                         let ex_style = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
                         let style = GetWindowLongW(hwnd, GWL_STYLE) as u32;
                         
@@ -1559,13 +1582,13 @@ pub fn setup_system_worker(app_handle: AppHandle) -> Sender<SystemCommand> {
                     (Some((screen, _, _)), Some((mx, my, _, _))) => screen.left == mx && screen.top == my,
                     _ => true,
                 };
-                let focused_monitor = if hwnd.is_invalid() || is_desktop_focused {
-                    None
-                } else if is_known_shell {
-                    cursor_monitor_origin()
-                } else {
-                    monitor_rect_for_hwnd(hwnd).map(|(x, y, _, _)| (x, y))
-                };
+                let focused_monitor = resolve_focused_monitor(
+                    !hwnd.is_invalid(),
+                    is_desktop_focused,
+                    is_known_shell,
+                    if is_known_shell { cursor_monitor_origin() } else { None },
+                    fg_info.map(|(screen, _, _)| (screen.left, screen.top)),
+                );
                 let covers = scan_monitor_covers(my_process_id);
                 let fullscreen_monitors: Vec<(i32, i32)> = covers.iter().filter(|c| c.fullscreen).map(|c| c.origin).collect();
                 let unfocused_panel_overlap = |label: &str, is_dock: bool| -> Option<bool> {
@@ -1724,11 +1747,11 @@ pub fn setup_system_worker(app_handle: AppHandle) -> Sender<SystemCommand> {
                     last_dock_maximized = Some(should_maximized);
                 }
 
-                // Update full-screen visibility (hides TopBar/Corners)
-                if current_is_fs && last_visible {
+                // Update full-screen visibility (hides primary TopBar/Corners only when primary monitor is fullscreen)
+                if fullscreen_on_notch && last_visible {
                     let _ = tx_clone.send(SystemCommand::ToggleVisibility(false));
                     last_visible = false;
-                } else if !current_is_fs && !last_visible {
+                } else if !fullscreen_on_notch && !last_visible {
                     let _ = tx_clone.send(SystemCommand::ToggleVisibility(true));
                     last_visible = true;
                 }
@@ -2071,14 +2094,47 @@ pub fn now_ms() -> i64 {
     SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis() as i64
 }
 
+/// Pure predicate that distinguishes an active screen-capture overlay from a
+/// normal captioned/maximized Snipping Tool editor window.
+fn is_capture_overlay_window(exe_name: &str, style: u32, ex_style: u32, covers_monitor: bool) -> bool {
+    use windows::Win32::UI::WindowsAndMessaging::{WS_CAPTION, WS_EX_TOPMOST};
+    if !covers_monitor {
+        return false;
+    }
+    if exe_name.eq_ignore_ascii_case("screenclippinghost.exe") {
+        return true;
+    }
+    if exe_name.eq_ignore_ascii_case("snippingtool.exe")
+        || exe_name.eq_ignore_ascii_case("screensketch.exe")
+    {
+        return (style & WS_CAPTION.0) == 0 || (ex_style & WS_EX_TOPMOST.0) != 0;
+    }
+    false
+}
+
 /// True while a screen-capture UI (Windows Snipping Tool) has a visible window.
 /// the way even if the capture window isn't recognised as fullscreen.
 unsafe extern "system" fn capture_ui_enum_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
-    use windows::Win32::UI::WindowsAndMessaging::IsIconic;
-    use windows::Win32::UI::WindowsAndMessaging::GetWindowRect;
+    use windows::Win32::Graphics::Dwm::DWMWA_CLOAKED;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetWindowLongW, GetWindowRect, IsIconic, GWL_EXSTYLE, GWL_STYLE, WS_CAPTION, WS_EX_TOPMOST,
+    };
     let found = &mut *(lparam.0 as *mut bool);
     if *found { return BOOL(0); }
     if !IsWindowVisible(hwnd).as_bool() || IsIconic(hwnd).as_bool() { return BOOL(1); }
+
+    let mut cloaked: u32 = 0;
+    if DwmGetWindowAttribute(
+        hwnd,
+        DWMWA_CLOAKED,
+        &mut cloaked as *mut _ as *mut _,
+        std::mem::size_of::<u32>() as u32,
+    )
+    .is_ok()
+        && cloaked != 0
+    {
+        return BOOL(1);
+    }
 
     let mut rect = windows::Win32::Foundation::RECT::default();
     let covers_monitor = GetWindowRect(hwnd, &mut rect).is_ok()
@@ -2086,6 +2142,9 @@ unsafe extern "system" fn capture_ui_enum_proc(hwnd: HWND, lparam: LPARAM) -> BO
             (rect.right - rect.left) * 10 >= mw * 9 && (rect.bottom - rect.top) * 10 >= mh * 9
         });
     if !covers_monitor { return BOOL(1); }
+
+    let style = GetWindowLongW(hwnd, GWL_STYLE) as u32;
+    let ex_style = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
 
     let mut pid = 0u32;
     GetWindowThreadProcessId(hwnd, Some(&mut pid));
@@ -2096,7 +2155,7 @@ unsafe extern "system" fn capture_ui_enum_proc(hwnd: HWND, lparam: LPARAM) -> BO
             if QueryFullProcessImageNameW(handle, PROCESS_NAME_WIN32, windows::core::PWSTR(buf.as_mut_ptr()), &mut len).is_ok() {
                 let path = String::from_utf16_lossy(&buf[..len as usize]).to_lowercase();
                 let name = path.rsplit('\\').next().unwrap_or("");
-                if name == "snippingtool.exe" || name == "screenclippinghost.exe" || name == "screensketch.exe" {
+                if is_capture_overlay_window(name, style, ex_style, covers_monitor) {
                     *found = true;
                 }
             }
@@ -2104,7 +2163,7 @@ unsafe extern "system" fn capture_ui_enum_proc(hwnd: HWND, lparam: LPARAM) -> BO
         }
     }
 
-    if !*found {
+    if !*found && ((style & WS_CAPTION.0) == 0 || (ex_style & WS_EX_TOPMOST.0) != 0) {
         use windows::Win32::UI::WindowsAndMessaging::GetClassNameA;
         let mut class_buf = [0u8; 256];
         let len = GetClassNameA(hwnd, &mut class_buf);
@@ -2128,19 +2187,28 @@ fn apply_capture_ui_state(app: &AppHandle, active: bool) {
     if SHUTTING_DOWN.load(Ordering::Relaxed) {
         return;
     }
+    let should_show_notch = crate::state::SPLASH_FINISHED.load(Ordering::Relaxed)
+        && crate::utils::get_setting_str(app, "fern-notch-enabled").as_deref() != Some("false");
     for (label, win) in app.webview_windows() {
         if crate::state::is_notch_label(&label) {
             if active {
                 crate::utils::set_window_click_through(&win, true);
-                let _ = win.hide();
-            } else {
-                if crate::state::SPLASH_FINISHED.load(Ordering::Relaxed) {
-                    let _ = win.show();
+                if let Ok(hwnd) = win.hwnd() {
+                    unsafe {
+                        use windows::Win32::UI::WindowsAndMessaging::{ShowWindow, SW_HIDE};
+                        let _ = ShowWindow(hwnd, SW_HIDE);
+                    }
                 }
-                if crate::state::get_flag(crate::state::main_appbar_registered(), &label) {
-                    register_appbar(win.clone());
-                } else if let Ok(hwnd) = win.hwnd() {
-                    re_assert_topmost(hwnd);
+            } else {
+                position_notch_window(&win);
+                if should_show_notch {
+                    if let Ok(hwnd) = win.hwnd() {
+                        unsafe {
+                            use windows::Win32::UI::WindowsAndMessaging::{ShowWindow, SW_SHOWNOACTIVATE};
+                            let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+                        }
+                        re_assert_topmost(hwnd);
+                    }
                 }
             }
         } else if crate::state::is_dock_label(&label) && active {
@@ -2534,7 +2602,7 @@ unsafe fn process_mouse_move(app_handle: &AppHandle, cursor: windows::Win32::Fou
             let notch_cached_pos = MH_CACHED_NOTCH_MON_POS.lock().unwrap().unwrap_or((mon_x, mon_y));
             let notch_cached_size = MH_CACHED_NOTCH_MON_SIZE.lock().unwrap().unwrap_or((mon_w as u32, mon_h as u32));
             let (notch_mon_x, notch_mon_y) = notch_cached_pos;
-            let (notch_mon_w, _notch_mon_h) = (notch_cached_size.0 as i32, notch_cached_size.1 as i32);
+            let (notch_mon_w, notch_mon_h) = (notch_cached_size.0 as i32, notch_cached_size.1 as i32);
 
             let fg_fs = CURRENT_FOREGROUND_FULLSCREEN.load(Ordering::Relaxed);
             let dock_fg_fs = CURRENT_FOREGROUND_FULLSCREEN_ON_DOCK.load(Ordering::Relaxed);
@@ -2556,7 +2624,7 @@ unsafe fn process_mouse_move(app_handle: &AppHandle, cursor: windows::Win32::Fou
                                          cursor.y >= win_pos.y && cursor.y <= (win_pos.y + win_size.height as i32);
 
                         if in_window {
-                            if let Ok(region) = crate::state::dock_rects().try_lock() {
+                            if let Ok(region) = crate::state::dock_rects().lock() {
                                 if let Some(r) = region.get("dock").copied() {
                                     let scale = dock_win.scale_factor().unwrap_or(1.0);
                                     let pad_x = (5.0 * scale) as i32;
@@ -2566,10 +2634,11 @@ unsafe fn process_mouse_move(app_handle: &AppHandle, cursor: windows::Win32::Fou
                                     // its bounds once grabbed, so removing the edge-forced
                                     // interactivity doesn't reintroduce boundary flicker.
                                     let hyst = if MH_LAST_DOCK_IGNORE.load(Ordering::Relaxed) == 0 { (10.0 * scale) as i32 } else { 0 };
-                                    let rx = win_pos.x + (r.x as f64 * scale) as i32 - pad_x - hyst;
-                                    let ry = win_pos.y + (r.y as f64 * scale) as i32 - pad_y_top - hyst;
-                                    let rw = (r.width as f64 * scale) as i32 + (pad_x * 2) + (hyst * 2);
-                                    let rh = (r.height as f64 * scale) as i32 + pad_y_top + pad_y_bottom + (hyst * 2);
+                                    let (left, top, right, bottom) = css_rect_to_physical_bounds(win_pos.x, win_pos.y, r, scale);
+                                    let rx = left - pad_x - hyst;
+                                    let ry = top - pad_y_top - hyst;
+                                    let rw = (right - left) + (pad_x * 2) + (hyst * 2);
+                                    let rh = (bottom - top) + pad_y_top + pad_y_bottom + (hyst * 2);
                                     if cursor.x >= rx && cursor.x <= (rx + rw) && cursor.y >= ry && cursor.y <= (ry + rh) {
                                         is_click_interactive = true;
                                     }
@@ -2581,7 +2650,7 @@ unsafe fn process_mouse_move(app_handle: &AppHandle, cursor: windows::Win32::Fou
                             }
 
                             if !is_click_interactive && MENU_IS_OPEN.load(Ordering::Relaxed) {
-                                if let Ok(rect) = MENU_RECT.try_lock() {
+                                if let Ok(rect) = MENU_RECT.lock() {
                                     if let Some(r) = *rect {
                                         let scale = dock_win.scale_factor().unwrap_or(1.0);
                                         let rx = win_pos.x + (r.x as f64 * scale) as i32 - (5.0 * scale) as i32;
@@ -2685,8 +2754,10 @@ unsafe fn process_mouse_move(app_handle: &AppHandle, cursor: windows::Win32::Fou
                             cursor.x,
                             (60.0 * scale) as i32,
                         );
-                        let in_top_band = cursor.y <= (notch_mon_y + (8.0 * scale) as i32) &&
-                                          cursor.x >= notch_mon_x && cursor.x <= (notch_mon_x + notch_mon_w) && over_notch_span;
+                        let notch_top_y = notch_target_top(notch_mon_x, notch_mon_y, notch_mon_w, notch_mon_h);
+                        let in_top_band = (notch_top_y == notch_mon_y || cursor.y >= notch_top_y)
+                            && cursor.y <= (notch_top_y + (8.0 * scale) as i32)
+                            && cursor.x >= notch_mon_x && cursor.x <= (notch_mon_x + notch_mon_w) && over_notch_span;
                         let at_top_edge = top_edge_armed(app_handle, "main", in_top_band && !notch_fs, now);
 
                         if notch_fs {
@@ -2703,7 +2774,7 @@ unsafe fn process_mouse_move(app_handle: &AppHandle, cursor: windows::Win32::Fou
                         let main_rect_val = crate::state::main_window_rects().lock().ok().and_then(|m| m.get("main").copied());
 
                         if let Some((win_pos, _)) = main_rect_val {
-                            if let Ok(region) = crate::state::notch_rects().try_lock() {
+                            if let Ok(region) = crate::state::notch_rects().lock() {
                                 if let Some(r) = region.get("main").copied() {
                                     if r.width > 0 && r.height > 0 {
                                         let scale = main_win.scale_factor().unwrap_or(1.0);
@@ -3085,6 +3156,25 @@ fn scan_monitor_covers(own_pid: u32) -> Vec<MonitorCover> {
     scan.monitors
 }
 
+/// Monitor whose overlap and fullscreen state follow the foreground window rather than the
+/// z-order scan. Returns `None` unless the foreground window was actually measured (`fg_info`)
+/// or is a known shell surface, so transient/unmeasured windows never claim a monitor.
+fn resolve_focused_monitor(
+    hwnd_valid: bool,
+    is_desktop_focused: bool,
+    is_known_shell: bool,
+    cursor_origin: Option<(i32, i32)>,
+    fg_screen_origin: Option<(i32, i32)>,
+) -> Option<(i32, i32)> {
+    if !hwnd_valid || is_desktop_focused {
+        None
+    } else if is_known_shell {
+        cursor_origin
+    } else {
+        fg_screen_origin
+    }
+}
+
 /// Fullscreen state of the monitor at `origin`. The focused monitor keeps the foreground check;
 /// the others use the z-order scan.
 fn monitor_fullscreen(origin: (i32, i32), focused_monitor: Option<(i32, i32)>, focused_is_fullscreen: bool, covered: &[(i32, i32)]) -> bool {
@@ -3157,6 +3247,16 @@ fn caption_buttons_under(point: windows::Win32::Foundation::POINT) -> bool {
 }
 
 
+/// Converts a CSS-pixel rect inside a window at `(win_x, win_y)` to physical screen bounds
+/// `(left, top, right, bottom)`, rounding outwards so fractional DPI edges are never clipped.
+fn css_rect_to_physical_bounds(win_x: i32, win_y: i32, r: crate::types::IntRect, scale: f64) -> (i32, i32, i32, i32) {
+    let left = win_x + (r.x as f64 * scale).floor() as i32;
+    let top = win_y + (r.y as f64 * scale).floor() as i32;
+    let right = win_x + ((r.x + r.width) as f64 * scale).ceil() as i32;
+    let bottom = win_y + ((r.y + r.height) as f64 * scale).ceil() as i32;
+    (left, top, right, bottom)
+}
+
 fn hit_test_extra_dock_windows(app_handle: &AppHandle, cursor: windows::Win32::Foundation::POINT, now: i64, _fg_fs: bool) {
     let windows: Vec<(String, tauri::WebviewWindow)> = app_handle.webview_windows().into_iter()
         .filter(|(l, _)| is_dock_label(l) && crate::state::monitor_suffix(l).is_some())
@@ -3188,10 +3288,11 @@ fn hit_test_extra_dock_windows(app_handle: &AppHandle, cursor: windows::Win32::F
                     let pad_y_bottom = (5.0 * scale) as i32;
                     let last_ignore = crate::state::get_i32(crate::state::dock_extra_last_ignore(), &label, -1);
                     let hyst = if last_ignore == 0 { (10.0 * scale) as i32 } else { 0 };
-                    let rx = win_pos.x + (r.x as f64 * scale) as i32 - pad_x - hyst;
-                    let ry = win_pos.y + (r.y as f64 * scale) as i32 - pad_y_top - hyst;
-                    let rw = (r.width as f64 * scale) as i32 + (pad_x * 2) + (hyst * 2);
-                    let rh = (r.height as f64 * scale) as i32 + pad_y_top + pad_y_bottom + (hyst * 2);
+                    let (left, top, right, bottom) = css_rect_to_physical_bounds(win_pos.x, win_pos.y, r, scale);
+                    let rx = left - pad_x - hyst;
+                    let ry = top - pad_y_top - hyst;
+                    let rw = (right - left) + (pad_x * 2) + (hyst * 2);
+                    let rh = (bottom - top) + pad_y_top + pad_y_bottom + (hyst * 2);
                     if cursor.x >= rx && cursor.x <= (rx + rw) && cursor.y >= ry && cursor.y <= (ry + rh) {
                         is_click_interactive = true;
                     }
@@ -3200,7 +3301,7 @@ fn hit_test_extra_dock_windows(app_handle: &AppHandle, cursor: windows::Win32::F
             }
 
             if !is_click_interactive && MENU_IS_OPEN.load(Ordering::Relaxed) {
-                if let Ok(rect) = MENU_RECT.try_lock() {
+                if let Ok(rect) = MENU_RECT.lock() {
                     if let Some(r) = *rect {
                         let rx = win_pos.x + (r.x as f64 * scale) as i32 - (5.0 * scale) as i32;
                         let ry = win_pos.y + (r.y as f64 * scale) as i32 - (5.0 * scale) as i32;
@@ -3305,7 +3406,7 @@ fn hit_test_extra_notch_windows(app_handle: &AppHandle, cursor: windows::Win32::
             continue;
         }
         let Ok(hwnd) = main_win.hwnd() else { continue };
-        let Some((mon_x, mon_y, mon_w, _mon_h)) = monitor_rect_for_hwnd(hwnd) else { continue };
+        let Some((mon_x, mon_y, mon_w, mon_h)) = monitor_rect_for_hwnd(hwnd) else { continue };
 
         let scale = main_win.scale_factor().unwrap_or(1.0);
         let notch_fs = notch_suppressed(app_handle, &label);
@@ -3316,8 +3417,10 @@ fn hit_test_extra_notch_windows(app_handle: &AppHandle, cursor: windows::Win32::
             cursor.x,
             (60.0 * scale) as i32,
         );
-        let in_top_band = cursor.y <= (mon_y + (8.0 * scale) as i32) &&
-                          cursor.x >= mon_x && cursor.x <= (mon_x + mon_w) && over_notch_span;
+        let notch_top_y = notch_target_top(mon_x, mon_y, mon_w, mon_h);
+        let in_top_band = (notch_top_y == mon_y || cursor.y >= notch_top_y)
+            && cursor.y <= (notch_top_y + (8.0 * scale) as i32)
+            && cursor.x >= mon_x && cursor.x <= (mon_x + mon_w) && over_notch_span;
         let at_top_edge = top_edge_armed(app_handle, &label, in_top_band && !notch_fs, now);
 
         let mut is_notch_hovered = false;
@@ -3493,14 +3596,23 @@ pub fn trigger_app_scan() {
         }
 
         // Shortcut resolution uses IShellLinkW, which needs COM on this thread.
+        let mut resolved_target_names: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+        let mut shortcut_targets: std::collections::HashMap<String, String> = std::collections::HashMap::new();
         let shortcut_com_ok = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED).is_ok() };
         for dir in &start_menu_dirs {
             let root = std::path::Path::new(dir);
             if root.exists() {
-                collect_shortcuts(root, &mut apps, 0);
+                collect_shortcuts(root, &mut apps, &mut resolved_target_names, &mut shortcut_targets, 0);
             }
         }
         if shortcut_com_ok { unsafe { CoUninitialize(); } }
+
+        if let Ok(mut map) = RESOLVED_TARGET_NAMES
+            .get_or_init(|| std::sync::RwLock::new(std::collections::HashMap::new()))
+            .write()
+        {
+            *map = resolved_target_names;
+        }
 
         if let Some(c) = INSTALLED_APPS_CACHE.get() {
             if let Ok(mut lock) = c.lock() {
@@ -3597,13 +3709,80 @@ fn shortcut_display_name(path: &std::path::Path) -> String {
     fallback()
 }
 
-fn collect_shortcuts(dir: &std::path::Path, apps: &mut Vec<AppInfo>, depth: i32) {
+static RESOLVED_TARGET_NAMES: std::sync::OnceLock<std::sync::RwLock<std::collections::HashMap<String, String>>> =
+    std::sync::OnceLock::new();
+
+fn normalize_exe_path(path: &str) -> String {
+    path.trim().replace('/', "\\").to_lowercase()
+}
+
+fn exe_parent_dir(path: &str) -> Option<String> {
+    let norm = normalize_exe_path(path);
+    if !norm.ends_with(".exe") {
+        return None;
+    }
+    let idx = norm.rfind('\\')?;
+    Some(norm[..idx].to_string())
+}
+
+fn is_duplicate_shortcut(
+    existing: &AppInfo,
+    existing_resolved_target: Option<&str>,
+    name: &str,
+    path_str: &str,
+    is_pwa: bool,
+    executable: Option<&str>,
+    resolved_target: Option<&str>,
+) -> bool {
+    if existing.name.eq_ignore_ascii_case(name) || existing.path.eq_ignore_ascii_case(path_str) {
+        return true;
+    }
+    if is_pwa {
+        return false;
+    }
+    let Some(exe) = executable else {
+        return false;
+    };
+    if is_shared_host_exe(exe) {
+        return false;
+    }
+    let same_exe = existing
+        .executable
+        .as_deref()
+        .is_some_and(|e| e.eq_ignore_ascii_case(exe));
+    if !same_exe {
+        return false;
+    }
+    let existing_target = existing_resolved_target.or_else(|| {
+        existing
+            .path
+            .to_ascii_lowercase()
+            .ends_with(".exe")
+            .then_some(existing.path.as_str())
+    });
+    match (existing_target, resolved_target) {
+        (Some(et), Some(rt)) => {
+            normalize_exe_path(et) == normalize_exe_path(rt)
+                || exe_parent_dir(et)
+                    .is_some_and(|ed| exe_parent_dir(rt).as_deref() == Some(ed.as_str()))
+        }
+        _ => false,
+    }
+}
+
+fn collect_shortcuts(
+    dir: &std::path::Path,
+    apps: &mut Vec<AppInfo>,
+    resolved_target_names: &mut std::collections::HashMap<String, String>,
+    shortcut_targets: &mut std::collections::HashMap<String, String>,
+    depth: i32,
+) {
     if depth > 3 { return; }
     if let Ok(entries) = std::fs::read_dir(dir) {
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_dir() {
-                collect_shortcuts(&path, apps, depth + 1);
+                collect_shortcuts(&path, apps, resolved_target_names, shortcut_targets, depth + 1);
             } else if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("lnk")) {
                 let name = shortcut_display_name(&path);
                 if name.is_empty() || is_helper_name(&name) || name.starts_with("Install") { continue; }
@@ -3612,30 +3791,46 @@ fn collect_shortcuts(dir: &std::path::Path, apps: &mut Vec<AppInfo>, depth: i32)
                 // The target goes in as the exe name so pins still match running windows.
                 let path_str = path.to_string_lossy().to_string();
                 let resolved = crate::utils::resolve_shortcut(&path_str);
+                let resolved_target = resolved.as_ref().map(|(t, _)| t.as_str());
                 let args = resolved.as_ref().map(|(_, a)| a.trim().to_string()).filter(|a| !a.is_empty());
                 let is_pwa = args.as_deref().is_some_and(|a| a.contains("--app-id=") || a.contains("--app="));
                 let executable = if is_pwa {
                     None
                 } else {
-                    resolved.and_then(|(target, _args)| {
-                        let file = std::path::Path::new(&target).file_name().and_then(|n| n.to_str())?.to_string();
+                    resolved_target.and_then(|target| {
+                        let file = std::path::Path::new(target).file_name().and_then(|n| n.to_str())?.to_string();
                         // UWP shortcuts launch explorer.exe with shell:AppsFolder, storing that would match File Explorer windows.
                         if file.eq_ignore_ascii_case("explorer.exe") { None } else { Some(file) }
                     })
                 };
 
+                if !is_pwa {
+                    if let (Some(exe), Some(target)) = (executable.as_deref(), resolved_target) {
+                        if !is_shared_host_exe(exe) {
+                            let norm_target = normalize_exe_path(target);
+                            if norm_target.ends_with(".exe") {
+                                resolved_target_names.entry(norm_target).or_insert_with(|| name.clone());
+                            }
+                        }
+                    }
+                }
+
                 let duplicate = apps.iter().any(|a| {
-                    a.name.eq_ignore_ascii_case(&name)
-                        || a.path.eq_ignore_ascii_case(&path_str)
-                        || (!is_pwa
-                            && executable.as_deref().is_some_and(|exe| {
-                                !is_shared_host_exe(exe)
-                                    && a.executable
-                                        .as_deref()
-                                        .is_some_and(|existing| existing.eq_ignore_ascii_case(exe))
-                            }))
+                    let existing_target = shortcut_targets.get(&a.path.to_lowercase()).map(|s| s.as_str());
+                    is_duplicate_shortcut(
+                        a,
+                        existing_target,
+                        &name,
+                        &path_str,
+                        is_pwa,
+                        executable.as_deref(),
+                        resolved_target,
+                    )
                 });
                 if !duplicate {
+                    if let Some(target) = resolved_target {
+                        shortcut_targets.insert(path_str.to_lowercase(), target.to_string());
+                    }
                     apps.push(AppInfo {
                         name,
                         path: path_str,
@@ -3699,60 +3894,127 @@ pub fn sync_overlays(app: &AppHandle) {
     }
 }
 
+/// Computes the vertical top coordinate for a notch window on a monitor.
+/// When `fern-notch-respect-workarea` is disabled (default), returns `monitor_pos_y` unchanged.
+/// When enabled, returns `rcWork.top.max(monitor_pos_y)` so the notch sits below top status bars
+/// such as YASB or Zebar instead of overlapping them.
+pub fn notch_target_top(monitor_pos_x: i32, monitor_pos_y: i32, monitor_w: i32, monitor_h: i32) -> i32 {
+    if !crate::utils::setting_flag("fern-notch-respect-workarea") {
+        return monitor_pos_y;
+    }
+    unsafe {
+        use windows::Win32::Foundation::POINT;
+        use windows::Win32::Graphics::Gdi::{
+            GetMonitorInfoW, MonitorFromPoint, MONITORINFO, MONITOR_DEFAULTTONEAREST,
+        };
+        let pt = POINT {
+            x: monitor_pos_x + (monitor_w / 2),
+            y: monitor_pos_y + (monitor_h / 2),
+        };
+        let h_monitor = MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST);
+        let mut mi = MONITORINFO {
+            cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+            ..Default::default()
+        };
+        if GetMonitorInfoW(h_monitor, &mut mi).as_bool() {
+            return mi.rcWork.top.max(monitor_pos_y);
+        }
+    }
+    monitor_pos_y
+}
+
+/// Ensures a notch window has `WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE`, is positioned at
+/// `(m_pos.x, target_top, m_size.width, ph)` without activating it, and updates `main_window_rects`.
+/// Returns `true` if a matching monitor was found and positioning was applied/verified.
+pub fn position_notch_window(window: &tauri::WebviewWindow) -> bool {
+    let label = window.label().to_string();
+    let Some(monitor) = crate::monitors::monitor_for_window_label(
+        window.app_handle(),
+        crate::types::WindowKind::Notch,
+        &label,
+    ) else {
+        return false;
+    };
+    let Ok(hwnd) = window.hwnd() else {
+        return false;
+    };
+    let m_size = monitor.size();
+    let m_pos = monitor.position();
+    let scale = monitor.scale_factor();
+    let fern_scale = crate::utils::get_fern_scale(window.app_handle());
+    let ph = ((640.0 * fern_scale) * scale) as i32;
+    let target_left = m_pos.x;
+    let target_top = notch_target_top(m_pos.x, m_pos.y, m_size.width as i32, m_size.height as i32);
+    let target_width = m_size.width as i32;
+
+    unsafe {
+        use windows::Win32::Foundation::RECT;
+        use windows::Win32::UI::WindowsAndMessaging::{
+            GetWindowLongPtrW, GetWindowRect, SetWindowLongPtrW, SetWindowPos, GWL_EXSTYLE,
+            SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOZORDER, WS_EX_NOACTIVATE as WS_EX_NA,
+            WS_EX_TOOLWINDOW,
+        };
+
+        let mut ex_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as usize;
+        ex_style |= (WS_EX_TOOLWINDOW.0 | WS_EX_NA.0) as usize;
+        let _ = SetWindowLongPtrW(hwnd, GWL_EXSTYLE, ex_style as isize);
+
+        let mut current_rect = RECT::default();
+        let mut already_positioned = false;
+        if GetWindowRect(hwnd, &mut current_rect).is_ok() {
+            let current_width = current_rect.right - current_rect.left;
+            let current_height = current_rect.bottom - current_rect.top;
+            if current_rect.left == target_left
+                && current_rect.top == target_top
+                && current_width == target_width
+                && current_height == ph
+            {
+                already_positioned = true;
+            }
+        }
+
+        if !already_positioned {
+            let _ = SetWindowPos(
+                hwnd,
+                None,
+                target_left,
+                target_top,
+                target_width,
+                ph,
+                SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
+            );
+        }
+    }
+
+    if let Ok(mut map) = crate::state::main_window_rects().lock() {
+        map.insert(
+            label,
+            (
+                tauri::PhysicalPosition::new(target_left, target_top),
+                tauri::PhysicalSize::new(target_width as u32, ph.max(0) as u32),
+            ),
+        );
+    }
+
+    true
+}
+
 pub fn register_appbar(window: tauri::WebviewWindow) {
     let label = window.label().to_string();
     if label != "main" && label != "dock" && !crate::state::SPLASH_FINISHED.load(Ordering::Relaxed) {
         return;
     }
-    if let Some(monitor) = crate::monitors::monitor_for_window_label(window.app_handle(), crate::types::WindowKind::Notch, &label) {
-        let m_size = monitor.size();
-        let m_pos = monitor.position();
-        let hwnd = window.hwnd().unwrap();
-        let scale = monitor.scale_factor();
-        let fern_scale = crate::utils::get_fern_scale(window.app_handle());
-        let ph = ((640.0 * fern_scale) * scale) as i32;
-
-        unsafe {
-            use windows::Win32::UI::WindowsAndMessaging::{SetWindowPos, GetWindowRect, SWP_NOZORDER, SWP_NOACTIVATE, GetWindowLongPtrW, SetWindowLongPtrW, GWL_EXSTYLE, WS_EX_TOOLWINDOW, WS_EX_NOACTIVATE as WS_EX_NA, SWP_FRAMECHANGED};
-            use windows::Win32::Foundation::RECT;
-
-            // Set styles first
-            let mut ex_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as usize;
-            ex_style |= (WS_EX_TOOLWINDOW.0 | WS_EX_NA.0) as usize;
-            let _ = SetWindowLongPtrW(hwnd, GWL_EXSTYLE, ex_style as isize);
-
-            crate::state::set_flag(crate::state::main_appbar_registered(), &label, true);
-
-            let target_left = m_pos.x;
-            let target_top = m_pos.y;
-            let target_width = m_size.width as i32;
-
-            let mut current_rect = RECT::default();
-            let mut already_positioned = false;
-            if GetWindowRect(hwnd, &mut current_rect).is_ok() {
-                let current_width = current_rect.right - current_rect.left;
-                let current_height = current_rect.bottom - current_rect.top;
-                if current_rect.left == target_left
-                    && current_rect.top == target_top
-                    && current_width == target_width
-                    && current_height == ph
-                {
-                    already_positioned = true;
-                }
-            }
-
-            if !already_positioned {
-                let _ = SetWindowPos(hwnd, None, target_left, target_top, target_width, ph, SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
-            }
-
+    if position_notch_window(&window) {
+        crate::state::set_flag(crate::state::main_appbar_registered(), &label, true);
+        if let Ok(hwnd) = window.hwnd() {
             // Re-assert topmost after repositioning — use re_assert_topmost instead of
             // set_always_on_top(true) to include SWP_NOACTIVATE and re-stamp WS_EX_NOACTIVATE.
             // to blank/hide when other windows were minimized or closed.
             re_assert_topmost(hwnd);
+        }
 
-            if !window.is_visible().unwrap_or(false) {
-                let _ = window.show();
-            }
+        if !window.is_visible().unwrap_or(false) {
+            let _ = window.show();
         }
     } else {
         let w = window.clone();
@@ -3799,8 +4061,8 @@ fn register_dock_appbar_inner(window: tauri::WebviewWindow, attempt: i32) {
         }
 
         let pr = ((56.0 * fern_scale) * scale) as i32;
+        let reserve_space = crate::utils::setting_flag_default_true("fern-dock-reserve-space");
 
-        
         unsafe {
             use windows::Win32::UI::WindowsAndMessaging::{SetWindowPos, GetWindowRect, SWP_NOZORDER, SWP_NOACTIVATE, GetWindowLongPtrW, SetWindowLongPtrW, GWL_EXSTYLE, WS_EX_TOOLWINDOW, WS_EX_NOACTIVATE as WS_EX_NA, SWP_FRAMECHANGED};
             use windows::Win32::Foundation::RECT;
@@ -3814,35 +4076,42 @@ fn register_dock_appbar_inner(window: tauri::WebviewWindow, attempt: i32) {
             // Hide native taskbar first to free up space
             set_taskbar_visibility(false, false);
 
-            let mut abd = APPBARDATA { cbSize: std::mem::size_of::<APPBARDATA>() as u32, hWnd: hwnd, ..Default::default() };
+            let (final_left, final_y, final_width) = if reserve_space {
+                let mut abd = APPBARDATA { cbSize: std::mem::size_of::<APPBARDATA>() as u32, hWnd: hwnd, ..Default::default() };
 
-            if !crate::state::get_flag(crate::state::dock_appbar_registered(), &label) {
-                SHAppBarMessage(ABM_NEW, &mut abd);
-                crate::state::set_flag(crate::state::dock_appbar_registered(), &label, true);
-            }
+                if !crate::state::get_flag(crate::state::dock_appbar_registered(), &label) {
+                    SHAppBarMessage(ABM_NEW, &mut abd);
+                    crate::state::set_flag(crate::state::dock_appbar_registered(), &label, true);
+                }
 
-            abd.uEdge = ABE_BOTTOM;
-            abd.rc = RECT { 
-                left: m_pos.x, 
-                top: m_pos.y + m_size.height as i32 - pr, 
-                right: m_pos.x + m_size.width as i32, 
-                bottom: m_pos.y + m_size.height as i32 
+                abd.uEdge = ABE_BOTTOM;
+                abd.rc = RECT { 
+                    left: m_pos.x, 
+                    top: m_pos.y + m_size.height as i32 - pr, 
+                    right: m_pos.x + m_size.width as i32, 
+                    bottom: m_pos.y + m_size.height as i32 
+                };
+                
+                SHAppBarMessage(ABM_QUERYPOS, &mut abd);
+                SHAppBarMessage(ABM_SETPOS, &mut abd);
+                
+                // Critical: Force the window to the actual bottom of the screen, 
+                // ignoring what ABM_SETPOS might have tried to "correct" (like stacking on invisible taskbar)
+                (abd.rc.left, m_pos.y + m_size.height as i32 - ph, abd.rc.right - abd.rc.left)
+            } else {
+                if crate::state::get_flag(crate::state::dock_appbar_registered(), &label) {
+                    unregister_appbar_native(hwnd);
+                    crate::state::set_flag(crate::state::dock_appbar_registered(), &label, false);
+                }
+                (m_pos.x, m_pos.y + m_size.height as i32 - ph, m_size.width as i32)
             };
-            
-            SHAppBarMessage(ABM_QUERYPOS, &mut abd);
-            SHAppBarMessage(ABM_SETPOS, &mut abd);
-            
-            // Critical: Force the window to the actual bottom of the screen, 
-            // ignoring what ABM_SETPOS might have tried to "correct" (like stacking on invisible taskbar)
-            let final_y = m_pos.y + m_size.height as i32 - ph;
-            let final_width = abd.rc.right - abd.rc.left;
             
             let mut current_rect = RECT::default();
             let mut already_positioned = false;
             if GetWindowRect(hwnd, &mut current_rect).is_ok() {
                 let current_width = current_rect.right - current_rect.left;
                 let current_height = current_rect.bottom - current_rect.top;
-                if current_rect.left == abd.rc.left 
+                if current_rect.left == final_left 
                     && current_rect.top == final_y 
                     && current_width == final_width 
                     && current_height == ph 
@@ -3852,7 +4121,7 @@ fn register_dock_appbar_inner(window: tauri::WebviewWindow, attempt: i32) {
             }
             
             if !already_positioned {
-                let _ = SetWindowPos(hwnd, None, abd.rc.left, final_y, final_width, ph, SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+                let _ = SetWindowPos(hwnd, None, final_left, final_y, final_width, ph, SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
             }
 
             // Re-assert topmost — same reason as register_appbar.
@@ -4040,9 +4309,19 @@ pub unsafe extern "system" fn enum_windows_proc(hwnd: HWND, lparam: LPARAM) -> B
                     } else if name.eq_ignore_ascii_case("explorer") {
                         crate::taskbar_pins::shell_app_name("Microsoft.Windows.Explorer", "File Explorer")
                     } else {
-                        let from_start_menu = INSTALLED_APPS_CACHE.get().and_then(|c| c.lock().ok()).and_then(|apps| {
-                            apps.iter().find(|a| a.path.eq_ignore_ascii_case(&path)).map(|a| a.name.clone())
-                        });
+                        let from_start_menu = INSTALLED_APPS_CACHE
+                            .get()
+                            .and_then(|c| c.lock().ok())
+                            .and_then(|apps| {
+                                apps.iter().find(|a| a.path.eq_ignore_ascii_case(&path)).map(|a| a.name.clone())
+                            })
+                            .or_else(|| {
+                                let norm = normalize_exe_path(&path);
+                                RESOLVED_TARGET_NAMES
+                                    .get()
+                                    .and_then(|m| m.read().ok())
+                                    .and_then(|m| m.get(&norm).cloned())
+                            });
                         from_start_menu
                             .or_else(|| crate::utils::exe_description(&path))
                             .unwrap_or_else(|| name.clone())
@@ -4183,6 +4462,7 @@ pub fn wire_window_events(app: &AppHandle, window: &tauri::WebviewWindow, kind: 
                 sync_overlays(&app_for_events);
             }
             tauri::WindowEvent::ScaleFactorChanged { .. } => {
+                u();
                 match kind {
                     crate::types::WindowKind::Notch => {
                         let w = win_for_events.clone();
@@ -4256,6 +4536,7 @@ pub fn create_monitor_window(app: &AppHandle, kind: crate::types::WindowKind, la
 
         let _ = window.set_ignore_cursor_events(true);
         wire_window_events(&app, &window, kind, true);
+        watch_webview_process(&app, &window);
 
         // Extra monitors wait for the splash
         if !crate::state::SPLASH_FINISHED.load(Ordering::Relaxed) {
@@ -4286,6 +4567,8 @@ fn reposition_all_windows(app_handle: &AppHandle) {
         if crate::state::is_notch_label(&label) {
             if crate::state::get_flag(crate::state::main_appbar_registered(), &label) {
                 register_appbar(win);
+            } else if crate::utils::setting_flag("fern-notch-respect-workarea") {
+                position_notch_window(&win);
             }
         } else if crate::state::is_dock_label(&label) {
             // Only reposition the dock if it's enabled in settings.
@@ -4471,6 +4754,22 @@ unsafe extern "system" fn display_monitor_proc(
             DefWindowProcW(hwnd, msg, wparam, lparam)
         }
         WM_SETTINGCHANGE => {
+            const SPI_SETWORKAREA: usize = 0x002F;
+            static LAST_WORKAREA_CHANGE_MS: AtomicI64 = AtomicI64::new(0);
+            if wparam.0 == SPI_SETWORKAREA && crate::utils::setting_flag("fern-notch-respect-workarea") {
+                let now = get_now_ms();
+                let last = LAST_WORKAREA_CHANGE_MS.load(Ordering::Relaxed);
+                if now - last > 300 {
+                    LAST_WORKAREA_CHANGE_MS.store(now, Ordering::Relaxed);
+                    if let Some(app_handle) = DISPLAY_MONITOR_HANDLE.get() {
+                        let ah = app_handle.clone();
+                        tauri::async_runtime::spawn(async move {
+                            tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+                            reposition_all_windows(&ah);
+                        });
+                    }
+                }
+            }
             let area = if lparam.0 != 0 {
                 unsafe { windows::core::PCWSTR(lparam.0 as *const u16).to_string() }.unwrap_or_default()
             } else {
@@ -5013,6 +5312,22 @@ mod tests {
     }
 
     #[test]
+    fn resolve_focused_monitor_never_claims_monitor_for_unmeasured_window() {
+        use super::resolve_focused_monitor;
+
+        // Invalid HWND -> None (all monitors fall back to z-order scan).
+        assert_eq!(resolve_focused_monitor(false, false, false, Some((0, 0)), Some((0, 0))), None);
+        // Desktop focused -> None.
+        assert_eq!(resolve_focused_monitor(true, true, true, Some((0, 0)), Some((0, 0))), None);
+        // Known shell (Start/Taskbar) -> cursor monitor origin.
+        assert_eq!(resolve_focused_monitor(true, false, true, Some((1920, 0)), None), Some((1920, 0)));
+        // Transient/unmeasured window (fg_info is None) -> None (must NOT claim primary (0, 0)).
+        assert_eq!(resolve_focused_monitor(true, false, false, Some((0, 0)), None), None);
+        // Measured foreground window -> its monitor origin.
+        assert_eq!(resolve_focused_monitor(true, false, false, Some((0, 0)), Some((1920, 0))), Some((1920, 0)));
+    }
+
+    #[test]
     fn window_over_the_panel_strip_counts_as_overlap_on_any_monitor() {
         use super::{rect_overlaps_dock, rect_overlaps_notch};
         use windows::Win32::Foundation::RECT;
@@ -5030,5 +5345,115 @@ mod tests {
         let lower = RECT { left: 2560 + 1200, top: 300, right: 2560 + 1800, bottom: 900 };
         assert!(rect_overlaps_notch(2560, 0, at_top, notch, 1.0));
         assert!(!rect_overlaps_notch(2560, 0, lower, notch, 1.0));
+    }
+
+    #[test]
+    fn css_rect_to_physical_bounds_rounds_outwards_at_fractional_dpi() {
+        use super::css_rect_to_physical_bounds;
+
+        // 1.25x scale: x=10 -> 12.5 (floor 12), right=111 -> 138.75 (ceil 139),
+        // y=1 -> 1.25 (floor 1), bottom=46 -> 57.5 (ceil 58).
+        let r125 = crate::types::IntRect { x: 10, y: 1, width: 101, height: 45 };
+        assert_eq!(css_rect_to_physical_bounds(100, 200, r125, 1.25), (112, 201, 239, 258));
+
+        // 1.5x scale: x=251 -> 376.5 (floor 376), right=852 -> 1278.0 (ceil 1278),
+        // y=15 -> 22.5 (floor 22), bottom=76 -> 114.0 (ceil 114).
+        // Truncating x and width separately would have clipped right to 1277 and bottom to 1013.
+        let r150 = crate::types::IntRect { x: 251, y: 15, width: 601, height: 61 };
+        assert_eq!(css_rect_to_physical_bounds(0, 900, r150, 1.5), (376, 922, 1278, 1014));
+    }
+
+    #[test]
+    fn shortcut_dedup_preserves_distinct_apps_sharing_executable_name() {
+        use super::is_duplicate_shortcut;
+        use crate::types::AppInfo;
+
+        let firefox = AppInfo {
+            name: "Firefox".to_string(),
+            path: r"C:\Program Files\Mozilla Firefox\firefox.exe".to_string(),
+            icon: None,
+            is_running: false,
+            hwnd: None,
+            executable: Some("firefox.exe".to_string()),
+            all_hwnds: None,
+            args: None,
+        };
+
+        // Distinct app sharing firefox.exe in another directory must NOT be deduplicated.
+        assert!(!is_duplicate_shortcut(
+            &firefox,
+            None,
+            "Tor Browser",
+            r"C:\Users\u\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Tor Browser.lnk",
+            false,
+            Some("firefox.exe"),
+            Some(r"C:\Users\u\Desktop\Tor Browser\Browser\firefox.exe"),
+        ));
+
+        // Same resolved target path with a different shortcut display name IS a duplicate.
+        assert!(is_duplicate_shortcut(
+            &firefox,
+            None,
+            "Mozilla Firefox",
+            r"C:\ProgramData\Microsoft\Windows\Start Menu\Programs\Mozilla Firefox.lnk",
+            false,
+            Some("firefox.exe"),
+            Some(r"C:\Program Files\Mozilla Firefox\firefox.exe"),
+        ));
+
+        // Same display name IS a duplicate even without a resolved target.
+        assert!(is_duplicate_shortcut(
+            &firefox,
+            None,
+            "Firefox",
+            r"C:\ProgramData\Microsoft\Windows\Start Menu\Programs\Firefox.lnk",
+            false,
+            Some("firefox.exe"),
+            None,
+        ));
+
+        // Two .lnk shortcuts pointing to the same target are deduplicated via existing_resolved_target.
+        let tor_lnk = AppInfo {
+            name: "Tor Browser".to_string(),
+            path: r"C:\Users\u\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Tor Browser.lnk".to_string(),
+            icon: None,
+            is_running: false,
+            hwnd: None,
+            executable: Some("firefox.exe".to_string()),
+            all_hwnds: None,
+            args: None,
+        };
+        assert!(is_duplicate_shortcut(
+            &tor_lnk,
+            Some(r"C:\Users\u\Desktop\Tor Browser\Browser\firefox.exe"),
+            "Start Tor Browser",
+            r"C:\ProgramData\Microsoft\Windows\Start Menu\Programs\Start Tor Browser.lnk",
+            false,
+            Some("firefox.exe"),
+            Some(r"C:\Users\u\Desktop\Tor Browser\Browser\firefox.exe"),
+        ));
+    }
+
+    #[test]
+    fn capture_overlay_predicate_distinguishes_overlay_from_editor() {
+        use super::is_capture_overlay_window;
+        use windows::Win32::UI::WindowsAndMessaging::{WS_CAPTION, WS_EX_TOPMOST};
+
+        // ScreenClippingHost.exe covering the monitor is always a capture overlay.
+        assert!(is_capture_overlay_window("screenclippinghost.exe", WS_CAPTION.0, 0, true));
+        assert!(!is_capture_overlay_window("screenclippinghost.exe", 0, WS_EX_TOPMOST.0, false));
+
+        // Borderless or topmost SnippingTool.exe covering the monitor is a capture overlay.
+        assert!(is_capture_overlay_window("snippingtool.exe", 0, 0, true));
+        assert!(is_capture_overlay_window("snippingtool.exe", WS_CAPTION.0, WS_EX_TOPMOST.0, true));
+
+        // Normal captioned maximized SnippingTool.exe / ScreenSketch.exe editor must NOT trigger.
+        assert!(!is_capture_overlay_window("snippingtool.exe", WS_CAPTION.0, 0, true));
+        assert!(!is_capture_overlay_window("screensketch.exe", WS_CAPTION.0, 0, true));
+        assert!(is_capture_overlay_window("screensketch.exe", 0, 0, true));
+
+        // Non-capture apps must never match, even when borderless and topmost.
+        assert!(!is_capture_overlay_window("notepad.exe", 0, WS_EX_TOPMOST.0, true));
+        assert!(!is_capture_overlay_window("chrome.exe", 0, WS_EX_TOPMOST.0, true));
     }
 }

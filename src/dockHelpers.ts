@@ -58,11 +58,38 @@ export function isAppHiddenInDock(
   });
 }
 
+export function isFullExePath(path: string): boolean {
+  const normalized = path.trim().toLowerCase().replace(/\\/g, '/');
+  return normalized.includes('/') && normalized.endsWith('.exe');
+}
+
+export function exeParentFamily(path: string): string {
+  const normalized = path.trim().toLowerCase().replace(/\\/g, '/');
+  const lastSlash = normalized.lastIndexOf('/');
+  if (lastSlash === -1) return '';
+  const parent = normalized.slice(0, lastSlash);
+  return parent.replace(/\/app-\d+(?:\.\d+)*(?:[-+._a-z0-9]*)?$/i, '');
+}
+
+export function areDistinctExeInstalls(pathA: string, pathB: string): boolean {
+  if (!isFullExePath(pathA) || !isFullExePath(pathB)) return false;
+  return exeParentFamily(pathA) !== exeParentFamily(pathB);
+}
+
+function isAumidPath(path: string): boolean {
+  const trimmed = path.trim();
+  if (!trimmed) return false;
+  return trimmed.includes('!') || (!trimmed.includes('/') && !trimmed.includes('\\'));
+}
+
 export function hideIdentifierForApp(
   app: DockAppIdentity,
   itemKey: string,
   isBrowserHostApp: boolean
 ): string {
   if (isBrowserHostApp) return itemKey;
+  if (app.path && (isFullExePath(app.path) || isAumidPath(app.path))) {
+    return app.path;
+  }
   return app.executable || app.path || app.name;
 }

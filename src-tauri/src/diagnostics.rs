@@ -207,6 +207,14 @@ pub fn build_report(app: &AppHandle) -> String {
     let now = crate::services::now_ms();
     let last = HOOK_LAST_EVENT_MS.load(Ordering::Relaxed);
     let hook_age = if last == 0 { "never".to_string() } else { format!("{}ms ago", now - last) };
+    let webview_gpu = if std::env::var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS")
+        .map(|v| v.contains("--disable-gpu"))
+        .unwrap_or(false)
+    {
+        "disabled"
+    } else {
+        "enabled"
+    };
 
     let report = format!(
         "Fern diagnostics\n\
@@ -214,6 +222,7 @@ pub fn build_report(app: &AppHandle) -> String {
          Fern: {version}\n\
          Windows: {windows}\n\
          WebView2: {webview}\n\
+         WebView2 GPU: {webview_gpu}\n\
          GPU: {gpu}\n\
          Executable: {exe}\n\
          Elevated: {elevated}\n\
@@ -226,6 +235,7 @@ pub fn build_report(app: &AppHandle) -> String {
         version = env!("CARGO_PKG_VERSION"),
         windows = windows_version(),
         webview = tauri::webview_version().unwrap_or_else(|_| "unknown".into()),
+        webview_gpu = webview_gpu,
         gpu = gpu_names(),
         exe = exe,
         elevated = crate::native_uninstall::is_elevated(),

@@ -202,6 +202,9 @@ export function useSettings() {
   const [dockAdaptive, setDockAdaptive] = useState(
     () => localStorage.getItem("fern-dock-adaptive") === "true"
   );
+  const [dockReserveSpace, setDockReserveSpace] = useState(
+    () => localStorage.getItem("fern-dock-reserve-space") !== "false"
+  );
   const [dockFloatGap, setDockFloatGap] = useState(
     () => localStorage.getItem("fern-dock-float-gap") ?? "0"
   );
@@ -231,6 +234,9 @@ export function useSettings() {
   );
   const [notchFloatGap, setNotchFloatGap] = useState(
     () => localStorage.getItem("fern-notch-float-gap") ?? "0"
+  );
+  const [notchRespectWorkArea, setNotchRespectWorkArea] = useState(
+    () => localStorage.getItem("fern-notch-respect-workarea") === "true"
   );
   const [dockMonitorMode, setDockMonitorMode] = useState<MonitorMode>(
     () => (localStorage.getItem("fern-dock-monitor-mode") as MonitorMode) || "primary"
@@ -371,6 +377,7 @@ export function useSettings() {
       apply(getVal("fern-dock-icon-only"), setDockIconOnly, readBool);
       apply(getVal("fern-start-icon"), setStartIcon, (v) => v);
       apply(getVal("fern-dock-adaptive"), setDockAdaptive, readBool);
+      apply(getVal("fern-dock-reserve-space"), setDockReserveSpace, (v) => String(v) !== "false");
       apply(getVal("fern-dock-float-gap"), setDockFloatGap, (v) => String(v ?? "0"));
       apply(getVal("fern-dock-hide-on-start"), setDockHideOnStart, (v) => String(v) !== "false");
       apply(getVal("fern-dock-win-number-enabled"), setDockWinNumberEnabled, readBool);
@@ -383,6 +390,7 @@ export function useSettings() {
       apply(getVal("fern-notch-mode"), setNotchMode, (v) => (v === "auto-hide" ? "smart" : v));
       apply(getVal("fern-notch-enabled"), setNotchEnabled, (v) => String(v) !== "false");
       apply(getVal("fern-notch-float-gap"), setNotchFloatGap, (v) => String(v ?? "0"));
+      apply(getVal("fern-notch-respect-workarea"), setNotchRespectWorkArea, readBool);
       apply(getVal("fern-dock-mode"), setDockMode, (v) => (v === "auto-hide" ? "smart" : v));
 
       apply(getVal("fern-dock-monitor-mode"), setDockMonitorMode, (v) => v as MonitorMode);
@@ -482,6 +490,7 @@ export function useSettings() {
     "fern-dock-enabled": setDockEnabled,
     "fern-notch-enabled": (v) => setNotchEnabled(String(v) !== "false"),
     "fern-notch-float-gap": (v) => setNotchFloatGap(String(v ?? "0")),
+    "fern-notch-respect-workarea": (v) => setNotchRespectWorkArea(v === true || v === "true"),
     "fern-dock-tray-enabled": (v) => setDockTray(v !== false && v !== "false"),
     "fern-dock-taskview-enabled": setDockTaskView,
     "fern-dock-show-desktop-corner": setDockShowDesktop,
@@ -499,6 +508,7 @@ export function useSettings() {
     "fern-dock-icon-only": setDockIconOnly,
     "fern-start-icon": setStartIcon,
     "fern-dock-adaptive": setDockAdaptive,
+    "fern-dock-reserve-space": (v) => setDockReserveSpace(v !== false && v !== "false"),
     "fern-dock-float-gap": (v) => setDockFloatGap(String(v ?? "0")),
     "fern-dock-hide-on-start": (v) => setDockHideOnStart(v !== false && v !== "false"),
     "fern-dock-win-number-enabled": setDockWinNumberEnabled,
@@ -956,6 +966,12 @@ export function useSettings() {
     saveSetting("fern-notch-float-gap", value);
   };
 
+  const toggleNotchRespectWorkArea = () => {
+    const next = !notchRespectWorkArea;
+    setNotchRespectWorkArea(next);
+    saveSetting("fern-notch-respect-workarea", String(next));
+  };
+
   const toggleDockConsoleWindows = () => {
     const next = !dockConsoleWindows;
     setDockConsoleWindows(next);
@@ -1115,6 +1131,12 @@ export function useSettings() {
     const next = !dockAdaptive;
     setDockAdaptive(next);
     saveSetting("fern-dock-adaptive", String(next));
+  };
+
+  const toggleDockReserveSpace = () => {
+    const next = !dockReserveSpace;
+    setDockReserveSpace(next);
+    saveSetting("fern-dock-reserve-space", String(next));
   };
 
   const changeDockFloatGap = (value: string) => {
@@ -1468,6 +1490,8 @@ export function useSettings() {
     toggleNotchEnabled,
     notchFloatGap,
     changeNotchFloatGap,
+    notchRespectWorkArea,
+    toggleNotchRespectWorkArea,
     notchMode,
     setNotchModeValue,
     calendarEnabled,
@@ -1584,6 +1608,8 @@ export function useSettings() {
     handleStartIconChange,
     dockAdaptive,
     toggleDockAdaptive,
+    dockReserveSpace,
+    toggleDockReserveSpace,
     dockFloatGap,
     changeDockFloatGap,
     dockHideOnStart,

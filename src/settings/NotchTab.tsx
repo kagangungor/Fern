@@ -64,6 +64,8 @@ interface NotchTabProps {
   toggleNotchEnabled: () => void;
   notchFloatGap: string;
   changeNotchFloatGap: (value: string) => void;
+  notchRespectWorkArea: boolean;
+  toggleNotchRespectWorkArea: () => void;
   notchMode: string;
   setNotchModeValue: (mode: string) => void;
   monitors: MonitorInfo[];
@@ -162,6 +164,8 @@ export function NotchTab({
   toggleNotchEnabled,
   notchFloatGap,
   changeNotchFloatGap,
+  notchRespectWorkArea,
+  toggleNotchRespectWorkArea,
   notchMode,
   setNotchModeValue,
   monitors,
@@ -317,6 +321,13 @@ export function NotchTab({
             ]}
             onChange={changeNotchFloatGap}
           />
+        </SettingRow>
+
+        <SettingRow icon={PanelTop} label={t("notch.respectWorkArea")} desc={t("notch.respectWorkArea.desc")}>
+          <label className="toggle-switch">
+            <input type="checkbox" checked={notchRespectWorkArea} onChange={toggleNotchRespectWorkArea} />
+            <span className="slider"></span>
+          </label>
         </SettingRow>
 
         <SettingRow icon={MonitorCheck} label={t("common.showOn")} desc={t("notch.showOn.desc")}>

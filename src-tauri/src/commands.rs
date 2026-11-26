@@ -22,7 +22,8 @@ pub async fn set_menu_open(open: bool, rect: Option<IntRect>) {
 #[tauri::command]
 pub fn set_window_keyboard_focus(window: Window, enabled: bool) {
     use windows::Win32::UI::WindowsAndMessaging::{
-        GetWindowLongPtrW, SetForegroundWindow, SetWindowLongPtrW, GWL_EXSTYLE, WS_EX_NOACTIVATE,
+        GetForegroundWindow, GetWindowLongPtrW, SetForegroundWindow, SetWindowLongPtrW,
+        SwitchToThisWindow, GWL_EXSTYLE, WS_EX_NOACTIVATE,
     };
     if let Ok(mut label) = crate::state::KEYBOARD_FOCUS_LABEL.lock() {
         if enabled {
@@ -38,6 +39,10 @@ pub fn set_window_keyboard_focus(window: Window, enabled: bool) {
         if enabled {
             SetWindowLongPtrW(hwnd, GWL_EXSTYLE, (ex & !noactivate) as isize);
             let _ = SetForegroundWindow(hwnd);
+            let _ = window.set_focus();
+            if GetForegroundWindow() != hwnd {
+                SwitchToThisWindow(hwnd, true);
+            }
         } else {
             SetWindowLongPtrW(hwnd, GWL_EXSTYLE, (ex | noactivate) as isize);
         }
@@ -446,7 +451,8 @@ pub async fn init_notch_window(app: &AppHandle, main_win: tauri::WebviewWindow, 
         let scale = monitor.scale_factor();
         let fern_scale = crate::utils::get_fern_scale(app);
         let target_height = (640.0 * fern_scale * scale) as u32;
-        let _ = main_win.set_position(tauri::PhysicalPosition::new(m_pos.x, m_pos.y));
+        let target_top = crate::services::notch_target_top(m_pos.x, m_pos.y, m_size.width as i32, m_size.height as i32);
+        let _ = main_win.set_position(tauri::PhysicalPosition::new(m_pos.x, target_top));
         let _ = main_win.set_size(tauri::PhysicalSize::new(m_size.width, target_height));
     }
 
@@ -1158,10 +1164,12 @@ pub async fn focus_window(app: AppHandle, hwnd: isize) {
     if is_repeat_click(hwnd) {
         return;
     }
-    let dock_hwnd = app
-        .get_webview_window("dock")
-        .and_then(|window| window.hwnd().ok())
-        .map(|h| h.0 as isize);
+    let dock_hwnds: Vec<isize> = app
+        .webview_windows()
+        .iter()
+        .filter(|(label, _)| crate::state::is_dock_label(label))
+        .filter_map(|(_, window)| window.hwnd().ok().map(|h| h.0 as isize))
+        .collect();
     tauri::async_runtime::spawn_blocking(move || unsafe {
         use windows::Win32::UI::WindowsAndMessaging::{
             GA_ROOTOWNER, GetAncestor, GetForegroundWindow, GetWindowThreadProcessId,
@@ -1196,7 +1204,7 @@ pub async fn focus_window(app: AppHandle, hwnd: isize) {
             // Only minimize when this exact window (or an owned popup/dialog via GA_ROOTOWNER)
             // is in front, never when another window from the same process is active.
             let mut fg = GetForegroundWindow();
-            if dock_hwnd == Some(fg.0 as isize) {
+            if dock_hwnds.contains(&(fg.0 as isize)) {
                 if let Some(last) = last_focused_window() {
                     fg = last;
                 }
@@ -1205,7 +1213,33 @@ pub async fn focus_window(app: AppHandle, hwnd: isize) {
                 && (fg == hwnd || GetAncestor(fg, GA_ROOTOWNER) == hwnd);
 
             if should_minimize {
+                // Only grab a ~2ms raw pixel copy if THUMBNAIL_CACHE doesn't already have a recent
+                // entry, then minimize IMMEDIATELY and resize/PNG-encode on a background thread so
+                // clicking the dock icon feels instantaneous.
+                let hwnd_key = hwnd.0 as isize;
+                let has_fresh_cache = crate::state::THUMBNAIL_CACHE
+                    .get()
+                    .and_then(|c| c.lock().ok())
+                    .and_then(|g| g.get(&hwnd_key).map(|(_, ts)| *ts))
+                    .is_some_and(|ts| crate::utils::get_now_ms().saturating_sub(ts) < 5_000);
+                let raw_snapshot = if has_fresh_cache {
+                    None
+                } else {
+                    crate::utils::capture_hwnd_raw_bgra_in_front(hwnd)
+                };
                 let _ = ShowWindow(hwnd, SW_MINIMIZE);
+                if let Some((pixels, w, h)) = raw_snapshot {
+                    std::thread::spawn(move || {
+                        if let Some(img) = crate::utils::encode_thumbnail(pixels, w, h, 320, 200) {
+                            let cache = crate::state::THUMBNAIL_CACHE.get_or_init(|| {
+                                std::sync::Mutex::new(std::collections::HashMap::new())
+                            });
+                            if let Ok(mut guard) = cache.lock() {
+                                guard.insert(hwnd_key, (img, crate::utils::get_now_ms()));
+                            }
+                        }
+                    });
+                }
                 if !IsIconic(hwnd).as_bool() {
                     use windows::Win32::UI::WindowsAndMessaging::{SendMessageTimeoutW, SC_MINIMIZE, SMTO_ABORTIFHUNG, WM_SYSCOMMAND};
                     let _ = SendMessageTimeoutW(
@@ -3066,6 +3100,7 @@ pub fn relaunch_fern(handle: &AppHandle) {
     crate::on_demand_windows::close_all(handle);
     std::env::set_var("FERN_RESTARTING", "1");
     close_single_instance_handles();
+    crate::webview_args::clear_if_applied_by_fern();
     handle.restart();
 }
 
@@ -3315,6 +3350,33 @@ fn apply_setting_side_effects(
         re_register_appbars(app, settings);
     }
 
+    if changed_keys.contains(&"fern-dock-reserve-space") {
+        let app_clone = app.clone();
+        let dock_mode = settings
+            .get("fern-dock-mode")
+            .and_then(|v| v.as_str())
+            .unwrap_or("smart")
+            .to_string();
+        tauri::async_runtime::spawn(async move {
+            change_dock_mode(app_clone, dock_mode).await;
+        });
+    }
+
+    if changed_keys.contains(&"fern-notch-respect-workarea") {
+        for (label, win) in app.webview_windows() {
+            if crate::state::is_notch_label(&label) {
+                if crate::state::get_flag(crate::state::main_appbar_registered(), &label) {
+                    crate::services::register_appbar(win);
+                } else {
+                    crate::services::position_notch_window(&win);
+                    if let Ok(hwnd) = win.hwnd() {
+                        crate::utils::re_assert_topmost(hwnd);
+                    }
+                }
+            }
+        }
+    }
+
     if changed_keys.contains(&"fern-language") {
         crate::i18n::refresh_tray_labels(app);
     }
@@ -3344,15 +3406,26 @@ pub fn save_setting(app: AppHandle, key: String, value: serde_json::Value) -> Re
     if let Some(parent) = path.parent() { let _ = std::fs::create_dir_all(parent); }
     let (settings, emitted_value) = {
         let _guard = settings_file_lock().lock().unwrap_or_else(|e| e.into_inner());
-        let mut settings = HashMap::new();
-        if let Ok(content) = std::fs::read_to_string(&path) {
-            if let Ok(existing) = serde_json::from_str::<HashMap<String, serde_json::Value>>(&content) {
-                settings = existing;
+        let mut settings = match crate::utils::read_settings_map_with_fallback(&path) {
+            Ok(existing) => existing,
+            Err(err) => {
+                let cached = crate::utils::clone_settings_cache();
+                if !cached.is_empty() {
+                    crate::diagnostics::log(&format!(
+                        "save_setting({key}): failed to read settings.json ({err}); falling back to in-memory cache"
+                    ));
+                    cached
+                } else {
+                    crate::diagnostics::log(&format!(
+                        "save_setting({key}): refusing to overwrite unreadable settings.json ({err})"
+                    ));
+                    return Err(err);
+                }
             }
-        }
+        };
         settings.insert(key.clone(), value);
         let content = serde_json::to_string(&settings).map_err(|e| e.to_string())?;
-        std::fs::write(&path, content).map_err(|e| e.to_string())?;
+        crate::utils::write_json_atomic_with_backup(&path, &content).map_err(|e| e.to_string())?;
         crate::utils::replace_settings_cache(settings.clone());
         let emitted = settings[&key].clone();
         (settings, emitted)
@@ -3409,8 +3482,13 @@ pub fn load_settings(app: AppHandle) -> Result<HashMap<String, serde_json::Value
         Err(_) => return Ok(HashMap::new()),
     };
     let _guard = settings_file_lock().lock().unwrap_or_else(|e| e.into_inner());
-    if let Ok(content) = std::fs::read_to_string(path) { if let Ok(settings) = serde_json::from_str(&content) { return Ok(settings); } }
-    Ok(HashMap::new())
+    match crate::utils::read_settings_map_with_fallback(&path) {
+        Ok(settings) => Ok(settings),
+        Err(err) => {
+            crate::diagnostics::log(&format!("load_settings failed: {err}"));
+            Ok(HashMap::new())
+        }
+    }
 }
 
 #[tauri::command]
@@ -3418,7 +3496,11 @@ pub fn reset_settings(app: AppHandle) -> Result<(), String> {
     let path = app.path().app_config_dir().map_err(|e| e.to_string())?.join("settings.json");
     {
         let _guard = settings_file_lock().lock().unwrap_or_else(|e| e.into_inner());
-        std::fs::write(&path, "{}").map_err(|e| e.to_string())?;
+        crate::utils::write_json_atomic_with_backup(&path, "{}").map_err(|e| e.to_string())?;
+        let bak_path = crate::utils::settings_backup_path(&path);
+        if bak_path.exists() {
+            let _ = crate::utils::retry_io(|| std::fs::remove_file(&bak_path));
+        }
         crate::utils::replace_settings_cache(HashMap::new());
     }
     std::thread::spawn(|| crate::agent_api::set_hooks(false));
@@ -3444,16 +3526,23 @@ pub async fn capture_window_thumbnail(hwnd: isize, max_width: u32, max_height: u
             }
         }
 
-        let cached_img = || {
+        let cached_entry = || {
             crate::state::THUMBNAIL_CACHE.get()
                 .and_then(|cache| cache.lock().ok())
-                .and_then(|g| g.get(&hwnd_key).map(|(img, _)| img.clone()))
+                .and_then(|g| g.get(&hwnd_key).cloned())
         };
 
         if is_minimized {
-            // Don't restore a minimized window to capture it, it flashes on screen. The hooks keep
-            // thumbnails warm, so without one we just show no preview.
-            return cached_img().map(|img| (img, focus_time));
+            // Minimized windows can't be captured by PrintWindow or WGC without flashing on screen.
+            // Return the cached PNG immediately; if empty (cold start), the frontend uses the DWM
+            // thumbnail host as a zero-flash fallback until the window is next restored/minimized.
+            return cached_entry().map(|(img, _)| (img, focus_time));
+        }
+
+        if let Some((img, captured_at)) = cached_entry() {
+            if crate::utils::get_now_ms().saturating_sub(captured_at) < 2000 {
+                return Some((img, focus_time));
+            }
         }
 
         let result = crate::utils::capture_hwnd_to_base64(hwnd, max_width, max_height);
@@ -3461,7 +3550,7 @@ pub async fn capture_window_thumbnail(hwnd: isize, max_width: u32, max_height: u
         // An elevated window behind others can't be captured, the last time it was in front is
         // the best there is.
         if result.is_none() {
-            return cached_img().map(|img| (img, focus_time));
+            return cached_entry().map(|(img, _)| (img, focus_time));
         }
 
         if let Some(ref img) = result {
@@ -4142,13 +4231,10 @@ pub fn import_settings(app: AppHandle, settings: String) -> Result<(), String> {
 
     let (removed_keys, all_changed_keys) = {
         let _guard = settings_file_lock().lock().unwrap_or_else(|e| e.into_inner());
-        let previous: HashMap<String, serde_json::Value> = std::fs::read_to_string(&path)
-            .ok()
-            .and_then(|c| serde_json::from_str(&c).ok())
-            .unwrap_or_default();
+        let previous = crate::utils::read_settings_map_with_fallback(&path).unwrap_or_default();
 
         let content = serde_json::to_string_pretty(&imported).map_err(|e| e.to_string())?;
-        std::fs::write(&path, content).map_err(|e| e.to_string())?;
+        crate::utils::write_json_atomic_with_backup(&path, &content).map_err(|e| e.to_string())?;
         crate::utils::replace_settings_cache(imported.clone());
 
         let removed: Vec<String> = previous
@@ -4196,7 +4282,7 @@ pub fn setup_settings_watcher(app: AppHandle) {
         use windows::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
         use windows::Win32::Storage::FileSystem::{
             CreateFileW, FILE_FLAG_BACKUP_SEMANTICS, FILE_LIST_DIRECTORY,
-            FILE_NOTIFY_CHANGE_LAST_WRITE,
+            FILE_NOTIFY_CHANGE_FILE_NAME, FILE_NOTIFY_CHANGE_LAST_WRITE,
             OPEN_EXISTING, ReadDirectoryChangesW,
         };
 
@@ -4230,7 +4316,7 @@ pub fn setup_settings_watcher(app: AppHandle) {
                     notify_buffer.as_mut_ptr() as *mut _,
                     notify_buffer.len() as u32,
                     false,
-                    FILE_NOTIFY_CHANGE_LAST_WRITE,
+                    FILE_NOTIFY_CHANGE_LAST_WRITE | FILE_NOTIFY_CHANGE_FILE_NAME,
                     Some(&mut bytes_returned),
                     None,
                     None,
@@ -4244,7 +4330,7 @@ pub fn setup_settings_watcher(app: AppHandle) {
 
                 let parsed = {
                     let _guard = settings_file_lock().lock().unwrap_or_else(|e| e.into_inner());
-                    std::fs::read_to_string(&settings_path)
+                    crate::utils::retry_io(|| std::fs::read_to_string(&settings_path))
                         .ok()
                         .and_then(|c| serde_json::from_str::<HashMap<String, serde_json::Value>>(&c).ok())
                 };
@@ -4867,23 +4953,32 @@ pub fn reload_hotkeys() {
 
 // Live Previews
 #[tauri::command]
-pub fn set_live_thumbnails(
+pub async fn set_live_thumbnails(
     window: tauri::Window,
     targets: Vec<crate::live_preview::LiveThumbnailTarget>,
     client_area_only: Option<bool>,
 ) -> Result<Vec<isize>, String> {
     let dest_hwnd = window.hwnd().map_err(|e| e.to_string())?.0 as isize;
-    crate::live_preview::set_live_thumbnails(dest_hwnd, targets, client_area_only.unwrap_or(false))
+    let client_only = client_area_only.unwrap_or(false);
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::live_preview::set_live_thumbnails(dest_hwnd, targets, client_only)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-pub fn clear_live_thumbnails() -> Result<(), String> {
-    crate::live_preview::clear_all_thumbnails()
+pub async fn clear_live_thumbnails() -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(crate::live_preview::clear_all_thumbnails)
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-pub fn set_live_thumbnails_opacity(opacity: u8) -> Result<(), String> {
-    crate::live_preview::set_opacity(opacity)
+pub async fn set_live_thumbnails_opacity(opacity: u8) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || crate::live_preview::set_opacity(opacity))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]

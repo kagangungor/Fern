@@ -46,11 +46,17 @@ pub fn set_window_regions(window: Window, rects: Vec<IntRect>) {
     let Ok(hwnd) = window.hwnd() else { return };
     // A region on a window that isn't layered turns its transparent pixels opaque, so make sure it
     // is layered before the region lands, keeping the click-through state it has.
-    let click_through = unsafe {
-        use windows::Win32::UI::WindowsAndMessaging::{GetWindowLongPtrW, GWL_EXSTYLE, WS_EX_TRANSPARENT};
-        GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32 & WS_EX_TRANSPARENT.0 != 0
+    // Avoid touching GWL_EXSTYLE when WS_EX_LAYERED is already set so we never race with
+    // process_mouse_move updating WS_EX_TRANSPARENT.
+    let ex_style = unsafe {
+        use windows::Win32::UI::WindowsAndMessaging::{GetWindowLongPtrW, GWL_EXSTYLE};
+        GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32
     };
-    crate::utils::set_click_through(hwnd, click_through);
+    use windows::Win32::UI::WindowsAndMessaging::{WS_EX_LAYERED, WS_EX_TRANSPARENT};
+    if ex_style & WS_EX_LAYERED.0 == 0 {
+        let click_through = ex_style & WS_EX_TRANSPARENT.0 != 0;
+        crate::utils::set_click_through(hwnd, click_through);
+    }
     unsafe {
         let region = CreateRectRgn(0, 0, 0, 0);
         for rect in physical {
