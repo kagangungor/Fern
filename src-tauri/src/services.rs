@@ -2252,6 +2252,91 @@ fn hover_waits_on_expiry(is_hovered: bool, final_hover: bool) -> bool {
     final_hover && !is_hovered
 }
 
+/// Returns the sibling panel labels to dismiss immediately when `active_label` triggers an active
+/// edge hover on its monitor. On single-monitor setups (or when `active_edge` is false), returns empty.
+fn cross_monitor_handoff_targets<'a>(
+    active_label: &str,
+    active_edge: bool,
+    all_labels: &[&'a str],
+) -> Vec<&'a str> {
+    if !active_edge {
+        return Vec::new();
+    }
+    all_labels
+        .iter()
+        .copied()
+        .filter(|&label| label != active_label)
+        .collect()
+}
+
+fn handoff_other_dock_windows(app_handle: &AppHandle, active_label: &str) {
+    let labels: Vec<String> = app_handle
+        .webview_windows()
+        .into_keys()
+        .filter(|l| is_dock_label(l))
+        .collect();
+    let label_refs: Vec<&str> = labels.iter().map(String::as_str).collect();
+    for other in cross_monitor_handoff_targets(active_label, true, &label_refs) {
+        if other == "dock" {
+            MH_DOCK_EXPIRY_MS.store(0, Ordering::Relaxed);
+            if crate::state::get_flag(crate::state::dock_hovered(), "dock") {
+                crate::state::set_flag(crate::state::dock_hovered(), "dock", false);
+                let _ = app_handle.emit_to("dock", "dock-cursor-left", ());
+            }
+            if MH_LAST_EDGE_HOVER
+                .compare_exchange(1, 0, Ordering::Relaxed, Ordering::Relaxed)
+                .is_ok()
+            {
+                let _ = app_handle.emit_to("dock", "dock-edge-hover", false);
+            }
+        } else {
+            crate::state::set_i64(crate::state::dock_extra_expiry_ms(), other, 0);
+            if crate::state::get_flag(crate::state::dock_hovered(), other) {
+                crate::state::set_flag(crate::state::dock_hovered(), other, false);
+                let _ = app_handle.emit_to(other, "dock-cursor-left", ());
+            }
+            if crate::state::get_i32(crate::state::dock_extra_last_edge_hover(), other, 0) == 1 {
+                crate::state::set_i32(crate::state::dock_extra_last_edge_hover(), other, 0);
+                let _ = app_handle.emit_to(other, "dock-edge-hover", false);
+            }
+        }
+    }
+}
+
+fn handoff_other_notch_windows(app_handle: &AppHandle, active_label: &str) {
+    let labels: Vec<String> = app_handle
+        .webview_windows()
+        .into_keys()
+        .filter(|l| is_notch_label(l))
+        .collect();
+    let label_refs: Vec<&str> = labels.iter().map(String::as_str).collect();
+    for other in cross_monitor_handoff_targets(active_label, true, &label_refs) {
+        if other == "main" {
+            MH_TOPBAR_EXPIRY_MS.store(0, Ordering::Relaxed);
+            if crate::state::get_flag(crate::state::notch_hovered(), "main") {
+                crate::state::set_flag(crate::state::notch_hovered(), "main", false);
+                let _ = app_handle.emit_to("main", "notch-cursor-left", ());
+            }
+            if MH_LAST_TOP_EDGE_HOVER
+                .compare_exchange(1, 0, Ordering::Relaxed, Ordering::Relaxed)
+                .is_ok()
+            {
+                let _ = app_handle.emit_to("main", "notch-edge-hover", false);
+            }
+        } else {
+            crate::state::set_i64(crate::state::notch_extra_expiry_ms(), other, 0);
+            if crate::state::get_flag(crate::state::notch_hovered(), other) {
+                crate::state::set_flag(crate::state::notch_hovered(), other, false);
+                let _ = app_handle.emit_to(other, "notch-cursor-left", ());
+            }
+            if crate::state::get_i32(crate::state::notch_extra_last_edge_hover(), other, 0) == 1 {
+                crate::state::set_i32(crate::state::notch_extra_last_edge_hover(), other, 0);
+                let _ = app_handle.emit_to(other, "notch-edge-hover", false);
+            }
+        }
+    }
+}
+
 /// Re-runs the hit test for a cursor that hasn't moved, when what's under it changed.
 pub fn request_cursor_recheck() {
     if SHUTTING_DOWN.load(Ordering::Relaxed) {
@@ -2513,8 +2598,8 @@ fn should_suppress_notch_for_mode(mode: &str) -> bool {
     mode != "fixed"
 }
 
-fn should_ignore_notch_cursor(suppressed: bool, interactive: bool, menu_open: bool) -> bool {
-    suppressed || (!interactive && !menu_open)
+fn should_ignore_notch_cursor(suppressed: bool, interactive: bool) -> bool {
+    suppressed || !interactive
 }
 
 /// Smart and Peek notches stay hidden while a fullscreen window covers their monitor,
@@ -2689,6 +2774,7 @@ unsafe fn process_mouse_move(app_handle: &AppHandle, cursor: windows::Win32::Fou
                     // Approaching along the bottom edge keeps the dock interactive
                     // while near its horizontal span, so the reveal can't be clicked
                     if at_bottom_edge && !dock_fg_fs {
+                        handoff_other_dock_windows(app_handle, "dock");
                         if let Some((span_left, span_right)) = dock_span {
                             let edge_pad = (60.0 * scale) as i32;
                             if cursor.x >= span_left - edge_pad && cursor.x <= span_right + edge_pad {
@@ -2834,7 +2920,14 @@ unsafe fn process_mouse_move(app_handle: &AppHandle, cursor: windows::Win32::Fou
                             MH_TOPBAR_EXPIRY_MS.store(0, Ordering::Relaxed);
                         }
 
+                        if at_top_edge && !notch_fs && is_notch_hovered {
+                            handoff_other_notch_windows(app_handle, "main");
+                        }
+
                         let final_notch_hover = is_notch_hovered || now < MH_TOPBAR_EXPIRY_MS.load(Ordering::Relaxed);
+                        if hover_waits_on_expiry(is_notch_hovered, final_notch_hover) {
+                            CURSOR_RECHECK_PENDING.store(true, Ordering::Relaxed);
+                        }
                         let prev = MH_LAST_TOP_EDGE_HOVER.load(Ordering::Relaxed);
                         let new_val = if final_notch_hover { 1 } else { 0 };
                         if prev != new_val {
@@ -2853,8 +2946,11 @@ unsafe fn process_mouse_move(app_handle: &AppHandle, cursor: windows::Win32::Fou
                         let final_ignore = should_ignore_notch_cursor(
                             notch_fs,
                             is_click_interactive,
-                            MENU_IS_OPEN.load(Ordering::Relaxed),
                         );
+                        if dock_hover_went_stale(final_ignore, in_notch_hover) {
+                            crate::state::set_flag(crate::state::notch_hovered(), "main", false);
+                            let _ = app_handle.emit_to("main", "notch-cursor-left", ());
+                        }
                         let prev_ignore = MH_LAST_MAIN_IGNORE.load(Ordering::Relaxed);
                         let new_ignore = if final_ignore { 1 } else { 0 };
                         if prev_ignore != new_ignore {
@@ -3337,6 +3433,7 @@ fn hit_test_extra_dock_windows(app_handle: &AppHandle, cursor: windows::Win32::F
         }
 
         if at_bottom_edge && !dock_fs {
+            handoff_other_dock_windows(app_handle, &label);
             if let Some((span_left, span_right)) = dock_span {
                 let edge_pad = (60.0 * scale) as i32;
                 if cursor.x >= span_left - edge_pad && cursor.x <= span_right + edge_pad {
@@ -3476,14 +3573,21 @@ fn hit_test_extra_notch_windows(app_handle: &AppHandle, cursor: windows::Win32::
             }
         }
 
-        let expiry = crate::state::get_i64(crate::state::notch_extra_expiry_ms(), &label, 0);
         if is_click_interactive && !in_notch_hover && !left_button_held() && caption_buttons_under(cursor) {
             is_click_interactive = false;
             is_notch_hovered = false;
             crate::state::set_i64(crate::state::notch_extra_expiry_ms(), &label, 0);
         }
 
+        if at_top_edge && !notch_fs && is_notch_hovered {
+            handoff_other_notch_windows(app_handle, &label);
+        }
+
+        let expiry = crate::state::get_i64(crate::state::notch_extra_expiry_ms(), &label, 0);
         let final_notch_hover = is_notch_hovered || now < expiry;
+        if hover_waits_on_expiry(is_notch_hovered, final_notch_hover) {
+            CURSOR_RECHECK_PENDING.store(true, Ordering::Relaxed);
+        }
         let prev_hover = crate::state::get_i32(crate::state::notch_extra_last_edge_hover(), &label, -1);
         let new_hover = if final_notch_hover { 1 } else { 0 };
         if prev_hover != new_hover {
@@ -3494,8 +3598,11 @@ fn hit_test_extra_notch_windows(app_handle: &AppHandle, cursor: windows::Win32::
         let final_ignore = should_ignore_notch_cursor(
             notch_fs,
             is_click_interactive,
-            MENU_IS_OPEN.load(Ordering::Relaxed),
         );
+        if dock_hover_went_stale(final_ignore, in_notch_hover) {
+            crate::state::set_flag(crate::state::notch_hovered(), &label, false);
+            let _ = app_handle.emit_to(label.as_str(), "notch-cursor-left", ());
+        }
         let prev_ignore = crate::state::get_i32(crate::state::notch_extra_last_ignore(), &label, -1);
         let new_ignore = if final_ignore { 1 } else { 0 };
         if prev_ignore != new_ignore {
@@ -5153,10 +5260,10 @@ mod tests {
         assert!(should_suppress_notch_for_mode("smart"));
         assert!(should_suppress_notch_for_mode("peek"));
 
-        assert!(should_ignore_notch_cursor(true, true, true));
-        assert!(!should_ignore_notch_cursor(false, false, true));
-        assert!(should_ignore_notch_cursor(false, false, false));
-        assert!(!should_ignore_notch_cursor(false, true, false));
+        assert!(should_ignore_notch_cursor(true, true));
+        assert!(should_ignore_notch_cursor(true, false));
+        assert!(should_ignore_notch_cursor(false, false));
+        assert!(!should_ignore_notch_cursor(false, true));
     }
 
     #[test]
@@ -5455,5 +5562,41 @@ mod tests {
         // Non-capture apps must never match, even when borderless and topmost.
         assert!(!is_capture_overlay_window("notepad.exe", 0, WS_EX_TOPMOST.0, true));
         assert!(!is_capture_overlay_window("chrome.exe", 0, WS_EX_TOPMOST.0, true));
+    }
+
+    #[test]
+    fn cross_monitor_handoff_targets_only_other_monitors_on_active_edge() {
+        use super::cross_monitor_handoff_targets;
+
+        // Single monitor: never returns targets even on active edge.
+        assert!(cross_monitor_handoff_targets("dock", true, &["dock"]).is_empty());
+        assert!(cross_monitor_handoff_targets("main", true, &["main"]).is_empty());
+
+        // Multi-monitor without active edge: never dismisses other monitors.
+        assert!(cross_monitor_handoff_targets("dock", false, &["dock", "dock-mon2"]).is_empty());
+        assert!(cross_monitor_handoff_targets("main-mon2", false, &["main", "main-mon2"]).is_empty());
+
+        // Multi-monitor with active edge: dismisses every sibling of the same kind, never self.
+        assert_eq!(
+            cross_monitor_handoff_targets("dock", true, &["dock", "dock-mon2", "dock-mon3"]),
+            vec!["dock-mon2", "dock-mon3"]
+        );
+        assert_eq!(
+            cross_monitor_handoff_targets("main-mon2", true, &["main", "main-mon2", "main-mon3"]),
+            vec!["main", "main-mon3"]
+        );
+    }
+
+    #[test]
+    fn notch_stale_hover_and_expiry_recheck_predicates() {
+        use super::{dock_hover_went_stale, hover_waits_on_expiry};
+
+        assert!(dock_hover_went_stale(true, true));
+        assert!(!dock_hover_went_stale(false, true));
+        assert!(!dock_hover_went_stale(true, false));
+
+        assert!(hover_waits_on_expiry(false, true));
+        assert!(!hover_waits_on_expiry(true, true));
+        assert!(!hover_waits_on_expiry(false, false));
     }
 }

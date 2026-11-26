@@ -1,14 +1,14 @@
 [
   {
-    "id": "fern-1.7.0",
+    "id": "fern-1.7.2",
     "level": "info",
     "title": {
-      "en": "Fern 1.7.0 — Floating Notch & Dock, Date Display & Ping Widget",
-      "tr": "Fern 1.7.0 — Yüzen Çentik & Dock, Tarih Gösterimi ve Ping Widget'ı"
+      "en": "Fern 1.7.2 — Submenu Focus, Maximize Flash & Dual-Monitor Smart Mode Fixes",
+      "tr": "Fern 1.7.2 — Alt Menü Odağı, Maximize Parlaması ve Çift Monitör Akıllı Mod Düzeltmeleri"
     },
     "body": {
-      "en": "Float the notch and dock off the screen edges, disable the notch to use the dock solo, show the date next to the clock, monitor live ping, hide the dock on Start/Search, and enjoy improved shortcut recording and tray icon fixes.",
-      "tr": "Çentik ve dock'u ekran kenarlarından ayırarak yüzen modda kullanın, sadece dock için çentiği kapatın, saatin yanında tarih ve canlı ping görüntüleyin, Başlat/Arama açıldığında dock'u gizleyin ve geliştirilmiş kısayol kaydı ile sistem tepsisi düzeltmelerinden yararlanın."
+      "en": "Fixed Dock right-click submenu closing when moving up to Task Manager on laptops and scaled displays, eliminated the brief white flash when maximizing the Settings window, and made switching Smart Dock and Notch between monitors instant with cross-monitor handoff and stale-hover fixes.",
+      "tr": "Laptop ve ölçekli ekranlarda Dock sağ tık alt menüsünde Görev Yöneticisi'ne geçerken menünün kapanması düzeltildi, Ayarlar penceresi büyütülürken oluşan anlık beyaz ekran parlaması giderildi ve çift monitörde Akıllı Dock ile Çentik geçişleri monitörler arası anlık devir ve takılı hover düzeltmeleriyle hızlandırıldı."
     }
   }
 ]

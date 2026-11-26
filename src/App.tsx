@@ -1312,6 +1312,14 @@ function App() {
       setIsEdgeHovered(event.payload);
     });
 
+    // A click-through window gets no mouse events, so its mouseleave never comes. The backend says so instead.
+    const unlistenNotchCursorLeft = thisWindow.listen("notch-cursor-left", () => {
+      setIsNotchHovered(false);
+      if (!tourActiveRef.current) {
+        setIsHovered(false);
+      }
+    });
+
     const unlistenNotchFullscreen = thisWindow.listen<boolean>("notch-fullscreen", (event) => {
       setIsFullscreen(event.payload);
       if (event.payload) {
@@ -1351,6 +1359,7 @@ function App() {
       unlistenHotkey.then(f => f());
       unlistenNotchOverlap.then(f => f());
       unlistenNotchEdgeHover.then(f => f());
+      unlistenNotchCursorLeft.then(f => f());
       unlistenNotchFullscreen.then(f => f());
       unlistenSettingsReset.then(f => f());
       unlistenMute.then(f => f());

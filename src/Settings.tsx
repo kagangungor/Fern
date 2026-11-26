@@ -1,7 +1,5 @@
 import { StrictMode, useState, useEffect } from "react";
 import { createRoot } from "react-dom/client";
-import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
-import { Effect, EffectState } from "@tauri-apps/api/window";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { Settings, Palette, PanelTop, Monitor, Layers, Plug, Activity, Info } from "lucide-react";
@@ -23,8 +21,6 @@ import type { SettingsTab } from "./settings/index";
 import { initTheme } from "./theme";
 import { useT } from "./i18n";
 import "./Settings.css";
-
-const appWindow = getCurrentWebviewWindow();
 
 const TABS: { id: SettingsTab; labelKey: string; icon: typeof Settings }[] = [
   { id: "general", labelKey: "tabs.general", icon: Settings },
@@ -105,10 +101,7 @@ function SettingsApp() {
     const preventContext = (e: MouseEvent) => e.preventDefault();
     document.addEventListener("contextmenu", preventContext as any);
 
-    appWindow.setEffects({ effects: [Effect.Acrylic], state: EffectState.Active, color: [10, 10, 15, 20] }).catch(() => {})
-      .finally(() => {
-        requestAnimationFrame(() => requestAnimationFrame(() => invoke("on_demand_window_ready").catch(() => {})));
-      });
+    requestAnimationFrame(() => requestAnimationFrame(() => invoke("on_demand_window_ready").catch(() => {})));
 
     return () => {
       document.removeEventListener("contextmenu", preventContext as any);

@@ -7,9 +7,17 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
 use tauri::{AppHandle, Emitter, Manager, WebviewWindow};
+use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_USE_IMMERSIVE_DARK_MODE};
 
 pub const SETTINGS: &str = "settings";
 pub const CALENDAR: &str = "calendar";
+
+fn immersive_dark_mode_value(theme_mode: Option<&str>) -> i32 {
+    match theme_mode.map(str::trim) {
+        Some(mode) if mode.eq_ignore_ascii_case("light") => 0,
+        _ => 1,
+    }
+}
 
 static SETTINGS_CREATING: AtomicBool = AtomicBool::new(false);
 static CALENDAR_CREATING: AtomicBool = AtomicBool::new(false);
@@ -69,10 +77,21 @@ where
         match built {
             Ok(window) => {
                 let target = window.clone();
+                let dark_mode = immersive_dark_mode_value(
+                    crate::utils::get_setting_str(&app, "fern-theme-mode").as_deref(),
+                );
                 // SetWindowSubclass only works on the thread that owns the window.
                 let scheduled = window.run_on_main_thread(move || {
                     let _ = window_vibrancy::apply_acrylic(&target, Some((10, 10, 15, 20)));
                     if let Ok(hwnd) = target.hwnd() {
+                        unsafe {
+                            let _ = DwmSetWindowAttribute(
+                                hwnd,
+                                DWMWA_USE_IMMERSIVE_DARK_MODE,
+                                (&dark_mode as *const i32).cast(),
+                                std::mem::size_of::<i32>() as u32,
+                            );
+                        }
                         crate::active_look::keep_active_look(hwnd);
                     }
                     let _ = target.center();
@@ -105,6 +124,7 @@ fn build(app: &AppHandle, label: &str) -> Result<WebviewWindow, String> {
     }
     let window = tauri::WebviewWindowBuilder::from_config(app, config)
         .map_err(|e| e.to_string())?
+        .background_color(tauri::window::Color(10, 10, 15, 0))
         .build()
         .map_err(|e| e.to_string())?;
     // Covers every way of closing, Alt+F4 included.
@@ -170,5 +190,19 @@ pub fn on_demand_window_ready(app: AppHandle, window: tauri::Window) {
     if take_waiting(window.label()) {
         crate::commands::bring_window_to_front(&app, window.label());
         let _ = app.emit("windows-changed", ());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::immersive_dark_mode_value;
+
+    #[test]
+    fn immersive_dark_mode_uses_dark_unless_light_theme() {
+        assert_eq!(immersive_dark_mode_value(None), 1);
+        assert_eq!(immersive_dark_mode_value(Some("dark")), 1);
+        assert_eq!(immersive_dark_mode_value(Some("system")), 1);
+        assert_eq!(immersive_dark_mode_value(Some("light")), 0);
+        assert_eq!(immersive_dark_mode_value(Some(" light ")), 0);
     }
 }

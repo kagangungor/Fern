@@ -1058,7 +1058,7 @@ pub fn re_assert_topmost(hwnd: HWND) {
     unsafe {
         use windows::Win32::UI::WindowsAndMessaging::{
             SetWindowPos, GetWindowLongPtrW, SetWindowLongPtrW,
-            HWND_TOPMOST, SWP_NOMOVE, SWP_NOSIZE, SWP_NOACTIVATE, SWP_NOSENDCHANGING,
+            HWND_TOPMOST, SWP_NOMOVE, SWP_NOSIZE, SWP_NOACTIVATE, SWP_NOSENDCHANGING, SWP_ASYNCWINDOWPOS,
             GWL_EXSTYLE, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
         };
         // Set topmost without activating or notifying the window
@@ -1066,7 +1066,7 @@ pub fn re_assert_topmost(hwnd: HWND) {
             hwnd,
             Some(HWND_TOPMOST),
             0, 0, 0, 0,
-            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOSENDCHANGING,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOSENDCHANGING | SWP_ASYNCWINDOWPOS,
         );
         // Re-stamp NOACTIVATE + TOOLWINDOW — HWND_TOPMOST can cause these to be reset
         // by the shell on some Windows builds

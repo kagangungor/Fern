@@ -1642,12 +1642,27 @@ const Dock = memo(function Dock() {
 
     if (contextMenu && menuRef.current) {
       const r = menuRef.current.getBoundingClientRect();
-      rect = { 
-        x: Math.round(r.x), 
-        y: Math.round(r.y), 
-        width: Math.round(r.width + (activeSubmenu ? 160 : 0)), 
-        height: Math.round(r.height) 
-      };
+      const submenuEl = activeSubmenu ? menuRef.current.querySelector('.submenu') : null;
+      const sr = submenuEl?.getBoundingClientRect();
+      if (sr && sr.width > 0 && sr.height > 0) {
+        const left = Math.min(r.left, sr.left);
+        const top = Math.min(r.top, sr.top);
+        const right = Math.max(r.right, sr.right);
+        const bottom = Math.max(r.bottom, sr.bottom);
+        rect = {
+          x: Math.round(left),
+          y: Math.round(top),
+          width: Math.round(right - left),
+          height: Math.round(bottom - top),
+        };
+      } else {
+        rect = { 
+          x: Math.round(r.x), 
+          y: Math.round(r.y), 
+          width: Math.round(r.width + (activeSubmenu ? 160 : 0)), 
+          height: Math.round(r.height) 
+        };
+      }
       open = true;
     } else if (popupOpen && popupRef.current) {
       const r = popupRef.current.getBoundingClientRect();
