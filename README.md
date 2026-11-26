@@ -192,10 +192,19 @@ bun run tauri dev
 
 ### Upcoming milestones
 
+#### Next Priority
+- [ ] **Built-in Search Provider (PowerToys-Free)** — Open-source, standalone Dock/Notch quick launcher and file/app search built in Fern's own style, without relying on PowerToys Run or Command Palette
+
 #### Core Vision & Productivity
+- [ ] **Notch AI Chat** — Ask Claude (API or local Claude Code CLI), ChatGPT, or Gemini directly from the notch with image/screenshot attachments, stoppable streaming, and automatic provider fallback
+- [ ] **Dock Notepad & Customizable Dock Menu** — Lightweight dock notebook with color tags, image attachments, and export, plus a customizable dock right-click menu with custom app/file shortcuts
 - [ ] **Developer & Terminal Ambient HUD** — Visual notch progress line for long-running CLI tasks (`cargo build`, `npm install`, `docker`, test suites) and active Git branch / dirty-file context when an IDE or terminal is focused
 - [ ] **Pro Clipboard & Smart Inspector** — Fast island clipboard history with live color token previews (`#hex`, `rgb`, `hsl`), Tailwind/CSS conversion, and quick JSON/Base64/regex actions
-- [ ] **Built-in Search Provider (PowerToys-Free)** — Open-source, standalone Dock/Notch quick launcher and file/app search without relying on PowerToys Run or Command Palette
+
+#### Performance, Gaming & Platform
+- [ ] **OS-Level Fullscreen Game Boost & FPS Layer** — Hide notch/dock windows natively (`ShowWindow`) over fullscreen games to preserve DWM direct-to-screen flip, paired with Automatic Performance Mode, reversible session boosts (priority, EcoQoS, toast muting), and a hardware bottleneck audit
+- [ ] **Linux Support** — Native Linux builds (AppImage & `.deb`) with X11/GTK desktop integration and hardware controls (`nmcli`, `bluetoothctl`, `pactl`, `playerctl`)
+- [ ] **Custom Installer & Automated RAM/CPU Benchmarking** — Dedicated modern installer app and repeatable memory/CPU benchmark scripts to track and minimize idle footprint
 
 #### Settings & UI Polish
 - [ ] **Settings & UI Polish** — Inline row-level settings search (`SettingsSearchBox`)
