@@ -1,4 +1,5 @@
 import { NotchHotkey } from "./NotchHotkey";
+import { AiHotkey } from "./AiHotkey";
 import { MicMuteHotkey } from "./MicMuteHotkey";
 import { PrivacyAuraSetting } from "./PrivacyAuraSetting";
 import { NetWidgetMode } from "./NetWidgetMode";
@@ -45,6 +46,7 @@ const PANEL_ICONS: Record<string, ComponentType<{ size?: number; strokeWidth?: n
   music: Music,
   calendar: CalendarDays,
   shelf: Inbox,
+  ai: Sparkles,
 };
 import { SettingRow } from "./SettingRow";
 import { SettingSection } from "./SettingSection";
@@ -117,6 +119,8 @@ interface NotchTabProps {
   togglePanelControlCenter: () => void;
   panelShelf: boolean;
   togglePanelShelf: () => void;
+  panelAi: boolean;
+  togglePanelAi: () => void;
   shelfPersist: boolean;
   toggleShelfPersist: () => void;
   shelfKeepOpen: boolean;
@@ -217,6 +221,8 @@ export function NotchTab({
   togglePanelControlCenter,
   panelShelf,
   togglePanelShelf,
+  panelAi,
+  togglePanelAi,
   shelfPersist,
   toggleShelfPersist,
   shelfKeepOpen,
@@ -440,6 +446,7 @@ export function NotchTab({
                 "command-center": panelControlCenter,
                 status: panelStatus,
                 shelf: panelShelf,
+                ai: panelAi,
                 music: musicModeEnabled,
                 calendar: calendarEnabled,
               } as Record<string, boolean>)[id] ?? true
@@ -449,6 +456,7 @@ export function NotchTab({
                 "command-center": togglePanelControlCenter,
                 status: togglePanelStatus,
                 shelf: togglePanelShelf,
+                ai: togglePanelAi,
                 music: toggleMusicMode,
                 calendar: toggleCalendar,
               } as Record<string, () => void>)[id]?.()
@@ -765,6 +773,7 @@ export function NotchTab({
       {/* ─── 7. KLAVYE KISAYOLLARI (KEYBOARD SHORTCUTS) ─── */}
       <SettingSection id="notch-hotkeys" title={t("notch.hotkey.group")}>
         <NotchHotkey />
+        <AiHotkey />
         <MicMuteHotkey />
       </SettingSection>
     </>

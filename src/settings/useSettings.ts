@@ -186,6 +186,9 @@ export function useSettings() {
   const [panelShelf, setPanelShelf] = useState(
     () => localStorage.getItem("fern-panel-shelf-enabled") !== "false"
   );
+  const [panelAi, setPanelAi] = useState(
+    () => localStorage.getItem("fern-panel-ai-enabled") !== "false"
+  );
   const [dockTaskView, setDockTaskView] = useState(
     () => localStorage.getItem("fern-dock-taskview-enabled") === "true"
   );
@@ -364,6 +367,7 @@ export function useSettings() {
       apply(getVal("fern-dock-show-desktop-corner"), setDockShowDesktop, readBool);
       apply(getVal("fern-panel-control-center-enabled"), setPanelControlCenter, (v) => v !== "false");
       apply(getVal("fern-panel-shelf-enabled"), setPanelShelf, (v) => v !== "false");
+      apply(getVal("fern-panel-ai-enabled"), setPanelAi, (v) => v !== "false");
       apply(getVal("fern-panel-order"), setPanelOrder, (v) => parsePanelOrder(v));
       apply(getVal("fern-cc-layout"), setCcLayout, (v) => parseCcLayout(v));
       apply(getVal("fern-dock-recycle-enabled"), setDockRecycle, readBool);
@@ -496,6 +500,7 @@ export function useSettings() {
     "fern-dock-show-desktop-corner": setDockShowDesktop,
     "fern-panel-control-center-enabled": (v) => setPanelControlCenter(v !== false && v !== "false"),
     "fern-panel-shelf-enabled": (v) => setPanelShelf(v !== false && v !== "false"),
+    "fern-panel-ai-enabled": (v) => setPanelAi(v !== false && v !== "false"),
     "fern-panel-order": (v) => setPanelOrder(parsePanelOrder(v === null ? null : String(v))),
     "fern-cc-layout": (v) => setCcLayout(parseCcLayout(v === null ? null : String(v))),
     "fern-dock-recycle-enabled": setDockRecycle,
@@ -1049,6 +1054,12 @@ export function useSettings() {
     saveSetting("fern-panel-shelf-enabled", String(next));
   };
 
+  const togglePanelAi = () => {
+    const next = !panelAi;
+    setPanelAi(next);
+    saveSetting("fern-panel-ai-enabled", String(next));
+  };
+
   const toggleDockTaskView = () => {
     const next = !dockTaskView;
     setDockTaskView(next);
@@ -1594,6 +1605,8 @@ export function useSettings() {
     togglePanelControlCenter,
     panelShelf,
     togglePanelShelf,
+    panelAi,
+    togglePanelAi,
     panelOrder,
     reorderPanels,
     resetPanelOrder,

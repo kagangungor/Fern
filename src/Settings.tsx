@@ -266,6 +266,8 @@ function SettingsApp() {
               togglePanelControlCenter={settings.togglePanelControlCenter}
               panelShelf={settings.panelShelf}
               togglePanelShelf={settings.togglePanelShelf}
+              panelAi={settings.panelAi}
+              togglePanelAi={settings.togglePanelAi}
               panelStatus={settings.panelStatus}
               togglePanelStatus={settings.togglePanelStatus}
               panelScrollDirection={settings.panelScrollDirection}
