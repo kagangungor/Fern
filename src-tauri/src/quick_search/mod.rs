@@ -1,5 +1,6 @@
 pub mod everything;
 
+use std::os::windows::process::CommandExt;
 use std::path::Path;
 use std::process::Command;
 
@@ -52,7 +53,7 @@ impl SearchManager {
 #[tauri::command]
 pub async fn search_files(query: String, limit: Option<usize>) -> Vec<FileSearchResult> {
     let trimmed = query.trim().to_string();
-    if trimmed.len() < 2 {
+    if trimmed.chars().count() < 2 {
         return Vec::new();
     }
     let cap = limit.unwrap_or(5).clamp(1, 12);
@@ -72,7 +73,7 @@ pub fn open_file_path(path: String, reveal_in_folder: bool) -> Result<(), String
     }
     if reveal_in_folder {
         Command::new("explorer.exe")
-            .arg(format!("/select,{path}"))
+            .raw_arg(format!("/select,\"{}\"", path.replace('"', "")))
             .spawn()
             .map_err(|e| e.to_string())?;
         return Ok(());

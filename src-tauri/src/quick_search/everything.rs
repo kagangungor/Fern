@@ -92,7 +92,7 @@ impl EverythingProvider {
         if data.len() < list_size {
             return Vec::new();
         }
-        let list = unsafe { &*(data.as_ptr() as *const EverythingIpcList2) };
+        let list = unsafe { std::ptr::read_unaligned(data.as_ptr() as *const EverythingIpcList2) };
         let count = (list.numitems as usize).min(20);
         let items_end = list_size.saturating_add(count.saturating_mul(item_size));
         if data.len() < items_end {
@@ -104,7 +104,7 @@ impl EverythingProvider {
             let item_ptr = unsafe {
                 data.as_ptr().add(list_size + i * item_size) as *const EverythingIpcItem2
             };
-            let item = unsafe { &*item_ptr };
+            let item = unsafe { std::ptr::read_unaligned(item_ptr) };
             let mut offset = item.data_offset as usize;
             let Some((name, next_off)) = read_len_prefixed_utf16(data, offset) else {
                 continue;
@@ -169,7 +169,7 @@ unsafe extern "system" fn reply_wnd_proc(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
-    if msg == WM_COPYDATA {
+    if msg == WM_COPYDATA && lparam.0 != 0 {
         let cds = &*(lparam.0 as *const COPYDATASTRUCT);
         if cds.dwData == REPLY_ID as usize && !cds.lpData.is_null() && cds.cbData > 0 {
             let user_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const mpsc::Sender<Vec<u8>>;
@@ -195,7 +195,7 @@ impl FileSearchProvider for EverythingProvider {
 
     fn search(&self, query: &str, limit: usize) -> Vec<FileSearchResult> {
         let trimmed = query.trim();
-        if trimmed.len() < 2 || limit == 0 {
+        if trimmed.chars().count() < 2 || limit == 0 {
             return Vec::new();
         }
         let Some(target_hwnd) = Self::find_everything_hwnd() else {
@@ -302,5 +302,63 @@ mod tests {
         let provider = EverythingProvider;
         assert!(provider.search("", 5).is_empty());
         assert!(provider.search("a", 5).is_empty());
+        assert!(provider.search("ş", 5).is_empty());
+    }
+
+    #[test]
+    fn parse_reply_reads_unaligned_slice_safely() {
+        let list_size = std::mem::size_of::<EverythingIpcList2>();
+        let item_size = std::mem::size_of::<EverythingIpcItem2>();
+        let data_offset = (list_size + item_size) as u32;
+
+        let list = EverythingIpcList2 {
+            totfolders: 0,
+            totfiles: 1,
+            totitems: 1,
+            numfolders: 0,
+            numfiles: 1,
+            numitems: 1,
+            offset: 0,
+        };
+        let item = EverythingIpcItem2 {
+            flags: 0,
+            data_offset,
+        };
+
+        let mut payload = Vec::new();
+        // Leading pad byte so &payload[1..] is 1-byte misaligned for u32 fields
+        payload.push(0xAA);
+        unsafe {
+            payload.extend_from_slice(std::slice::from_raw_parts(
+                (&list as *const EverythingIpcList2) as *const u8,
+                list_size,
+            ));
+            payload.extend_from_slice(std::slice::from_raw_parts(
+                (&item as *const EverythingIpcItem2) as *const u8,
+                item_size,
+            ));
+        }
+
+        let push_len_prefixed = |buf: &mut Vec<u8>, s: &str| {
+            let u16s: Vec<u16> = s.encode_utf16().collect();
+            buf.extend_from_slice(&(u16s.len() as u32).to_le_bytes());
+            for u in u16s {
+                buf.extend_from_slice(&u.to_le_bytes());
+            }
+            buf.extend_from_slice(&0u16.to_le_bytes());
+        };
+        push_len_prefixed(&mut payload, "report.PDF");
+        push_len_prefixed(&mut payload, r"C:\My Docs");
+
+        let unaligned = &payload[1..];
+        assert_ne!((unaligned.as_ptr() as usize) % std::mem::align_of::<u32>(), 0);
+
+        let results = EverythingProvider::parse_reply_buffer(unaligned);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].name, "report.PDF");
+        assert_eq!(results[0].parent_dir, r"C:\My Docs");
+        assert_eq!(results[0].path, r"C:\My Docs\report.PDF");
+        assert!(!results[0].is_dir);
+        assert_eq!(results[0].extension.as_deref(), Some("pdf"));
     }
 }
