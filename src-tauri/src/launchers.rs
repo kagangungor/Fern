@@ -107,6 +107,12 @@ pub fn get_search_launchers() -> Vec<SearchLauncherInfo> {
 
     vec![
         SearchLauncherInfo {
+            id: "fern".to_string(),
+            name: "Fern Quick Launcher".to_string(),
+            hotkey: "Alt + Space".to_string(),
+            is_available: true,
+        },
+        SearchLauncherInfo {
             id: "windows".to_string(),
             name: "Windows Search".to_string(),
             hotkey: "Win + S".to_string(),
@@ -146,9 +152,12 @@ pub fn get_search_launchers() -> Vec<SearchLauncherInfo> {
 }
 
 #[tauri::command]
-pub fn trigger_search_launcher(launcher_id: Option<String>) {
-    let launcher = launcher_id.unwrap_or_else(|| "windows".to_string());
+pub fn trigger_search_launcher(app: tauri::AppHandle, launcher_id: Option<String>) {
+    let launcher = launcher_id.unwrap_or_else(|| "fern".to_string());
     match launcher.to_lowercase().as_str() {
+        "fern" => {
+            crate::launcher_window::toggle(&app);
+        }
         "powertoys" | "raycast" | "flow" | "listary" => {
             // Modern desktop launchers default to Alt+Space
             send_alt_chord(VK_SPACE);

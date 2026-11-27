@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use tauri::{AppHandle, Emitter};
 use windows::Win32::Foundation::{LPARAM, WPARAM};
 use windows::Win32::System::Threading::GetCurrentThreadId;
@@ -18,9 +18,16 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 const NOTCH_HOTKEY_ID: i32 = 1;
 const MIC_MUTE_HOTKEY_ID: i32 = 2;
+const LAUNCHER_HOTKEY_ID: i32 = 3;
 const RELOAD: u32 = WM_APP + 1;
 
 static THREAD_ID: AtomicU32 = AtomicU32::new(0);
+static LAUNCHER_HOTKEY_REGISTERED: AtomicBool = AtomicBool::new(false);
+
+#[tauri::command]
+pub fn get_launcher_hotkey_status() -> bool {
+    LAUNCHER_HOTKEY_REGISTERED.load(Ordering::SeqCst)
+}
 
 fn key_for(name: &str) -> Option<VIRTUAL_KEY> {
     let lower = name.to_lowercase();
@@ -122,7 +129,7 @@ pub fn parse_shortcut(spec: &str) -> Option<(Vec<VIRTUAL_KEY>, VIRTUAL_KEY)> {
     Some((modifiers, key))
 }
 
-fn apply(app: &AppHandle, reg_notch: &mut bool, reg_mic: &mut bool) {
+fn apply(app: &AppHandle, reg_notch: &mut bool, reg_mic: &mut bool, reg_launcher: &mut bool) {
     unsafe {
         if *reg_notch {
             let _ = UnregisterHotKey(None, NOTCH_HOTKEY_ID);
@@ -131,6 +138,10 @@ fn apply(app: &AppHandle, reg_notch: &mut bool, reg_mic: &mut bool) {
         if *reg_mic {
             let _ = UnregisterHotKey(None, MIC_MUTE_HOTKEY_ID);
             *reg_mic = false;
+        }
+        if *reg_launcher {
+            let _ = UnregisterHotKey(None, LAUNCHER_HOTKEY_ID);
+            *reg_launcher = false;
         }
 
         // Notch Hotkey
@@ -178,6 +189,39 @@ fn apply(app: &AppHandle, reg_notch: &mut bool, reg_mic: &mut bool) {
                 crate::diagnostics::log(&format!("hotkey: could not read mic mute \"{mic_spec}\""));
             }
         }
+
+        // Fern Quick Launcher Hotkey (defaults to Alt+Space; empty string disables without conflict)
+        let launcher_spec = crate::utils::get_setting_str(app, "fern-launcher-hotkey")
+            .unwrap_or_else(|| "Alt+Space".to_string());
+        if launcher_spec.trim().is_empty() {
+            LAUNCHER_HOTKEY_REGISTERED.store(true, Ordering::SeqCst);
+        } else if let Some((modifiers, key)) = parse_shortcut(&launcher_spec) {
+            let mut mods = MOD_NOREPEAT;
+            for m in modifiers {
+                mods |= match m {
+                    VK_LCONTROL => MOD_CONTROL,
+                    VK_LMENU => MOD_ALT,
+                    VK_LSHIFT => MOD_SHIFT,
+                    VK_LWIN => MOD_WIN,
+                    _ => HOT_KEY_MODIFIERS(0),
+                };
+            }
+            match RegisterHotKey(None, LAUNCHER_HOTKEY_ID, mods, key.0 as u32) {
+                Ok(()) => {
+                    *reg_launcher = true;
+                    LAUNCHER_HOTKEY_REGISTERED.store(true, Ordering::SeqCst);
+                }
+                Err(e) => {
+                    LAUNCHER_HOTKEY_REGISTERED.store(false, Ordering::SeqCst);
+                    crate::diagnostics::log(&format!(
+                        "hotkey: could not register launcher \"{launcher_spec}\": {e}"
+                    ));
+                }
+            }
+        } else {
+            LAUNCHER_HOTKEY_REGISTERED.store(false, Ordering::SeqCst);
+            crate::diagnostics::log(&format!("hotkey: could not read launcher \"{launcher_spec}\""));
+        }
     }
 }
 
@@ -188,7 +232,8 @@ pub fn start(app: AppHandle) {
         THREAD_ID.store(GetCurrentThreadId(), Ordering::SeqCst);
         let mut reg_notch = false;
         let mut reg_mic = false;
-        apply(&app, &mut reg_notch, &mut reg_mic);
+        let mut reg_launcher = false;
+        apply(&app, &mut reg_notch, &mut reg_mic, &mut reg_launcher);
         while GetMessageW(&mut msg, None, 0, 0).as_bool() {
             match msg.message {
                 WM_HOTKEY => {
@@ -197,9 +242,11 @@ pub fn start(app: AppHandle) {
                         let _ = app.emit("notch-hotkey-toggle", ());
                     } else if id == MIC_MUTE_HOTKEY_ID {
                         let _ = crate::privacy_hud::toggle_microphone_mute_internal(&app);
+                    } else if id == LAUNCHER_HOTKEY_ID {
+                        crate::launcher_window::toggle(&app);
                     }
                 }
-                RELOAD => apply(&app, &mut reg_notch, &mut reg_mic),
+                RELOAD => apply(&app, &mut reg_notch, &mut reg_mic, &mut reg_launcher),
                 _ => {}
             }
         }
@@ -247,5 +294,10 @@ mod tests {
         assert!(parse_shortcut("").is_none());
         assert!(parse_shortcut("Ctrl+Shift").is_none());
         assert!(parse_shortcut("Ctrl+UnknownKey").is_none());
+    }
+
+    #[test]
+    fn parses_alt_space_default_launcher_hotkey() {
+        assert_eq!(parse_shortcut("Alt+Space"), Some((vec![VK_LMENU], VK_SPACE)));
     }
 }

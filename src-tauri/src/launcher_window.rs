@@ -224,12 +224,10 @@ fn ensure_and_maybe_show(app: &AppHandle, show_when_ready: bool) {
     });
 }
 
-#[allow(dead_code)]
 pub fn show(app: &AppHandle) {
     ensure_and_maybe_show(app, true);
 }
 
-#[allow(dead_code)]
 pub fn hide(app: &AppHandle) {
     PENDING_SHOW.store(false, Ordering::SeqCst);
     if let Some(win) = app.get_webview_window(LAUNCHER) {
@@ -239,7 +237,6 @@ pub fn hide(app: &AppHandle) {
     }
 }
 
-#[allow(dead_code)]
 pub fn toggle(app: &AppHandle) {
     if let Some(win) = app.get_webview_window(LAUNCHER) {
         if win.is_visible().unwrap_or(false) {
@@ -250,7 +247,6 @@ pub fn toggle(app: &AppHandle) {
     show(app);
 }
 
-#[allow(dead_code)]
 pub fn prewarm_later(app: AppHandle) {
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(Duration::from_secs(4)).await;
@@ -263,19 +259,16 @@ pub fn prewarm_later(app: AppHandle) {
     });
 }
 
-#[allow(dead_code)]
 #[tauri::command]
 pub fn toggle_launcher(app: AppHandle) {
     toggle(&app);
 }
 
-#[allow(dead_code)]
 #[tauri::command]
 pub fn hide_launcher(app: AppHandle) {
     hide(&app);
 }
 
-#[allow(dead_code)]
 #[tauri::command]
 pub fn launcher_ready(app: AppHandle) {
     if PENDING_SHOW.swap(false, Ordering::SeqCst) {

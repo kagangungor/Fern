@@ -31,7 +31,6 @@ pub struct SearchManager {
 }
 
 impl SearchManager {
-    #[allow(dead_code)]
     pub fn default_providers() -> Self {
         Self {
             providers: vec![Box::new(everything::EverythingProvider)],
@@ -49,7 +48,6 @@ impl SearchManager {
     }
 }
 
-#[allow(dead_code)]
 #[tauri::command]
 pub async fn search_files(query: String, limit: Option<usize>) -> Vec<FileSearchResult> {
     let trimmed = query.trim().to_string();
@@ -64,7 +62,6 @@ pub async fn search_files(query: String, limit: Option<usize>) -> Vec<FileSearch
     .unwrap_or_default()
 }
 
-#[allow(dead_code)]
 #[tauri::command]
 pub fn open_file_path(path: String, reveal_in_folder: bool) -> Result<(), String> {
     let p = Path::new(&path);
@@ -96,7 +93,6 @@ pub fn open_file_path(path: String, reveal_in_folder: bool) -> Result<(), String
     Ok(())
 }
 
-#[allow(dead_code)]
 #[tauri::command]
 pub fn launcher_system_action(action: String) -> Result<(), String> {
     match action.as_str() {

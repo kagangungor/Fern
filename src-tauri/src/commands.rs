@@ -700,7 +700,7 @@ pub async fn open_app(app: AppHandle, app_name: String, args: Option<String>) {
 
     if app_name == "search" {
         let launcher = crate::utils::get_setting_str(&app, "fern-search-launcher");
-        tauri::async_runtime::spawn_blocking(move || crate::launchers::trigger_search_launcher(launcher));
+        tauri::async_runtime::spawn_blocking(move || crate::launchers::trigger_search_launcher(app, launcher));
         return;
     }
 
