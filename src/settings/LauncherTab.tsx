@@ -8,7 +8,6 @@ import {
   Globe,
   HardDrive,
   LayoutList,
-  RotateCcw,
   Search,
   Terminal,
   Trash2,
@@ -155,14 +154,6 @@ export function LauncherTab() {
     saveJsonSetting(LAUNCHER_IDLE_ORDER_KEY, norm);
   };
 
-  const resetIdle = () => {
-    const order = [...IDLE_SECTIONS];
-    setIdleOrder(order);
-    setIdleDisabled([]);
-    saveJsonSetting(LAUNCHER_IDLE_ORDER_KEY, order);
-    saveJsonSetting(LAUNCHER_IDLE_DISABLED_KEY, []);
-  };
-
   const toggleSearch = (id: string) => {
     const sid = id as SearchSectionId;
     const next = searchDisabled.includes(sid)
@@ -176,14 +167,6 @@ export function LauncherTab() {
     const norm = normalizeOrder(next, SEARCH_SECTIONS);
     setSearchOrder(norm);
     saveJsonSetting(LAUNCHER_SEARCH_ORDER_KEY, norm);
-  };
-
-  const resetSearch = () => {
-    const order = [...SEARCH_SECTIONS];
-    setSearchOrder(order);
-    setSearchDisabled([]);
-    saveJsonSetting(LAUNCHER_SEARCH_ORDER_KEY, order);
-    saveJsonSetting(LAUNCHER_SEARCH_DISABLED_KEY, []);
   };
 
   const clearRecents = () => {
@@ -271,17 +254,6 @@ export function LauncherTab() {
           label={t("launcherSettings.section.idle")}
           desc={t("launcherSettings.section.idle.summary")}
           stacked
-          headerAction={
-            <button
-              type="button"
-              className="panel-order-reset"
-              style={{ marginTop: 0 }}
-              onClick={resetIdle}
-            >
-              <RotateCcw size={12} />
-              {t("launcherSettings.resetOrder")}
-            </button>
-          }
         >
           <OrderList
             ids={idleOrder}
@@ -327,17 +299,6 @@ export function LauncherTab() {
           label={t("launcherSettings.section.modules")}
           desc={t("launcherSettings.section.modules.summary")}
           stacked
-          headerAction={
-            <button
-              type="button"
-              className="panel-order-reset"
-              style={{ marginTop: 0 }}
-              onClick={resetSearch}
-            >
-              <RotateCcw size={12} />
-              {t("launcherSettings.resetOrder")}
-            </button>
-          }
         >
           <OrderList
             ids={searchOrder}
