@@ -168,12 +168,20 @@ export function LauncherApp() {
   const [webEngine, setWebEngine] = useState<WebEngine>(readWebEngine);
   const [icons, setIcons] = useState<Record<string, string | null>>({});
   const [openSeq, setOpenSeq] = useState(0);
-  const [, setLangVersion] = useState(0);
+  const [langVersion, setLangVersion] = useState(0);
 
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const requestIdRef = useRef(0);
   const requestedIconsRef = useRef<Set<string>>(new Set());
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   const commands = useMemo(() => buildQuickCommands(), []);
 
@@ -314,6 +322,7 @@ export function LauncherApp() {
       const runningMatch =
         runningByKey.get(key) ?? runningByPath.get(normalizePath(app.path));
       if (runningMatch) {
+        seenKeys.add(appKey(runningMatch));
         merged.push({
           ...app,
           is_running: true,
@@ -347,26 +356,30 @@ export function LauncherApp() {
 
       const list: LauncherItem[] = [];
       const seen = new Set<string>();
+      const seenPaths = new Set<string>();
 
       let recentCount = 0;
       for (const key of recents) {
         if (recentCount >= 5) break;
         const app = byKey.get(key);
         if (!app || seen.has(key)) continue;
+        const norm = normalizePath(app.path);
+        if (norm && seenPaths.has(norm)) continue;
         seen.add(key);
+        if (norm) seenPaths.add(norm);
         list.push({ kind: "app", id: `app:${key}`, app });
         recentCount++;
       }
 
-      let runningCount = 0;
       for (const r of runningApps) {
-        if (runningCount >= 8) break;
+        if (list.length >= 8) break;
         const key = appKey(r);
-        if (seen.has(key)) continue;
+        const norm = normalizePath(r.path);
+        if (seen.has(key) || (norm && seenPaths.has(norm))) continue;
         seen.add(key);
+        if (norm) seenPaths.add(norm);
         const app = byKey.get(key) ?? r;
         list.push({ kind: "app", id: `app:${key}`, app });
-        runningCount++;
       }
 
       return { items: list, idleRecentCount: recentCount };
@@ -462,7 +475,17 @@ export function LauncherApp() {
     }
 
     return { items: list, idleRecentCount: 0 };
-  }, [query, mergedApps, runningApps, recents, commands, fileResults, webEngine, t]);
+  }, [
+    query,
+    mergedApps,
+    runningApps,
+    recents,
+    commands,
+    fileResults,
+    webEngine,
+    t,
+    langVersion,
+  ]);
 
   // Reset selection & confirmation when query changes
   useEffect(() => {
@@ -497,7 +520,6 @@ export function LauncherApp() {
 
   // Lazy-fetch app icons ONLY for currently rendered app rows
   useEffect(() => {
-    let active = true;
     for (const item of items) {
       if (item.kind !== "app") continue;
       const key = appKey(item.app);
@@ -510,7 +532,7 @@ export function LauncherApp() {
         hwnd: item.app.hwnd ?? null,
       })
         .then((icon) => {
-          if (active && icon) {
+          if (mountedRef.current && icon) {
             setIcons((prev) => ({ ...prev, [key]: icon }));
           }
         })
@@ -518,9 +540,6 @@ export function LauncherApp() {
           // Leave fallback icon
         });
     }
-    return () => {
-      active = false;
-    };
   }, [items]);
 
   const hideLauncher = useCallback(() => {
