@@ -167,8 +167,8 @@ pub fn encode_bgra_to_jpeg_data_url(
     let long_edge = width.max(height);
     let final_img = if long_edge > MAX_LONG_EDGE {
         let scale = MAX_LONG_EDGE as f64 / long_edge as f64;
-        let new_w = ((width as f64 * scale).round() as u32).max(1);
-        let new_h = ((height as f64 * scale).round() as u32).max(1);
+        let new_w = ((width as f64 * scale).round() as u32).clamp(1, MAX_LONG_EDGE);
+        let new_h = ((height as f64 * scale).round() as u32).clamp(1, MAX_LONG_EDGE);
         resize(&img, new_w, new_h, FilterType::Triangle)
     } else {
         img
@@ -242,7 +242,7 @@ fn capture_screen_bgra() -> Result<(Vec<u8>, u32, u32), String> {
         if prev_obj.is_invalid() {
             return Err("SelectObject failed".to_string());
         }
-        let _select_guard = SelectGuard {
+        let select_guard = SelectGuard {
             dc: mem_dc.0,
             prev: prev_obj,
         };
@@ -259,6 +259,9 @@ fn capture_screen_bgra() -> Result<(Vec<u8>, u32, u32), String> {
             SRCCOPY,
         )
         .map_err(|e| format!("BitBlt failed: {e}"))?;
+
+        // Win32 GDI requires the bitmap to be deselected from the DC before calling GetDIBits.
+        drop(select_guard);
 
         let mut bmi = BITMAPINFO {
             bmiHeader: BITMAPINFOHEADER {
