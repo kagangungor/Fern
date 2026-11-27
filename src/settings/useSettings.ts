@@ -165,7 +165,7 @@ export function useSettings() {
   const [dockAppVolumeScroll, setDockAppVolumeScroll] = useState(() => localStorage.getItem("fern-dock-app-volume-scroll") !== "false");
   const [dockSearchEnabled, setDockSearchEnabled] = useState(true);
   const [dockSearchLauncher, setDockSearchLauncher] = useState(
-    () => localStorage.getItem("fern-search-launcher") || "windows"
+    () => localStorage.getItem("fern-search-launcher") || "fern"
   );
   const [dockCalendarEnabled, setDockCalendarEnabled] = useState(true);
   const [dockTray, setDockTray] = useState(
