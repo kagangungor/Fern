@@ -236,8 +236,6 @@ export function LauncherApp() {
       })
       .catch(() => {});
 
-    requestAnimationFrame(() => inputRef.current?.focus());
-
     return () => {
       active = false;
     };
@@ -781,7 +779,7 @@ export function LauncherApp() {
                       className={`launcher-row launcher-calc-row${
                         isSelected ? " is-selected" : ""
                       }`}
-                      onMouseEnter={() => setSelectedIndex(idx)}
+                      onMouseEnter={() => setSelectedIndex((prev) => (prev === idx ? prev : idx))}
                       onClick={() => void activateItem(item)}
                     >
                       <div className="launcher-icon-box launcher-icon-calc">
@@ -814,7 +812,7 @@ export function LauncherApp() {
                           className={`launcher-row${
                             isSelected ? " is-selected" : ""
                           }`}
-                          onMouseEnter={() => setSelectedIndex(idx)}
+                          onMouseEnter={() => setSelectedIndex((prev) => (prev === idx ? prev : idx))}
                           onClick={(e) =>
                             void activateItem(item, {
                               ctrl: e.ctrlKey || e.metaKey,
@@ -870,7 +868,7 @@ export function LauncherApp() {
                       className={`launcher-row${
                         isSelected ? " is-selected" : ""
                       }${isConfirming ? " is-confirm" : ""}`}
-                      onMouseEnter={() => setSelectedIndex(idx)}
+                      onMouseEnter={() => setSelectedIndex((prev) => (prev === idx ? prev : idx))}
                       onClick={() => void activateItem(item)}
                     >
                       <div
@@ -915,7 +913,7 @@ export function LauncherApp() {
                       className={`launcher-row${
                         isSelected ? " is-selected" : ""
                       }`}
-                      onMouseEnter={() => setSelectedIndex(idx)}
+                      onMouseEnter={() => setSelectedIndex((prev) => (prev === idx ? prev : idx))}
                       onClick={(e) =>
                         void activateItem(item, {
                           ctrl: e.ctrlKey || e.metaKey,
@@ -949,7 +947,7 @@ export function LauncherApp() {
                       className={`launcher-row${
                         isSelected ? " is-selected" : ""
                       }`}
-                      onMouseEnter={() => setSelectedIndex(idx)}
+                      onMouseEnter={() => setSelectedIndex((prev) => (prev === idx ? prev : idx))}
                       onClick={() => void activateItem(item)}
                     >
                       <div className="launcher-icon-box">
@@ -980,7 +978,7 @@ export function LauncherApp() {
                       className={`launcher-row${
                         isSelected ? " is-selected" : ""
                       }`}
-                      onMouseEnter={() => setSelectedIndex(idx)}
+                      onMouseEnter={() => setSelectedIndex((prev) => (prev === idx ? prev : idx))}
                       onClick={() => void activateItem(item)}
                     >
                       <div className="launcher-icon-box">

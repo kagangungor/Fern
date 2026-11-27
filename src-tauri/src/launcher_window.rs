@@ -254,18 +254,6 @@ pub fn toggle(app: &AppHandle) {
     show(app);
 }
 
-pub fn prewarm_later(app: AppHandle) {
-    tauri::async_runtime::spawn(async move {
-        tokio::time::sleep(Duration::from_secs(4)).await;
-        let mem_saver = crate::utils::get_setting_str(&app, "fern-memory-saver")
-            .as_deref()
-            == Some("true");
-        if !mem_saver {
-            ensure_and_maybe_show(&app, false);
-        }
-    });
-}
-
 #[tauri::command]
 pub fn toggle_launcher(app: AppHandle) {
     toggle(&app);

@@ -349,7 +349,6 @@ fn main() {
             startup::migrate(app.handle());
             agent_api::start(app.handle().clone());
             crate::hotkeys::start(app.handle().clone());
-            launcher_window::prewarm_later(app.handle().clone());
             privacy_hud::start(app.handle().clone());
 
             #[cfg(not(debug_assertions))]
