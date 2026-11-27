@@ -168,6 +168,18 @@ impl ChildGuard {
 
     fn kill_and_reap(&mut self) {
         if let Some(mut child) = self.0.take() {
+            #[cfg(windows)]
+            {
+                use std::os::windows::process::CommandExt;
+                let pid = child.id().to_string();
+                let _ = Command::new("taskkill")
+                    .args(["/F", "/T", "/PID", &pid])
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .creation_flags(CREATE_NO_WINDOW)
+                    .status();
+            }
             let _ = child.kill();
             let _ = child.wait();
         }
@@ -281,14 +293,52 @@ fn is_cmd_script(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
+fn format_cmd_arg(arg: &str) -> String {
+    if arg.is_empty() {
+        "\"\"".to_string()
+    } else if arg.chars().any(|c| c.is_whitespace() || c == '"') {
+        format!("\"{}\"", arg.replace('"', "\\\""))
+    } else {
+        arg.to_string()
+    }
+}
+
+fn format_cmd_raw_arg(bin_path: &Path, args: &[&str]) -> String {
+    let quoted_bin = format!("\"{}\"", bin_path.to_string_lossy());
+    if args.is_empty() {
+        format!("\"{quoted_bin}\"")
+    } else {
+        let args_str = args
+            .iter()
+            .map(|arg| format_cmd_arg(arg))
+            .collect::<Vec<_>>()
+            .join(" ");
+        format!("\"{quoted_bin} {args_str}\"")
+    }
+}
+
 fn build_cli_command(provider: Provider, bin_path: &Path) -> Command {
     let args = provider_cli_args(provider);
 
-    let mut cmd = if cfg!(windows) && is_cmd_script(bin_path) {
-        let mut c = Command::new("cmd.exe");
-        c.arg("/C").arg(bin_path).args(args);
+    #[cfg(windows)]
+    let mut cmd = {
+        use std::os::windows::process::CommandExt;
+        let mut c = if is_cmd_script(bin_path) {
+            let mut cmd_exe = Command::new("cmd.exe");
+            cmd_exe.args(["/D", "/S", "/C"]);
+            cmd_exe.raw_arg(format_cmd_raw_arg(bin_path, args));
+            cmd_exe
+        } else {
+            let mut direct = Command::new(bin_path);
+            direct.args(args);
+            direct
+        };
+        c.creation_flags(CREATE_NO_WINDOW);
         c
-    } else {
+    };
+
+    #[cfg(not(windows))]
+    let mut cmd = {
         let mut c = Command::new(bin_path);
         c.args(args);
         c
@@ -297,12 +347,6 @@ fn build_cli_command(provider: Provider, bin_path: &Path) -> Command {
     cmd.stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        cmd.creation_flags(CREATE_NO_WINDOW);
-    }
 
     cmd
 }
@@ -702,5 +746,45 @@ mod tests {
         drain_valid_utf8(&mut pending, &mut chunks);
         assert_eq!(chunks, vec!["gr", "ün"]);
         assert!(pending.is_empty());
+    }
+
+    #[test]
+    fn cmd_wrapper_raw_arg_preserves_spaces_and_empty_args() {
+        let gemini_path = PathBuf::from(r"C:\Users\John Doe\AppData\Roaming\npm\gemini.cmd");
+        let raw_gemini = format_cmd_raw_arg(&gemini_path, provider_cli_args(Provider::Gemini));
+        assert_eq!(
+            raw_gemini,
+            r#"""C:\Users\John Doe\AppData\Roaming\npm\gemini.cmd" -p """"#
+        );
+
+        let claude_path = PathBuf::from(r"C:\Users\John Doe\AppData\Roaming\npm\claude.cmd");
+        let raw_claude = format_cmd_raw_arg(&claude_path, provider_cli_args(Provider::Claude));
+        assert_eq!(
+            raw_claude,
+            r#"""C:\Users\John Doe\AppData\Roaming\npm\claude.cmd" -p""#
+        );
+
+        let codex_path = PathBuf::from(r"C:\Users\John Doe\AppData\Roaming\npm\codex.cmd");
+        let raw_codex = format_cmd_raw_arg(&codex_path, provider_cli_args(Provider::OpenAI));
+        assert_eq!(
+            raw_codex,
+            r#"""C:\Users\John Doe\AppData\Roaming\npm\codex.cmd" exec -""#
+        );
+
+        let cmd = build_cli_command(Provider::Gemini, &gemini_path);
+        assert_eq!(cmd.get_program(), "cmd.exe");
+        let args: Vec<String> = cmd
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            args,
+            vec![
+                "/D",
+                "/S",
+                "/C",
+                r#"""C:\Users\John Doe\AppData\Roaming\npm\gemini.cmd" -p """"#
+            ]
+        );
     }
 }
