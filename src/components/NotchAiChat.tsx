@@ -227,8 +227,8 @@ export function NotchAiChat({
   }, [busy, onBusyChange]);
 
   useEffect(() => {
-    onHasMessagesChange(messages.length > 0);
-  }, [messages.length, onHasMessagesChange]);
+    onHasMessagesChange(!setupOpen && messages.length > 0);
+  }, [setupOpen, messages.length, onHasMessagesChange]);
 
   useEffect(() => {
     if (autoFocusToken > 0 && !setupOpen) {

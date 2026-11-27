@@ -15,8 +15,8 @@
   color: var(--fern-text, #ffffff);
   white-space: normal;
   overflow: hidden;
-  user-select: text;
-  -webkit-user-select: text;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 /* ── Header Bar ── */
@@ -513,6 +513,8 @@
   flex-direction: column;
   gap: 8px;
   padding: 2px 2px 4px;
+  user-select: text;
+  -webkit-user-select: text;
   scrollbar-width: thin;
   scrollbar-color: var(--fern-scrollbar-thumb, rgba(255, 255, 255, 0.16)) transparent;
 }

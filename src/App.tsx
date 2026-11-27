@@ -2440,6 +2440,10 @@ function App() {
     }
   }, [fernMode, panelControlCenter, panelShelf, panelAi]);
 
+  useEffect(() => {
+    setWidgetTip(null);
+  }, [fernMode, isHovered]);
+
   // Music mode shows any time we have media info (playing or paused) and music mode setting is enabled
   const isMusicMode = mediaInfo.has_media && fernMode === 'music' && settingsMusicModeEnabled;
 
