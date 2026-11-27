@@ -8,6 +8,7 @@ export function SettingRow({
   danger,
   divider = true,
   stacked,
+  headerAction,
   onClick,
   children,
 }: SettingRowProps) {
@@ -30,6 +31,9 @@ export function SettingRow({
           <span className="setting-label">{label}</span>
           {desc && <span className="setting-desc">{desc}</span>}
         </div>
+        {headerAction && (
+          <div style={{ marginLeft: "auto", flexShrink: 0 }}>{headerAction}</div>
+        )}
         {children}
       </div>
       {divider && <div className="setting-divider" />}

@@ -8,6 +8,7 @@ import {
   Globe,
   HardDrive,
   LayoutList,
+  RotateCcw,
   Search,
   Terminal,
   Trash2,
@@ -270,6 +271,17 @@ export function LauncherTab() {
           label={t("launcherSettings.section.idle")}
           desc={t("launcherSettings.section.idle.summary")}
           stacked
+          headerAction={
+            <button
+              type="button"
+              className="panel-order-reset"
+              style={{ marginTop: 0 }}
+              onClick={resetIdle}
+            >
+              <RotateCcw size={12} />
+              {t("launcherSettings.resetOrder")}
+            </button>
+          }
         >
           <OrderList
             ids={idleOrder}
@@ -278,8 +290,7 @@ export function LauncherTab() {
             enabled={(id) => !idleDisabled.includes(id as IdleSectionId)}
             onToggle={toggleIdle}
             onReorder={reorderIdle}
-            onReset={resetIdle}
-            resetLabel={t("launcherSettings.resetOrder")}
+            showPosition={false}
           />
         </SettingRow>
 
@@ -316,6 +327,17 @@ export function LauncherTab() {
           label={t("launcherSettings.section.modules")}
           desc={t("launcherSettings.section.modules.summary")}
           stacked
+          headerAction={
+            <button
+              type="button"
+              className="panel-order-reset"
+              style={{ marginTop: 0 }}
+              onClick={resetSearch}
+            >
+              <RotateCcw size={12} />
+              {t("launcherSettings.resetOrder")}
+            </button>
+          }
         >
           <OrderList
             ids={searchOrder}
@@ -324,8 +346,7 @@ export function LauncherTab() {
             enabled={(id) => !searchDisabled.includes(id as SearchSectionId)}
             onToggle={toggleSearch}
             onReorder={reorderSearch}
-            onReset={resetSearch}
-            resetLabel={t("launcherSettings.resetOrder")}
+            showPosition={false}
           />
         </SettingRow>
 
