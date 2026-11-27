@@ -31,10 +31,11 @@ describe("parsePanelOrder", () => {
       "command-center",
       "calendar",
       "shelf",
+      "ai",
     ]);
     expect(parsePanelOrder("not json")).toBeNull();
     expect(parsePanelOrder(null)).toBeNull();
-    expect(DEFAULT_PANEL_ORDER.length).toBe(5);
+    expect(DEFAULT_PANEL_ORDER.length).toBe(6);
   });
 
   test("readRememberedPanel validates against available panels", () => {

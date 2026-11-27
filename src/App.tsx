@@ -46,6 +46,7 @@ import { NotchTour, TOUR_STEPS } from "./components/NotchTour";
 import { useStopwatch } from "./hooks/useStopwatch";
 import { t as translate, useT } from "./i18n";
 import { NotchShelf, useShelf } from "./components/NotchShelf";
+import { NotchAiChat } from "./components/NotchAiChat";
 import {
   parseCcLayout,
   parsePanelOrder,
@@ -759,7 +760,7 @@ function App() {
   const dockModeInitial = useRef(true);
   const notchModeInitial = useRef(true);
 
-  const [fernMode, setFernMode] = useState<'music' | 'calendar' | 'command-center' | 'status' | 'shelf' | 'device' | 'devices' | 'agent'>('status');
+  const [fernMode, setFernMode] = useState<'music' | 'calendar' | 'command-center' | 'status' | 'shelf' | 'ai' | 'device' | 'devices' | 'agent'>('status');
   const [tourActive, setTourActive] = useState(false);
   const [tourStep, setTourStep] = useState(0);
   const [deviceAlert, setDeviceAlert] = useState<DeviceAlert | null>(null);
@@ -1102,6 +1103,13 @@ function App() {
   const [settingsRememberMode, setSettingsRememberMode] = useState(() => localStorage.getItem("fern-notch-remember-mode") === "true");
   const [panelControlCenter, setPanelControlCenter] = useState(() => localStorage.getItem("fern-panel-control-center-enabled") !== "false");
   const [panelShelf, setPanelShelf] = useState(() => localStorage.getItem("fern-panel-shelf-enabled") !== "false");
+  const [panelAi, setPanelAi] = useState(() => localStorage.getItem("fern-panel-ai-enabled") !== "false");
+  const panelAiRef = useRef(panelAi);
+  panelAiRef.current = panelAi;
+  const aiInputFocusedRef = useRef(false);
+  const aiBusyRef = useRef(false);
+  const [aiExpanded, setAiExpanded] = useState(false);
+  const [aiFocusToken, setAiFocusToken] = useState(0);
   const [panelStatus, setPanelStatus] = useState(() => localStorage.getItem("fern-panel-status-enabled") !== "false");
   const [panelOrder, setPanelOrder] = useState(() => parsePanelOrder(localStorage.getItem("fern-panel-order")));
   const [ccLayout, setCcLayout] = useState(() => parseCcLayout(localStorage.getItem("fern-cc-layout")));
@@ -1297,6 +1305,15 @@ function App() {
       setIsVisible((prev) => !prev);
     });
 
+    const unlistenAiHotkey = listen("ai-hotkey-open", () => {
+      if (!isNotchWindow || !panelAiRef.current) return;
+      setIsVisible(true);
+      setIsHovered(true);
+      setFernMode('ai');
+      setAiFocusToken((n) => n + 1);
+      getCurrentWebviewWindow().setFocus().catch(() => {});
+    });
+
     const unlistenVisibility = listen<boolean>("visibility-change", (event) => {
       setIsVisible(event.payload);
     });
@@ -1315,7 +1332,7 @@ function App() {
     // A click-through window gets no mouse events, so its mouseleave never comes. The backend says so instead.
     const unlistenNotchCursorLeft = thisWindow.listen("notch-cursor-left", () => {
       setIsNotchHovered(false);
-      if (!tourActiveRef.current) {
+      if (!tourActiveRef.current && !(fernModeRef.current === 'ai' && (aiInputFocusedRef.current || aiBusyRef.current))) {
         setIsHovered(false);
       }
     });
@@ -1357,6 +1374,7 @@ function App() {
     return () => {
       unlistenVisibility.then(f => f());
       unlistenHotkey.then(f => f());
+      unlistenAiHotkey.then(f => f());
       unlistenNotchOverlap.then(f => f());
       unlistenNotchEdgeHover.then(f => f());
       unlistenNotchCursorLeft.then(f => f());
@@ -1394,6 +1412,7 @@ function App() {
       "fern-notch-remember-mode": setSettingsRememberMode,
       "fern-panel-control-center-enabled": (v) => setPanelControlCenter(v !== false && v !== "false"),
       "fern-panel-shelf-enabled": (v) => setPanelShelf(v !== false && v !== "false"),
+      "fern-panel-ai-enabled": (v) => setPanelAi(v !== false && v !== "false"),
       "fern-panel-status-enabled": (v) => setPanelStatus(v !== false && v !== "false"),
       "fern-panel-order": (v) => setPanelOrder(parsePanelOrder(v === null ? null : String(v))),
       "fern-cc-layout": (v) => setCcLayout(parseCcLayout(v === null ? null : String(v))),
@@ -1584,17 +1603,18 @@ function App() {
   // Paused:  command-center → status → music → calendar (secondary, after status)
   const availableNotchModes = () => {
     const musicBeforeStatus = isPlaying && mediaInfo.has_media && settingsMusicModeEnabled;
-    const modes: ('command-center' | 'status' | 'music' | 'calendar' | 'shelf')[] = panelOrder
+    const modes: PanelId[] = panelOrder
       ? [...panelOrder]
       : musicBeforeStatus
-        ? ['command-center', 'music', 'status', 'calendar', 'shelf']
-        : ['command-center', 'status', 'music', 'calendar', 'shelf'];
+        ? ['command-center', 'music', 'status', 'calendar', 'shelf', 'ai']
+        : ['command-center', 'status', 'music', 'calendar', 'shelf', 'ai'];
     const noStatusWidgets = !panelStatus || statusWidgets.left.length + statusWidgets.right.length === 0;
     return modes.filter(m => {
       if (m === 'status' && noStatusWidgets && fernMode !== 'status') return false;
       if (m === 'music' && (!settingsMusicModeEnabled || !mediaInfo.has_media)) return false;
       if (m === 'calendar' && !productivityEnabled) return false;
       if (m === 'shelf' && (!isNotchWindow || settingsLegacyMode || !panelShelf)) return false;
+      if (m === 'ai' && (!isNotchWindow || settingsLegacyMode || !panelAi)) return false;
       if (m === 'command-center' && !panelControlCenter) return false;
       return true;
     });
@@ -1604,7 +1624,7 @@ function App() {
     if (fernMode === 'command-center' && (showConnections || ccView !== 'main')) return;
     if (fernMode === 'devices') return;
     const target = e.target as HTMLElement;
-    if (target.closest('.cv-root, .cv-list, .cal-scroll, .timer-column, .shelf-row, .connected-devices-panel')) return;
+    if (target.closest('.cv-root, .cv-list, .cal-scroll, .timer-column, .shelf-row, .connected-devices-panel, .ai-messages, .ai-composer, .ai-setup')) return;
     const scroller = target.closest('.cal-scroll') as HTMLElement | null;
     if (scroller && scroller.scrollHeight > scroller.clientHeight + 1) return;
 
@@ -2415,10 +2435,10 @@ function App() {
   });
 
   useEffect(() => {
-    if ((fernMode === 'command-center' && !panelControlCenter) || (fernMode === 'shelf' && !panelShelf)) {
+    if ((fernMode === 'command-center' && !panelControlCenter) || (fernMode === 'shelf' && !panelShelf) || (fernMode === 'ai' && !panelAi)) {
       setFernMode('status');
     }
-  }, [fernMode, panelControlCenter, panelShelf]);
+  }, [fernMode, panelControlCenter, panelShelf, panelAi]);
 
   // Music mode shows any time we have media info (playing or paused) and music mode setting is enabled
   const isMusicMode = mediaInfo.has_media && fernMode === 'music' && settingsMusicModeEnabled;
@@ -2497,6 +2517,9 @@ function App() {
       return Math.max(360, widgetsRowWidth, 340 + dualClockExtra + privacyExtra);
     }
 
+    if (fernMode === 'ai') {
+      return Math.max(460, minStatusWidth);
+    }
     if (fernMode === 'shelf') {
       const itemsWidth = 160 + Math.max(shelf.items.length, 1) * 68;
       return Math.min(500, Math.max(minStatusWidth, itemsWidth));
@@ -2571,6 +2594,7 @@ function App() {
     }
     if (fernMode === 'device' && deviceAlert) return 76;
     if (fernMode === 'devices') return 320;
+    if (fernMode === 'ai') return aiExpanded ? 370 : 240;
     if (fernMode === 'shelf') return shelf.items.length === 0 ? 96 : 176;
     if (fernMode === 'calendar') return settingsCalendarEnabled ? (caldav.connected ? 350 : 284) : 262;
     if (fernMode === 'command-center') {
@@ -2677,6 +2701,7 @@ function App() {
         }}
         onHoverEnd={() => {
           if (tourActive) return;
+          if (fernMode === 'ai' && (aiInputFocusedRef.current || aiBusyRef.current)) return;
           if (fernMode === 'shelf' && shelfHoldsOpen()) {
             deferShelfCollapse();
             return;
@@ -2687,7 +2712,8 @@ function App() {
             fernMode === 'status' ||
             fernMode === 'music' ||
             fernMode === 'calendar' ||
-            fernMode === 'shelf'
+            fernMode === 'shelf' ||
+            fernMode === 'ai'
           ) {
             rememberedModeRef.current = fernMode;
             if (settingsRememberMode) saveRememberedPanel(fernMode);
@@ -2695,7 +2721,7 @@ function App() {
           const targetMode = mediaInfo.has_media && isPlaying && settingsMusicCompactNotch ? 'music' : 'status';
           if (fernMode === 'music') {
             setFernMode(targetMode);
-          } else if (fernMode === 'command-center' || fernMode === 'calendar' || fernMode === 'status' || fernMode === 'shelf' || fernMode === 'agent') {
+          } else if (fernMode === 'command-center' || fernMode === 'calendar' || fernMode === 'status' || fernMode === 'shelf' || fernMode === 'ai' || fernMode === 'agent') {
             setFernMode(targetMode);
           }
         }}
@@ -3539,6 +3565,40 @@ function App() {
                       onDragOutEnd={() => {
                         shelfDrag.current = { active: false, until: Date.now() + 2500 };
                         deferShelfCollapse();
+                      }}
+                    />
+                  </motion.div>
+                )}
+              </AnimatePresence>
+
+              <AnimatePresence>
+                {fernMode === 'ai' && (
+                  <motion.div
+                    key="ai-chat"
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    exit={{ opacity: 0, transition: { duration: 0.1 } }}
+                    transition={{ type: "spring", stiffness: 400, damping: 30 }}
+                    style={{ width: '100%', height: '100%' }}
+                  >
+                    <NotchAiChat
+                      autoFocusToken={aiFocusToken}
+                      onFocusChange={(focused) => {
+                        aiInputFocusedRef.current = focused;
+                      }}
+                      onBusyChange={(busy) => {
+                        aiBusyRef.current = busy;
+                      }}
+                      onHasMessagesChange={(expanded) => {
+                        setAiExpanded(expanded);
+                      }}
+                      onEscape={() => {
+                        aiInputFocusedRef.current = false;
+                        if (!aiBusyRef.current) {
+                          setIsHovered(false);
+                          const targetMode = mediaInfo.has_media && isPlaying && settingsMusicCompactNotch ? 'music' : 'status';
+                          setFernMode(targetMode);
+                        }
                       }}
                     />
                   </motion.div>
