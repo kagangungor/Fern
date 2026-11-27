@@ -38,6 +38,7 @@ import {
   AI_MODEL_PRESETS,
   AI_MODEL_SETTINGS,
   AI_PROVIDERS,
+  aiModelLabel,
   aiProviderLabel,
   type AiProviderId,
 } from "../ai/types";
@@ -64,7 +65,7 @@ function AiProviderLogo({ provider }: { provider: AiProviderId }): JSX.Element {
   if (provider === "claude") {
     return (
       <svg className="ai-provider-logo" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-        <path d="M12 2.25a.9.9 0 0 1 .9.9v4.12l2.92-2.92a.9.9 0 1 1 1.27 1.27l-2.92 2.92h4.13a.9.9 0 1 1 0 1.8h-4.13l2.92 2.92a.9.9 0 1 1-1.27 1.27L12.9 11.6v4.15a.9.9 0 1 1-1.8 0v-4.15l-2.92 2.93a.9.9 0 1 1-1.27-1.27l2.92-2.92H5.7a.9.9 0 1 1 0-1.8h4.13L6.91 5.62a.9.9 0 1 1 1.27-1.27l2.92 2.92V3.15a.9.9 0 0 1 .9-.9Z" transform="translate(0 2.55)" />
+        <path d="M12 1.5a1.1 1.1 0 0 1 1.1 1.1v5.9l4.17-4.17a1.1 1.1 0 1 1 1.56 1.56L14.66 10.06h5.84a1.1 1.1 0 1 1 0 2.2h-5.84l4.17 4.17a1.1 1.1 0 1 1-1.56 1.56L13.1 13.82v5.93a1.1 1.1 0 1 1-2.2 0v-5.93l-4.17 4.17a1.1 1.1 0 1 1-1.56-1.56l4.17-4.17H3.5a1.1 1.1 0 1 1 0-2.2h5.84L5.17 5.89a1.1 1.1 0 1 1 1.56-1.56L10.9 8.5V2.6A1.1 1.1 0 0 1 12 1.5Z" />
       </svg>
     );
   }
@@ -76,8 +77,18 @@ function AiProviderLogo({ provider }: { provider: AiProviderId }): JSX.Element {
     );
   }
   return (
-    <svg className="ai-provider-logo" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-      <path d="M12 2c.35 4.7 2.8 7.65 7.5 8.5-4.7.85-7.15 3.8-7.5 8.5-.35-4.7-2.8-7.65-7.5-8.5 4.7-.85 7.15-3.8 7.5-8.5Z" transform="translate(0 1.5)" />
+    <svg className="ai-provider-logo ai-gemini-svg" viewBox="0 0 24 24" aria-hidden="true">
+      <defs>
+        <linearGradient id="fern-gemini-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stopColor="#4E86F7" />
+          <stop offset="52%" stopColor="#9B72CB" />
+          <stop offset="100%" stopColor="#D96570" />
+        </linearGradient>
+      </defs>
+      <path
+        className="ai-gemini-path"
+        d="M12 0.8C12 7.2 16.8 12 23.2 12C16.8 12 12 16.8 12 23.2C12 16.8 7.2 12 0.8 12C7.2 12 12 7.2 12 0.8Z"
+      />
     </svg>
   );
 }
@@ -192,10 +203,19 @@ export function NotchAiChat({
     prevSetupOpenRef.current = setupOpen;
   }, [setupOpen]);
 
+  const enableKeyboardFocus = useCallback(() => {
+    invoke("set_window_keyboard_focus", { enabled: true }).catch(() => {});
+  }, []);
+
+  const disableKeyboardFocus = useCallback(() => {
+    invoke("set_window_keyboard_focus", { enabled: false }).catch(() => {});
+  }, []);
+
   useEffect(() => {
     return () => {
       setKeyDraft("");
       onFocusChangeRef.current(false);
+      invoke("set_window_keyboard_focus", { enabled: false }).catch(() => {});
       if (copyTimerRef.current !== null) {
         clearTimeout(copyTimerRef.current);
       }
@@ -393,6 +413,7 @@ export function NotchAiChat({
     if (e.key === "Escape") {
       e.preventDefault();
       e.currentTarget.blur();
+      disableKeyboardFocus();
       onEscape();
       return;
     }
@@ -565,8 +586,19 @@ export function NotchAiChat({
                 className="ai-setup-input"
                 value={keyDraft}
                 onChange={(e) => setKeyDraft(e.target.value)}
-                onFocus={() => onFocusChange(true)}
-                onBlur={() => onFocusChange(false)}
+                onMouseDown={(e) => {
+                  const target = e.currentTarget;
+                  enableKeyboardFocus();
+                  requestAnimationFrame(() => target.focus());
+                }}
+                onFocus={() => {
+                  enableKeyboardFocus();
+                  onFocusChange(true);
+                }}
+                onBlur={() => {
+                  onFocusChange(false);
+                  disableKeyboardFocus();
+                }}
                 autoComplete="off"
                 spellCheck={false}
                 placeholder={
@@ -618,9 +650,10 @@ export function NotchAiChat({
                 role="radio"
                 aria-checked={m === model}
                 className={`ai-model-chip${m === model ? " active" : ""}`}
+                title={m}
                 onClick={() => handleModelChange(m)}
               >
-                {m}
+                {aiModelLabel(m)}
               </button>
             ))}
           </div>
@@ -818,8 +851,19 @@ export function NotchAiChat({
             onChange={(e) => setPrompt(e.target.value)}
             onKeyDown={handleKeyDown}
             onPaste={handlePaste}
-            onFocus={() => onFocusChange(true)}
-            onBlur={() => onFocusChange(false)}
+            onMouseDown={(e) => {
+              const target = e.currentTarget;
+              enableKeyboardFocus();
+              requestAnimationFrame(() => target.focus());
+            }}
+            onFocus={() => {
+              enableKeyboardFocus();
+              onFocusChange(true);
+            }}
+            onBlur={() => {
+              onFocusChange(false);
+              disableKeyboardFocus();
+            }}
             placeholder={tr("ai.placeholder", "Ask {provider}...", {
               provider: aiProviderLabel(provider),
             })}

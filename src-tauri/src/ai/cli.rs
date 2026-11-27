@@ -57,13 +57,17 @@ fn candidate_search_dirs() -> Vec<PathBuf> {
     }
 
     if let Some(local_appdata) = std::env::var_os("LOCALAPPDATA") {
-        dirs.push(PathBuf::from(local_appdata).join("Programs"));
+        let local = PathBuf::from(local_appdata);
+        dirs.push(local.join("Programs"));
+        dirs.push(local.join("pnpm"));
     }
 
     if let Some(userprofile) = std::env::var_os("USERPROFILE") {
         let home = PathBuf::from(userprofile);
         dirs.push(home.join(".local").join("bin"));
         dirs.push(home.join(".claude").join("local"));
+        dirs.push(home.join(".bun").join("bin"));
+        dirs.push(home.join("scoop").join("shims"));
     }
 
     dirs

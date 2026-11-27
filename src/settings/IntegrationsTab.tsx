@@ -23,6 +23,7 @@ import {
   AI_MODEL_PRESETS,
   AI_MODEL_SETTINGS,
   AI_PROVIDERS,
+  aiModelLabel,
   aiProviderLabel,
   type AiBackendMode,
   type AiProviderId,
@@ -296,7 +297,7 @@ export function IntegrationsTab({
                     <Dropdown
                       value={models[id]}
                       onChange={(val) => changeAiModel(id, val)}
-                      options={presets.map((m) => ({ value: m, label: m }))}
+                      options={presets.map((m) => ({ value: m, label: aiModelLabel(m) }))}
                     />
                   </div>
                 </div>

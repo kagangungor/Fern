@@ -1311,7 +1311,7 @@ function App() {
       setIsHovered(true);
       setFernMode('ai');
       setAiFocusToken((n) => n + 1);
-      getCurrentWebviewWindow().setFocus().catch(() => {});
+      invoke("set_window_keyboard_focus", { enabled: true }).catch(() => {});
     });
 
     const unlistenVisibility = listen<boolean>("visibility-change", (event) => {

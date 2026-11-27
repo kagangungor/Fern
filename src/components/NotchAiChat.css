@@ -56,21 +56,31 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 24px;
+  width: 34px;
+  height: 28px;
   padding: 0;
   border-radius: 9999px;
   border: 1px solid transparent;
   background: transparent;
-  color: var(--fern-text-muted, rgba(255, 255, 255, 0.52));
+  color: var(--fern-text-muted, rgba(255, 255, 255, 0.56));
   cursor: pointer;
   transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease, transform 0.12s ease;
 }
 
 .ai-chat-panel .ai-provider-logo {
-  width: 14px;
-  height: 14px;
+  width: 18px;
+  height: 18px;
   display: block;
+}
+
+.ai-chat-panel .ai-gemini-path {
+  fill: currentColor;
+  transition: fill 0.15s ease;
+}
+
+.ai-chat-panel .ai-provider-chip.ai-brand-gemini.active .ai-gemini-path,
+.ai-chat-panel .ai-provider-chip.ai-brand-gemini:hover .ai-gemini-path {
+  fill: url(#fern-gemini-grad);
 }
 
 .ai-chat-panel .ai-provider-chip:hover {
@@ -87,27 +97,26 @@
 .ai-chat-panel .ai-provider-chip.ai-brand-claude.active {
   color: #e07b53;
   background: rgba(224, 123, 83, 0.14);
-  border-color: rgba(224, 123, 83, 0.32);
+  border-color: rgba(224, 123, 83, 0.34);
 }
 
 .ai-chat-panel .ai-provider-chip.ai-brand-openai.active {
   color: #10a37f;
   background: rgba(16, 163, 127, 0.14);
-  border-color: rgba(16, 163, 127, 0.32);
+  border-color: rgba(16, 163, 127, 0.34);
 }
 
 .ai-chat-panel .ai-provider-chip.ai-brand-gemini.active {
-  color: #9b82ff;
-  background: rgba(155, 130, 255, 0.14);
-  border-color: rgba(155, 130, 255, 0.34);
+  background: rgba(139, 114, 235, 0.15);
+  border-color: rgba(139, 114, 235, 0.36);
 }
 
 .ai-chat-panel .ai-provider-dot {
   position: absolute;
-  right: 2px;
+  right: 3px;
   bottom: 2px;
-  width: 5px;
-  height: 5px;
+  width: 6px;
+  height: 6px;
   border-radius: 50%;
   background: #4ade80;
   box-shadow: 0 0 0 1.5px rgba(0, 0, 0, 0.85);

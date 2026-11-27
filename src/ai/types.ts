@@ -39,15 +39,34 @@ export const AI_PROVIDERS: readonly { id: AiProviderId; label: string }[] = [
 
 export const AI_DEFAULT_MODELS: Record<AiProviderId, string> = {
   claude: "claude-sonnet-4-5",
-  openai: "gpt-4o-mini",
+  openai: "gpt-4.1-mini",
   gemini: "gemini-flash-latest",
 };
 
 export const AI_MODEL_PRESETS: Record<AiProviderId, readonly string[]> = {
-  claude: ["claude-sonnet-4-5", "claude-haiku-4-5", "claude-opus-4-1"],
-  openai: ["gpt-4o-mini", "gpt-4o", "o4-mini"],
+  claude: ["claude-sonnet-4-5", "claude-opus-4-5", "claude-haiku-4-5"],
+  openai: ["gpt-4.1-mini", "gpt-4.1", "o4-mini"],
   gemini: ["gemini-flash-latest", "gemini-2.5-flash", "gemini-2.5-pro"],
 };
+
+const MODEL_LABELS: Record<string, string> = {
+  "claude-sonnet-4-5": "Sonnet 4.5",
+  "claude-opus-4-5": "Opus 4.5",
+  "claude-haiku-4-5": "Haiku 4.5",
+  "claude-opus-4-1": "Opus 4.1",
+  "gpt-4.1-mini": "GPT-4.1 Mini",
+  "gpt-4.1": "GPT-4.1",
+  "gpt-4o-mini": "GPT-4o Mini",
+  "gpt-4o": "GPT-4o",
+  "o4-mini": "o4 Mini",
+  "gemini-flash-latest": "Auto (Flash)",
+  "gemini-2.5-flash": "2.5 Flash",
+  "gemini-2.5-pro": "2.5 Pro",
+};
+
+export function aiModelLabel(modelId: string): string {
+  return MODEL_LABELS[modelId] ?? modelId;
+}
 
 export const AI_MODEL_SETTINGS: Record<AiProviderId, string> = {
   claude: "fern-ai-model",
