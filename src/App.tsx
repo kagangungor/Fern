@@ -1332,7 +1332,7 @@ function App() {
     // A click-through window gets no mouse events, so its mouseleave never comes. The backend says so instead.
     const unlistenNotchCursorLeft = thisWindow.listen("notch-cursor-left", () => {
       setIsNotchHovered(false);
-      if (!tourActiveRef.current && !(fernModeRef.current === 'ai' && (aiInputFocusedRef.current || aiBusyRef.current))) {
+      if (!tourActiveRef.current && fernModeRef.current !== 'ai') {
         setIsHovered(false);
       }
     });
@@ -2705,7 +2705,7 @@ function App() {
         }}
         onHoverEnd={() => {
           if (tourActive) return;
-          if (fernMode === 'ai' && (aiInputFocusedRef.current || aiBusyRef.current)) return;
+          if (fernMode === 'ai') return;
           if (fernMode === 'shelf' && shelfHoldsOpen()) {
             deferShelfCollapse();
             return;
@@ -2716,8 +2716,7 @@ function App() {
             fernMode === 'status' ||
             fernMode === 'music' ||
             fernMode === 'calendar' ||
-            fernMode === 'shelf' ||
-            fernMode === 'ai'
+            fernMode === 'shelf'
           ) {
             rememberedModeRef.current = fernMode;
             if (settingsRememberMode) saveRememberedPanel(fernMode);
@@ -2725,7 +2724,7 @@ function App() {
           const targetMode = mediaInfo.has_media && isPlaying && settingsMusicCompactNotch ? 'music' : 'status';
           if (fernMode === 'music') {
             setFernMode(targetMode);
-          } else if (fernMode === 'command-center' || fernMode === 'calendar' || fernMode === 'status' || fernMode === 'shelf' || fernMode === 'ai' || fernMode === 'agent') {
+          } else if (fernMode === 'command-center' || fernMode === 'calendar' || fernMode === 'status' || fernMode === 'shelf' || fernMode === 'agent') {
             setFernMode(targetMode);
           }
         }}
@@ -3596,13 +3595,13 @@ function App() {
                       onHasMessagesChange={(expanded) => {
                         setAiExpanded(expanded);
                       }}
+                      onTooltip={setWidgetTip}
                       onEscape={() => {
                         aiInputFocusedRef.current = false;
-                        if (!aiBusyRef.current) {
-                          setIsHovered(false);
-                          const targetMode = mediaInfo.has_media && isPlaying && settingsMusicCompactNotch ? 'music' : 'status';
-                          setFernMode(targetMode);
-                        }
+                        setWidgetTip(null);
+                        setIsHovered(false);
+                        const targetMode = mediaInfo.has_media && isPlaying && settingsMusicCompactNotch ? 'music' : 'status';
+                        setFernMode(targetMode);
                       }}
                     />
                   </motion.div>

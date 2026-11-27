@@ -227,7 +227,6 @@ function CodeBlock({ lang, code }: { lang: string; code: string }) {
           className="ai-md-copy"
           onClick={handleCopy}
           aria-label="Copy code"
-          title="Copy code"
         >
           {copied ? <Check size={12} /> : <Copy size={12} />}
         </button>

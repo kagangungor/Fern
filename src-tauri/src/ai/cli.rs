@@ -270,7 +270,7 @@ pub fn build_transcript(messages: &[AiMessage], temp_image_paths: &[PathBuf]) ->
         if !out.is_empty() {
             out.push_str("\n\n");
         }
-        out.push_str("Attached image files (inspect if relevant):");
+        out.push_str("Attached image file(s) — read and inspect them before answering:");
         for path in temp_image_paths {
             out.push_str("\n- ");
             out.push_str(&path.to_string_lossy());
@@ -286,19 +286,26 @@ fn cli_sandbox_dir() -> PathBuf {
     dir
 }
 
-fn provider_cli_args(provider: Provider, model: Option<&str>) -> Vec<String> {
+fn provider_cli_args(provider: Provider, model: Option<&str>, has_images: bool) -> Vec<String> {
     let clean_model = model
         .map(str::trim)
         .filter(|m| !m.is_empty() && m.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.')));
 
     match provider {
         Provider::Claude => {
-            let mut args = vec![
-                "-p".to_string(),
-                "--tools".to_string(),
-                String::new(),
-                "--no-session-persistence".to_string(),
-            ];
+            let mut args = vec!["-p".to_string()];
+            if has_images {
+                args.push("--tools".to_string());
+                args.push("Read".to_string());
+                args.push("--allowedTools".to_string());
+                args.push("Read".to_string());
+                args.push("--add-dir".to_string());
+                args.push(std::env::temp_dir().to_string_lossy().into_owned());
+            } else {
+                args.push("--tools".to_string());
+                args.push(String::new());
+            }
+            args.push("--no-session-persistence".to_string());
             if let Some(m) = clean_model {
                 args.push("--model".to_string());
                 args.push(m.to_string());
@@ -358,8 +365,8 @@ fn format_cmd_raw_arg(bin_path: &Path, args: &[String]) -> String {
     }
 }
 
-fn build_cli_command(provider: Provider, bin_path: &Path, model: Option<&str>) -> Command {
-    let args = provider_cli_args(provider, model);
+fn build_cli_command(provider: Provider, bin_path: &Path, model: Option<&str>, has_images: bool) -> Command {
+    let args = provider_cli_args(provider, model, has_images);
 
     #[cfg(windows)]
     let mut cmd = {
@@ -540,9 +547,10 @@ pub async fn ask_cli(
     }
 
     let temp_guard = write_temp_images(&working_messages, request_id)?;
+    let has_images = !temp_guard.paths().is_empty();
     let transcript = build_transcript(&working_messages, temp_guard.paths());
 
-    let mut cmd = build_cli_command(provider, Path::new(&bin_path_str), model);
+    let mut cmd = build_cli_command(provider, Path::new(&bin_path_str), model, has_images);
     let mut child = cmd
         .spawn()
         .map_err(|e| format!("Failed to start {} CLI: {}", provider.label(), e))?;
@@ -794,27 +802,27 @@ mod tests {
     #[test]
     fn cmd_wrapper_raw_arg_preserves_spaces_and_empty_args() {
         let gemini_path = PathBuf::from(r"C:\Users\John Doe\AppData\Roaming\npm\gemini.cmd");
-        let raw_gemini = format_cmd_raw_arg(&gemini_path, &provider_cli_args(Provider::Gemini, None));
+        let raw_gemini = format_cmd_raw_arg(&gemini_path, &provider_cli_args(Provider::Gemini, None, false));
         assert_eq!(
             raw_gemini,
             r#"""C:\Users\John Doe\AppData\Roaming\npm\gemini.cmd" -p """"#
         );
 
         let claude_path = PathBuf::from(r"C:\Users\John Doe\AppData\Roaming\npm\claude.cmd");
-        let raw_claude = format_cmd_raw_arg(&claude_path, &provider_cli_args(Provider::Claude, Some("claude-sonnet-4-5")));
+        let raw_claude = format_cmd_raw_arg(&claude_path, &provider_cli_args(Provider::Claude, Some("claude-sonnet-4-5"), false));
         assert_eq!(
             raw_claude,
             r#"""C:\Users\John Doe\AppData\Roaming\npm\claude.cmd" -p --tools "" --no-session-persistence --model claude-sonnet-4-5""#
         );
 
         let codex_path = PathBuf::from(r"C:\Users\John Doe\AppData\Roaming\npm\codex.cmd");
-        let raw_codex = format_cmd_raw_arg(&codex_path, &provider_cli_args(Provider::OpenAI, None));
+        let raw_codex = format_cmd_raw_arg(&codex_path, &provider_cli_args(Provider::OpenAI, None, false));
         assert_eq!(
             raw_codex,
             r#"""C:\Users\John Doe\AppData\Roaming\npm\codex.cmd" exec -""#
         );
 
-        let cmd = build_cli_command(Provider::Gemini, &gemini_path, None);
+        let cmd = build_cli_command(Provider::Gemini, &gemini_path, None, false);
         assert_eq!(cmd.get_program(), "cmd.exe");
         let args: Vec<String> = cmd
             .get_args()

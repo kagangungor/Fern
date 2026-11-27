@@ -705,8 +705,8 @@
 .ai-chat-panel .ai-attach-strip {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 2px 2px 0;
+  gap: 8px;
+  padding: 6px 6px 2px 2px;
   overflow-x: auto;
   scrollbar-width: none;
 }

@@ -843,6 +843,7 @@
   "ai.inputLabel": "Mesaj girişi",
   "ai.send": "Gönder",
   "ai.stop": "Durdur",
+  "ai.close": "Kapat",
   "ai.attachImage": "Görsel ekle",
   "ai.removeImage": "Görseli kaldır",
   "ai.captureScreen": "Ekran görüntüsü yakala",

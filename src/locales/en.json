@@ -843,6 +843,7 @@
   "ai.inputLabel": "Message input",
   "ai.send": "Send message",
   "ai.stop": "Stop generating",
+  "ai.close": "Close",
   "ai.attachImage": "Attach image",
   "ai.removeImage": "Remove image",
   "ai.captureScreen": "Capture screen",

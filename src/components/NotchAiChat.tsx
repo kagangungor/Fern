@@ -51,6 +51,7 @@ export interface NotchAiChatProps {
   onFocusChange: (focused: boolean) => void;
   onBusyChange: (busy: boolean) => void;
   onHasMessagesChange: (hasMessages: boolean) => void;
+  onTooltip?: (text: string | null) => void;
   onEscape: () => void;
 }
 
@@ -118,8 +119,19 @@ export function NotchAiChat({
   onFocusChange,
   onBusyChange,
   onHasMessagesChange,
+  onTooltip,
   onEscape,
 }: NotchAiChatProps): JSX.Element {
+  const tip = useCallback(
+    (text: string) =>
+      onTooltip
+        ? {
+            onMouseEnter: () => onTooltip(text),
+            onMouseLeave: () => onTooltip(null),
+          }
+        : {},
+    [onTooltip]
+  );
   const t = useT();
   const tr = useCallback(
     (
@@ -514,7 +526,7 @@ export function NotchAiChat({
                   aria-selected={isSelected}
                   aria-label={providerTooltip(p.id)}
                   className={`ai-provider-chip ai-brand-${p.id}${isSelected ? " active" : ""}`}
-                  title={providerTooltip(p.id)}
+                  {...tip(providerTooltip(p.id))}
                   onClick={() => selectProvider(p.id)}
                 >
                   <AiProviderLogo provider={p.id} />
@@ -528,7 +540,7 @@ export function NotchAiChat({
               type="button"
               className="ai-header-model"
               onClick={cycleModel}
-              title={`${aiModelLabel(model)} (${model})`}
+              {...tip(`${aiModelLabel(model)} (${model})`)}
             >
               {aiModelLabel(model)}
             </button>
@@ -541,7 +553,7 @@ export function NotchAiChat({
             className="ai-icon-btn"
             disabled={messages.length === 0 && !busy}
             onClick={clear}
-            title={tr("ai.newChat", "New chat")}
+            {...tip(tr("ai.newChat", "New chat"))}
             aria-label={tr("ai.newChat", "New chat")}
           >
             <RotateCcw size={13} />
@@ -550,11 +562,24 @@ export function NotchAiChat({
             type="button"
             className={`ai-icon-btn${setupOpen ? " active" : ""}${isUnconfigured ? " attention" : ""}`}
             onClick={handleToggleSetup}
-            title={tr("ai.setup.toggle", "Quick setup & keys")}
+            {...tip(tr("ai.setup.toggle", "Quick setup & keys"))}
             aria-label={tr("ai.setup.toggle", "Quick setup & keys")}
             aria-expanded={setupOpen}
           >
             <KeyRound size={13} />
+          </button>
+          <button
+            type="button"
+            className="ai-icon-btn"
+            onClick={() => {
+              disableKeyboardFocus();
+              onTooltip?.(null);
+              onEscape();
+            }}
+            {...tip(tr("ai.close", "Close"))}
+            aria-label={tr("ai.close", "Close")}
+          >
+            <X size={13} />
           </button>
         </div>
       </div>
@@ -640,7 +665,7 @@ export function NotchAiChat({
                   className="ai-setup-icon-btn danger"
                   disabled={deletingKey}
                   onClick={() => void handleDeleteKey()}
-                  title={tr("ai.setup.deleteKey", "Remove saved API key")}
+                  {...tip(tr("ai.setup.deleteKey", "Remove saved API key"))}
                   aria-label={tr("ai.setup.deleteKey", "Remove saved API key")}
                 >
                   <Trash2 size={12} />
@@ -650,7 +675,7 @@ export function NotchAiChat({
                 type="button"
                 className="ai-setup-icon-btn"
                 onClick={() => void openConsole(provider)}
-                title={tr("ai.setup.getKey", "Get API Key")}
+                {...tip(tr("ai.setup.getKey", "Get API Key"))}
                 aria-label={tr("ai.setup.getKey", "Get API Key")}
               >
                 <ExternalLink size={12} />
@@ -667,7 +692,7 @@ export function NotchAiChat({
                 role="radio"
                 aria-checked={m === model}
                 className={`ai-model-chip${m === model ? " active" : ""}`}
-                title={m}
+                {...tip(m)}
                 onClick={() => handleModelChange(m)}
               >
                 {aiModelLabel(m)}
@@ -763,7 +788,7 @@ export function NotchAiChat({
                             type="button"
                             className="ai-msg-copy-btn"
                             onClick={() => handleCopyMessage(msg.id, msg.text)}
-                            title={tr("ai.copy", "Copy")}
+                            {...tip(tr("ai.copy", "Copy"))}
                             aria-label={tr("ai.copy", "Copy")}
                           >
                             {copiedMsgId === msg.id ? (
@@ -806,8 +831,11 @@ export function NotchAiChat({
                 <button
                   type="button"
                   className="ai-attach-remove"
-                  onClick={() => removeImage(img.id)}
-                  title={tr("ai.removeImage", "Remove image")}
+                  onClick={() => {
+                    onTooltip?.(null);
+                    removeImage(img.id);
+                  }}
+                  {...tip(tr("ai.removeImage", "Remove image"))}
                   aria-label={tr("ai.removeImage", "Remove image")}
                 >
                   <X size={9} />
@@ -839,7 +867,7 @@ export function NotchAiChat({
               className="ai-composer-btn"
               disabled={busy || imageBusy || atImageLimit}
               onClick={() => fileInputRef.current?.click()}
-              title={tr("ai.attachImage", "Attach image")}
+              {...tip(tr("ai.attachImage", "Attach image"))}
               aria-label={tr("ai.attachImage", "Attach image")}
             >
               <ImagePlus size={14} />
@@ -850,9 +878,11 @@ export function NotchAiChat({
               disabled={busy || capturing || atImageLimit}
               onClick={() => void captureScreen("screen")}
               onContextMenu={handleCaptureContextMenu}
-              title={tr(
-                "ai.captureTooltip",
-                "Click to capture screen · Right-click for active window"
+              {...tip(
+                tr(
+                  "ai.captureTooltip",
+                  "Click to capture screen · Right-click for active window"
+                )
               )}
               aria-label={tr("ai.captureScreen", "Capture screen")}
             >
@@ -892,7 +922,7 @@ export function NotchAiChat({
               type="button"
               className="ai-send-btn stop"
               onClick={cancel}
-              title={tr("ai.stop", "Stop generating")}
+              {...tip(tr("ai.stop", "Stop generating"))}
               aria-label={tr("ai.stop", "Stop generating")}
             >
               <Square size={11} fill="currentColor" />
@@ -903,7 +933,7 @@ export function NotchAiChat({
               className="ai-send-btn"
               disabled={!canSend}
               onClick={handleSend}
-              title={tr("ai.send", "Send message")}
+              {...tip(tr("ai.send", "Send message"))}
               aria-label={tr("ai.send", "Send message")}
             >
               <ArrowUp size={14} />
