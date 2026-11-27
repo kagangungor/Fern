@@ -333,7 +333,15 @@ fn main() {
             ics::ics_add_link,
             ics::ics_remove_link,
             ics::ics_detect,
-            get_lyrics
+            get_lyrics,
+            ai::ai_ask,
+            ai::ai_cancel,
+            ai::ai_get_status,
+            ai::ai_set_key,
+            ai::ai_delete_key,
+            ai::ai_capture_screen,
+            ai::ai_warm,
+            ai::ai_open_console
         ])
         .setup(|app| {
             init_taskbar_marker(app.handle());
@@ -354,6 +362,7 @@ fn main() {
             agent_api::start(app.handle().clone());
             crate::hotkeys::start(app.handle().clone());
             privacy_hud::start(app.handle().clone());
+            ai::warm_up(app.handle().clone());
 
             #[cfg(not(debug_assertions))]
             std::thread::spawn(crate::uninstall_registry::heal_uninstall_registration);

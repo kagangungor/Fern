@@ -19,6 +19,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 const NOTCH_HOTKEY_ID: i32 = 1;
 const MIC_MUTE_HOTKEY_ID: i32 = 2;
 const LAUNCHER_HOTKEY_ID: i32 = 3;
+const AI_HOTKEY_ID: i32 = 4;
 const RELOAD: u32 = WM_APP + 1;
 
 static THREAD_ID: AtomicU32 = AtomicU32::new(0);
@@ -137,7 +138,7 @@ fn should_skip_launcher_hotkey(search_launcher: &str, launcher_spec: &str) -> bo
     is_external_alt_space && launcher_spec.trim().eq_ignore_ascii_case("alt+space")
 }
 
-fn apply(app: &AppHandle, reg_notch: &mut bool, reg_mic: &mut bool, reg_launcher: &mut bool) {
+fn apply(app: &AppHandle, reg_notch: &mut bool, reg_mic: &mut bool, reg_launcher: &mut bool, reg_ai: &mut bool) {
     unsafe {
         if *reg_notch {
             let _ = UnregisterHotKey(None, NOTCH_HOTKEY_ID);
@@ -150,6 +151,10 @@ fn apply(app: &AppHandle, reg_notch: &mut bool, reg_mic: &mut bool, reg_launcher
         if *reg_launcher {
             let _ = UnregisterHotKey(None, LAUNCHER_HOTKEY_ID);
             *reg_launcher = false;
+        }
+        if *reg_ai {
+            let _ = UnregisterHotKey(None, AI_HOTKEY_ID);
+            *reg_ai = false;
         }
 
         // Notch Hotkey
@@ -234,6 +239,28 @@ fn apply(app: &AppHandle, reg_notch: &mut bool, reg_mic: &mut bool, reg_launcher
             LAUNCHER_HOTKEY_REGISTERED.store(false, Ordering::SeqCst);
             crate::diagnostics::log(&format!("hotkey: could not read launcher \"{launcher_spec}\""));
         }
+
+        // AI Chat Hotkey (opt-in, default empty)
+        if let Some(spec) = crate::utils::get_setting_str(app, "fern-ai-hotkey").filter(|s| !s.trim().is_empty()) {
+            if let Some((modifiers, key)) = parse_shortcut(&spec) {
+                let mut mods = MOD_NOREPEAT;
+                for m in modifiers {
+                    mods |= match m {
+                        VK_LCONTROL => MOD_CONTROL,
+                        VK_LMENU => MOD_ALT,
+                        VK_LSHIFT => MOD_SHIFT,
+                        VK_LWIN => MOD_WIN,
+                        _ => HOT_KEY_MODIFIERS(0),
+                    };
+                }
+                match RegisterHotKey(None, AI_HOTKEY_ID, mods, key.0 as u32) {
+                    Ok(()) => *reg_ai = true,
+                    Err(e) => crate::diagnostics::log(&format!("hotkey: could not register ai \"{spec}\": {e}")),
+                }
+            } else {
+                crate::diagnostics::log(&format!("hotkey: could not read ai \"{spec}\""));
+            }
+        }
     }
 }
 
@@ -245,7 +272,8 @@ pub fn start(app: AppHandle) {
         let mut reg_notch = false;
         let mut reg_mic = false;
         let mut reg_launcher = false;
-        apply(&app, &mut reg_notch, &mut reg_mic, &mut reg_launcher);
+        let mut reg_ai = false;
+        apply(&app, &mut reg_notch, &mut reg_mic, &mut reg_launcher, &mut reg_ai);
         while GetMessageW(&mut msg, None, 0, 0).as_bool() {
             match msg.message {
                 WM_HOTKEY => {
@@ -256,9 +284,11 @@ pub fn start(app: AppHandle) {
                         let _ = crate::privacy_hud::toggle_microphone_mute_internal(&app);
                     } else if id == LAUNCHER_HOTKEY_ID {
                         crate::launcher_window::toggle(&app);
+                    } else if id == AI_HOTKEY_ID {
+                        let _ = app.emit("ai-hotkey-open", ());
                     }
                 }
-                RELOAD => apply(&app, &mut reg_notch, &mut reg_mic, &mut reg_launcher),
+                RELOAD => apply(&app, &mut reg_notch, &mut reg_mic, &mut reg_launcher, &mut reg_ai),
                 _ => {}
             }
         }

@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use std::future::Future;
 use std::sync::OnceLock;
 use std::task::Poll;
@@ -535,6 +533,19 @@ fn build_gemini_body(messages: &[AiMessage]) -> Result<String, String> {
     .map_err(|e| format!("Failed to serialize Gemini request: {}", e))
 }
 
+fn sanitize_gemini_model(model: &str) -> String {
+    let cleaned: String = model
+        .trim()
+        .chars()
+        .filter(|&c| !matches!(c, '/' | '?' | '#' | '\\') && !c.is_whitespace())
+        .collect();
+    if cleaned.is_empty() {
+        Provider::Gemini.default_model().to_string()
+    } else {
+        cleaned
+    }
+}
+
 fn emit_delta(app: &tauri::AppHandle, request_id: &str, delta: &str) {
     if delta.is_empty() {
         return;
@@ -579,9 +590,10 @@ async fn stream_turn(
         }
         Provider::Gemini => {
             let body = build_gemini_body(messages)?;
+            let safe_model = sanitize_gemini_model(model);
             let url = format!(
                 "https://generativelanguage.googleapis.com/v1beta/models/{}:streamGenerateContent?alt=sse",
-                model
+                safe_model
             );
             client
                 .post(&url)
@@ -926,5 +938,18 @@ mod tests {
         let detail = extract_http_error_detail(body, &secret);
         assert!(!detail.contains("sk-ant-super-secret-123"));
         assert!(detail.contains("[REDACTED]"));
+    }
+
+    #[test]
+    fn gemini_model_sanitizes_path_query_and_fragment_chars() {
+        assert_eq!(
+            sanitize_gemini_model("gemini-2.5-flash"),
+            "gemini-2.5-flash"
+        );
+        let sanitized = sanitize_gemini_model("gemini-flash/../evil?key=leak#frag");
+        assert!(!sanitized.contains('/'));
+        assert!(!sanitized.contains('?'));
+        assert!(!sanitized.contains('#'));
+        assert_eq!(sanitize_gemini_model(" /?# "), Provider::Gemini.default_model());
     }
 }
