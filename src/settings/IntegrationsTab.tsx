@@ -16,6 +16,7 @@ import { SettingRow } from "./SettingRow";
 import { SettingSection } from "./SettingSection";
 import { AgentSounds } from "./AgentSounds";
 import { AgentIntro } from "./AgentIntro";
+import { AiCliGuide } from "./AiCliGuide";
 import { Dropdown } from "./Dropdown";
 import { useT } from "../i18n";
 import {
@@ -219,6 +220,8 @@ export function IntegrationsTab({
             <span>{t("ai.setup.rescanCli")}</span>
           </button>
         </SettingRow>
+
+        <AiCliGuide status={aiStatus} />
 
         {AI_PROVIDERS.map(({ id }, idx) => {
           const st = aiStatus?.providers.find((p) => p.id === id);
