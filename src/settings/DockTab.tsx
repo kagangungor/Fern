@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import type { ChangeEvent, CSSProperties } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { emit } from "@tauri-apps/api/event";
-import { Monitor, Eye, Terminal, Volume2, EyeOff, Circle, Search, Globe, Shuffle, MonitorCheck, CalendarDays, Maximize2, Keyboard, Sparkles, RotateCcw, LayoutGrid, Trash2, HardDrive, ChevronUp, Clock, BellRing, PanelBottom } from "lucide-react";
+import { Monitor, Eye, Terminal, Volume2, EyeOff, Circle, Search, Shuffle, MonitorCheck, CalendarDays, Maximize2, Keyboard, Sparkles, RotateCcw, LayoutGrid, Trash2, HardDrive, ChevronUp, Clock, BellRing, PanelBottom } from "lucide-react";
 import { SettingRow } from "./SettingRow";
 import { SettingSection } from "./SettingSection";
 import { Dropdown } from "./Dropdown";
@@ -11,8 +11,6 @@ import type { MonitorInfo, MonitorMode } from "./types";
 import { usePerMonitor } from "./usePerMonitor";
 import { useT } from "../i18n";
 import { EdgeArea } from "./EdgeArea";
-import { LauncherHotkey } from "./LauncherHotkey";
-import { useSettingsSync } from "../hooks/useSettingsSync";
 
 const START_ICON_PRESETS = [
   { key: "default", src: "/fern.png", label: "Fern" },
@@ -174,21 +172,6 @@ export function DockTab({
   const multiMonitor = dockMonitorMode === "all" && monitors.length > 1;
   const showPerMonitor = multiMonitor && perMonitor.enabled;
   const [drives, setDrives] = useState<DriveInfo[]>([]);
-  const [launcherWebEngine, setLauncherWebEngine] = useState<string>(() =>
-    localStorage.getItem("fern-launcher-web-engine") === "duckduckgo" ? "duckduckgo" : "google"
-  );
-
-  useSettingsSync({
-    "fern-launcher-web-engine": (v) =>
-      setLauncherWebEngine(v === "duckduckgo" ? "duckduckgo" : "google"),
-  });
-
-  const handleLauncherWebEngineChange = (val: string) => {
-    const next = val === "duckduckgo" ? "duckduckgo" : "google";
-    setLauncherWebEngine(next);
-    localStorage.setItem("fern-launcher-web-engine", next);
-    invoke("save_setting", { key: "fern-launcher-web-engine", value: next }).catch(() => {});
-  };
 
   useEffect(() => {
     invoke<DriveInfo[]>("get_drives").then(setDrives).catch(() => {});
@@ -398,19 +381,6 @@ export function DockTab({
                 />
               </SettingRow>
             )}
-
-            <LauncherHotkey />
-
-            <SettingRow icon={Globe} label={t("dock.launcherWebEngine")} desc={t("dock.launcherWebEngine.desc")}>
-              <Dropdown
-                value={launcherWebEngine}
-                onChange={handleLauncherWebEngineChange}
-                options={[
-                  { value: "google", label: "Google" },
-                  { value: "duckduckgo", label: "DuckDuckGo" },
-                ]}
-              />
-            </SettingRow>
 
             <SettingRow icon={CalendarDays} label={t("dock.calendar")} desc={t("dock.calendar.desc")}>
               <label className="toggle-switch">

@@ -2,7 +2,7 @@ import { StrictMode, useState, useEffect } from "react";
 import { createRoot } from "react-dom/client";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { Settings, Palette, PanelTop, Monitor, Layers, Plug, Activity, Info } from "lucide-react";
+import { Settings, Palette, PanelTop, Monitor, Search, Layers, Plug, Activity, Info } from "lucide-react";
 import { WindowControls } from "./components/WindowControls";
 import {
   useSettings,
@@ -11,6 +11,7 @@ import {
   NotchTab,
   CalendarSyncPage,
   DockTab,
+  LauncherTab,
   OverlaysTab,
   IntegrationsTab,
   DiagnosticsTab,
@@ -27,6 +28,7 @@ const TABS: { id: SettingsTab; labelKey: string; icon: typeof Settings }[] = [
   { id: "appearance", labelKey: "tabs.appearance", icon: Palette },
   { id: "notch", labelKey: "tabs.notch", icon: PanelTop },
   { id: "dock", labelKey: "tabs.dock", icon: Monitor },
+  { id: "launcher", labelKey: "tabs.launcher", icon: Search },
   { id: "overlays", labelKey: "tabs.overlays", icon: Layers },
   { id: "integrations", labelKey: "tabs.integrations", icon: Plug },
   { id: "diagnostics", labelKey: "tabs.diagnostics", icon: Activity },
@@ -371,6 +373,7 @@ function SettingsApp() {
               toggleDockMenuItem={settings.toggleDockMenuItem}
             />
           )}
+          {activeTab === "launcher" && <LauncherTab />}
           {activeTab === "overlays" && (
             <OverlaysTab
               volumeOverlayEnabled={settings.volumeOverlayEnabled}

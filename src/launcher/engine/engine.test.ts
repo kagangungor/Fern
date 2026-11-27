@@ -5,6 +5,12 @@ import { evaluateExpression } from "./calculator";
 import { buildWebSearchUrl, detectDirectUrl } from "./web";
 import { appKey } from "./apps";
 import { buildQuickCommands, matchQuickCommands } from "./commands";
+import {
+  IDLE_SECTIONS,
+  SEARCH_SECTIONS,
+  normalizeDisabled,
+  normalizeOrder,
+} from "../config";
 
 describe("fuzzy", () => {
   test("folds Turkish diacritics", () => {
@@ -209,5 +215,31 @@ describe("commands", () => {
     for (let i = 1; i < results.length; i++) {
       expect(results[i - 1].score).toBeGreaterThanOrEqual(results[i].score);
     }
+  });
+});
+
+describe("launcher config", () => {
+  test("normalizeOrder preserves custom order, strips unknown, appends missing", () => {
+    expect(normalizeOrder('["running","recents"]', IDLE_SECTIONS)).toEqual([
+      "running",
+      "recents",
+    ]);
+    expect(normalizeOrder('["web","unknown","apps","web"]', SEARCH_SECTIONS)).toEqual([
+      "web",
+      "apps",
+      "calculator",
+      "commands",
+      "files",
+    ]);
+    expect(normalizeOrder("invalid-json", SEARCH_SECTIONS)).toEqual([
+      ...SEARCH_SECTIONS,
+    ]);
+  });
+
+  test("normalizeDisabled filters invalid ids and deduplicates", () => {
+    expect(normalizeDisabled('["files","bogus","files"]', SEARCH_SECTIONS)).toEqual([
+      "files",
+    ]);
+    expect(normalizeDisabled(null, IDLE_SECTIONS)).toEqual([]);
   });
 });

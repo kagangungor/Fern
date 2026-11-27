@@ -30,12 +30,33 @@ import {
 import { useSettingsSync } from "../hooks/useSettingsSync";
 import { localizeAppName, useT } from "../i18n";
 import {
+  RECENTS_KEY,
   appKey,
   fetchRunningApps,
   loadInstalledApps,
   readRecents,
   recordRecent,
 } from "./engine/apps";
+import {
+  IDLE_SECTIONS,
+  LAUNCHER_BROWSER_KEY,
+  LAUNCHER_IDLE_DISABLED_KEY,
+  LAUNCHER_IDLE_ORDER_KEY,
+  LAUNCHER_SEARCH_DISABLED_KEY,
+  LAUNCHER_SEARCH_ORDER_KEY,
+  LAUNCHER_WEB_ENGINE_KEY,
+  SEARCH_SECTIONS,
+  normalizeDisabled,
+  normalizeOrder,
+  readBrowserPath,
+  readIdleDisabled,
+  readIdleOrder,
+  readSearchDisabled,
+  readSearchOrder,
+  readWebEngine,
+  type IdleSectionId,
+  type SearchSectionId,
+} from "./config";
 import { evaluateExpression } from "./engine/calculator";
 import { buildQuickCommands, matchQuickCommands } from "./engine/commands";
 import { fuzzyScore } from "./engine/fuzzy";
@@ -48,7 +69,6 @@ import type {
   WebEngine,
 } from "./types";
 
-const WEB_ENGINE_KEY = "fern-launcher-web-engine";
 const TEXT_EXTENSIONS = new Set([
   "txt",
   "md",
@@ -73,16 +93,6 @@ const TEXT_EXTENSIONS = new Set([
   "docx",
   "pdf",
 ]);
-
-function readWebEngine(): WebEngine {
-  try {
-    return localStorage.getItem(WEB_ENGINE_KEY) === "duckduckgo"
-      ? "duckduckgo"
-      : "google";
-  } catch {
-    return "google";
-  }
-}
 
 function normalizePath(p: string): string {
   return p.trim().toLowerCase().replace(/\//g, "\\");
@@ -166,6 +176,11 @@ export function LauncherApp() {
   const [recents, setRecents] = useState<string[]>(() => readRecents());
   const [fileResults, setFileResults] = useState<FileSearchResult[]>([]);
   const [webEngine, setWebEngine] = useState<WebEngine>(readWebEngine);
+  const [browserPath, setBrowserPath] = useState<string>(readBrowserPath);
+  const [idleOrder, setIdleOrder] = useState<IdleSectionId[]>(readIdleOrder);
+  const [idleDisabled, setIdleDisabled] = useState<IdleSectionId[]>(readIdleDisabled);
+  const [searchOrder, setSearchOrder] = useState<SearchSectionId[]>(readSearchOrder);
+  const [searchDisabled, setSearchDisabled] = useState<SearchSectionId[]>(readSearchDisabled);
   const [icons, setIcons] = useState<Record<string, string | null>>({});
   const [openSeq, setOpenSeq] = useState(0);
   const [langVersion, setLangVersion] = useState(0);
@@ -185,16 +200,72 @@ export function LauncherApp() {
 
   const commands = useMemo(() => buildQuickCommands(), []);
 
-  // Sync live settings changes (web engine & language; theme is handled by initTheme)
+  // Sync live settings changes (web engine, browser, ordering, language)
   useSettingsSync({
-    [WEB_ENGINE_KEY]: (value) => {
+    [LAUNCHER_WEB_ENGINE_KEY]: (value) => {
       const next: WebEngine = value === "duckduckgo" ? "duckduckgo" : "google";
       try {
-        localStorage.setItem(WEB_ENGINE_KEY, next);
+        localStorage.setItem(LAUNCHER_WEB_ENGINE_KEY, next);
       } catch {
         // Ignore storage errors
       }
       setWebEngine(next);
+    },
+    [LAUNCHER_BROWSER_KEY]: (value) => {
+      const next = typeof value === "string" ? value : "";
+      try {
+        localStorage.setItem(LAUNCHER_BROWSER_KEY, next);
+      } catch {
+        // Ignore storage errors
+      }
+      setBrowserPath(next);
+    },
+    [LAUNCHER_IDLE_ORDER_KEY]: (value) => {
+      const next = normalizeOrder(value, IDLE_SECTIONS);
+      try {
+        localStorage.setItem(LAUNCHER_IDLE_ORDER_KEY, JSON.stringify(next));
+      } catch {
+        // Ignore storage errors
+      }
+      setIdleOrder(next);
+    },
+    [LAUNCHER_IDLE_DISABLED_KEY]: (value) => {
+      const next = normalizeDisabled(value, IDLE_SECTIONS);
+      try {
+        localStorage.setItem(LAUNCHER_IDLE_DISABLED_KEY, JSON.stringify(next));
+      } catch {
+        // Ignore storage errors
+      }
+      setIdleDisabled(next);
+    },
+    [LAUNCHER_SEARCH_ORDER_KEY]: (value) => {
+      const next = normalizeOrder(value, SEARCH_SECTIONS);
+      try {
+        localStorage.setItem(LAUNCHER_SEARCH_ORDER_KEY, JSON.stringify(next));
+      } catch {
+        // Ignore storage errors
+      }
+      setSearchOrder(next);
+    },
+    [LAUNCHER_SEARCH_DISABLED_KEY]: (value) => {
+      const next = normalizeDisabled(value, SEARCH_SECTIONS);
+      try {
+        localStorage.setItem(LAUNCHER_SEARCH_DISABLED_KEY, JSON.stringify(next));
+      } catch {
+        // Ignore storage errors
+      }
+      setSearchDisabled(next);
+    },
+    [RECENTS_KEY]: (value) => {
+      try {
+        localStorage.setItem(
+          RECENTS_KEY,
+          typeof value === "string" ? value : JSON.stringify(value ?? [])
+        );
+      } catch {
+        // Ignore storage errors
+      }
+      setRecents(readRecents());
     },
     "fern-language": (value) => {
       try {
@@ -224,14 +295,43 @@ export function LauncherApp() {
     invoke<Record<string, unknown>>("load_settings")
       .then((settings) => {
         if (!active || !settings) return;
-        const val = settings[WEB_ENGINE_KEY];
+        const val = settings[LAUNCHER_WEB_ENGINE_KEY];
         if (val === "google" || val === "duckduckgo") {
           try {
-            localStorage.setItem(WEB_ENGINE_KEY, val);
+            localStorage.setItem(LAUNCHER_WEB_ENGINE_KEY, val);
           } catch {
             // Ignore storage errors
           }
           setWebEngine(val);
+        }
+        if (typeof settings[LAUNCHER_BROWSER_KEY] === "string") {
+          const bp = String(settings[LAUNCHER_BROWSER_KEY]);
+          try {
+            localStorage.setItem(LAUNCHER_BROWSER_KEY, bp);
+          } catch {
+            // Ignore storage errors
+          }
+          setBrowserPath(bp);
+        }
+        if (settings[LAUNCHER_IDLE_ORDER_KEY] !== undefined) {
+          const v = normalizeOrder(settings[LAUNCHER_IDLE_ORDER_KEY], IDLE_SECTIONS);
+          try { localStorage.setItem(LAUNCHER_IDLE_ORDER_KEY, JSON.stringify(v)); } catch {}
+          setIdleOrder(v);
+        }
+        if (settings[LAUNCHER_IDLE_DISABLED_KEY] !== undefined) {
+          const v = normalizeDisabled(settings[LAUNCHER_IDLE_DISABLED_KEY], IDLE_SECTIONS);
+          try { localStorage.setItem(LAUNCHER_IDLE_DISABLED_KEY, JSON.stringify(v)); } catch {}
+          setIdleDisabled(v);
+        }
+        if (settings[LAUNCHER_SEARCH_ORDER_KEY] !== undefined) {
+          const v = normalizeOrder(settings[LAUNCHER_SEARCH_ORDER_KEY], SEARCH_SECTIONS);
+          try { localStorage.setItem(LAUNCHER_SEARCH_ORDER_KEY, JSON.stringify(v)); } catch {}
+          setSearchOrder(v);
+        }
+        if (settings[LAUNCHER_SEARCH_DISABLED_KEY] !== undefined) {
+          const v = normalizeDisabled(settings[LAUNCHER_SEARCH_DISABLED_KEY], SEARCH_SECTIONS);
+          try { localStorage.setItem(LAUNCHER_SEARCH_DISABLED_KEY, JSON.stringify(v)); } catch {}
+          setSearchDisabled(v);
         }
       })
       .catch(() => {});
@@ -250,6 +350,11 @@ export function LauncherApp() {
       setConfirmId(null);
       setSelectedIndex(0);
       setWebEngine(readWebEngine());
+      setBrowserPath(readBrowserPath());
+      setIdleOrder(readIdleOrder());
+      setIdleDisabled(readIdleDisabled());
+      setSearchOrder(readSearchOrder());
+      setSearchDisabled(readSearchDisabled());
       setRecents(readRecents());
       setOpenSeq((seq) => seq + 1);
       fetchRunningApps().then((running) => setRunningApps(running));
@@ -273,7 +378,7 @@ export function LauncherApp() {
   useEffect(() => {
     const trimmed = query.trim();
     const isExplicitWeb = trimmed.startsWith("? ");
-    if (trimmed.length < 2 || isExplicitWeb) {
+    if (trimmed.length < 2 || isExplicitWeb || searchDisabled.includes("files")) {
       requestIdRef.current += 1;
       setFileResults([]);
       return;
@@ -342,8 +447,8 @@ export function LauncherApp() {
     return merged;
   }, [installedApps, runningApps]);
 
-  // Build unified LauncherItem list
-  const { items, idleRecentCount } = useMemo(() => {
+  // Build unified LauncherItem list honoring user-configured section order & toggles
+  const { items, idleHeaders } = useMemo(() => {
     const trimmed = query.trim();
 
     if (!trimmed) {
@@ -353,41 +458,57 @@ export function LauncherApp() {
       }
 
       const list: LauncherItem[] = [];
+      const headers: Record<number, string> = {};
       const seen = new Set<string>();
       const seenPaths = new Set<string>();
 
-      let recentCount = 0;
-      for (const key of recents) {
-        if (recentCount >= 5) break;
-        const app = byKey.get(key);
-        if (!app || seen.has(key)) continue;
-        const norm = normalizePath(app.path);
-        if (norm && seenPaths.has(norm)) continue;
-        seen.add(key);
-        if (norm) seenPaths.add(norm);
-        list.push({ kind: "app", id: `app:${key}`, app });
-        recentCount++;
-      }
-
-      for (const r of runningApps) {
+      for (const section of idleOrder) {
+        if (idleDisabled.includes(section)) continue;
         if (list.length >= 8) break;
-        const key = appKey(r);
-        const norm = normalizePath(r.path);
-        if (seen.has(key) || (norm && seenPaths.has(norm))) continue;
-        seen.add(key);
-        if (norm) seenPaths.add(norm);
-        const app = byKey.get(key) ?? r;
-        list.push({ kind: "app", id: `app:${key}`, app });
+        const startIdx = list.length;
+
+        if (section === "recents") {
+          let recentCount = 0;
+          for (const key of recents) {
+            if (recentCount >= 5 || list.length >= 8) break;
+            const app = byKey.get(key);
+            if (!app || seen.has(key)) continue;
+            const norm = normalizePath(app.path);
+            if (norm && seenPaths.has(norm)) continue;
+            seen.add(key);
+            if (norm) seenPaths.add(norm);
+            list.push({ kind: "app", id: `app:${key}`, app });
+            recentCount++;
+          }
+          if (list.length > startIdx) {
+            headers[startIdx] = "launcher.section.recents";
+          }
+        } else if (section === "running") {
+          for (const r of runningApps) {
+            if (list.length >= 8) break;
+            const key = appKey(r);
+            const norm = normalizePath(r.path);
+            if (seen.has(key) || (norm && seenPaths.has(norm))) continue;
+            seen.add(key);
+            if (norm) seenPaths.add(norm);
+            const app = byKey.get(key) ?? r;
+            list.push({ kind: "app", id: `app:${key}`, app });
+          }
+          if (list.length > startIdx) {
+            headers[startIdx] = "launcher.section.running";
+          }
+        }
       }
 
-      return { items: list, idleRecentCount: recentCount };
+      return { items: list, idleHeaders: headers };
     }
 
     const list: LauncherItem[] = [];
     const isExplicitWeb = trimmed.startsWith("? ");
     const explicitWebQuery = isExplicitWeb ? trimmed.slice(2).trim() : "";
+    const webEnabled = !searchDisabled.includes("web");
 
-    if (isExplicitWeb && explicitWebQuery.length > 0) {
+    if (webEnabled && isExplicitWeb && explicitWebQuery.length > 0) {
       list.push({
         kind: "web",
         id: `web:${webEngine}:${explicitWebQuery}`,
@@ -397,82 +518,99 @@ export function LauncherApp() {
       });
     }
 
-    const calcValue = evaluateExpression(trimmed);
-    if (calcValue !== null) {
-      list.push({
-        kind: "calculator",
-        id: "calc",
-        expression: trimmed,
-        value: calcValue,
-      });
-    }
-
-    const directUrl = detectDirectUrl(trimmed);
-    if (directUrl !== null) {
-      list.push({
-        kind: "url",
-        id: `url:${directUrl}`,
-        url: directUrl,
-        display: trimmed,
-      });
-    }
-
     const recentSet = new Set(recents);
-    const scoredApps: { app: SearchApp; score: number }[] = [];
-    for (const app of mergedApps) {
-      const localized = localizeAppName(app.name);
-      const baseScore = Math.max(
-        fuzzyScore(app.name, trimmed),
-        localized !== app.name ? fuzzyScore(localized, trimmed) : -1
-      );
-      if (baseScore <= 0) continue;
-      const bonus =
-        (app.is_running ? 15 : 0) + (recentSet.has(appKey(app)) ? 10 : 0);
-      scoredApps.push({ app, score: baseScore + bonus });
-    }
-    scoredApps.sort(
-      (a, b) => b.score - a.score || a.app.name.localeCompare(b.app.name)
-    );
-    for (const entry of scoredApps.slice(0, 6)) {
-      list.push({
-        kind: "app",
-        id: `app:${appKey(entry.app)}`,
-        app: entry.app,
-      });
+
+    for (const section of searchOrder) {
+      if (searchDisabled.includes(section)) continue;
+
+      switch (section) {
+        case "calculator": {
+          const calcValue = evaluateExpression(trimmed);
+          if (calcValue !== null) {
+            list.push({
+              kind: "calculator",
+              id: "calc",
+              expression: trimmed,
+              value: calcValue,
+            });
+          }
+          break;
+        }
+        case "apps": {
+          const scoredApps: { app: SearchApp; score: number }[] = [];
+          for (const app of mergedApps) {
+            const localized = localizeAppName(app.name);
+            const baseScore = Math.max(
+              fuzzyScore(app.name, trimmed),
+              localized !== app.name ? fuzzyScore(localized, trimmed) : -1
+            );
+            if (baseScore <= 0) continue;
+            const bonus =
+              (app.is_running ? 15 : 0) + (recentSet.has(appKey(app)) ? 10 : 0);
+            scoredApps.push({ app, score: baseScore + bonus });
+          }
+          scoredApps.sort(
+            (a, b) => b.score - a.score || a.app.name.localeCompare(b.app.name)
+          );
+          for (const entry of scoredApps.slice(0, 6)) {
+            list.push({
+              kind: "app",
+              id: `app:${appKey(entry.app)}`,
+              app: entry.app,
+            });
+          }
+          break;
+        }
+        case "commands": {
+          const matchedCommands = matchQuickCommands(commands, trimmed, t).slice(
+            0,
+            3
+          );
+          for (const match of matchedCommands) {
+            list.push({
+              kind: "command",
+              id: `cmd:${match.command.id}`,
+              command: match.command,
+              label: match.label,
+            });
+          }
+          break;
+        }
+        case "files": {
+          for (const file of fileResults.slice(0, 5)) {
+            list.push({
+              kind: "file",
+              id: `file:${file.path}`,
+              file,
+            });
+          }
+          break;
+        }
+        case "web": {
+          const directUrl = detectDirectUrl(trimmed);
+          if (directUrl !== null) {
+            list.push({
+              kind: "url",
+              id: `url:${directUrl}`,
+              url: directUrl,
+              display: trimmed,
+            });
+          }
+          if (!isExplicitWeb && (directUrl === null || list.length < 4)) {
+            list.push({
+              kind: "web",
+              id: `web:${webEngine}:${trimmed}`,
+              query: trimmed,
+              engine: webEngine,
+              url: buildWebSearchUrl(trimmed, webEngine),
+            });
+          }
+          break;
+        }
+      }
     }
 
-    const matchedCommands = matchQuickCommands(commands, trimmed, t).slice(
-      0,
-      3
-    );
-    for (const match of matchedCommands) {
-      list.push({
-        kind: "command",
-        id: `cmd:${match.command.id}`,
-        command: match.command,
-        label: match.label,
-      });
-    }
-
-    for (const file of fileResults.slice(0, 5)) {
-      list.push({
-        kind: "file",
-        id: `file:${file.path}`,
-        file,
-      });
-    }
-
-    if (!isExplicitWeb && list.length < 4) {
-      list.push({
-        kind: "web",
-        id: `web:${webEngine}:${trimmed}`,
-        query: trimmed,
-        engine: webEngine,
-        url: buildWebSearchUrl(trimmed, webEngine),
-      });
-    }
-
-    return { items: list, idleRecentCount: 0 };
+    return { items: list, idleHeaders: {} as Record<number, string> };
   }, [
     query,
     mergedApps,
@@ -481,6 +619,10 @@ export function LauncherApp() {
     commands,
     fileResults,
     webEngine,
+    idleOrder,
+    idleDisabled,
+    searchOrder,
+    searchDisabled,
     t,
     langVersion,
   ]);
@@ -558,9 +700,16 @@ export function LauncherApp() {
         case "url":
         case "web": {
           try {
-            await openUrl(item.url);
+            await invoke("open_web_url", {
+              url: item.url,
+              browserPath: browserPath || null,
+            });
           } catch {
-            // Ignore opener error
+            try {
+              await openUrl(item.url);
+            } catch {
+              // Ignore opener error
+            }
           }
           hideLauncher();
           return;
@@ -611,7 +760,7 @@ export function LauncherApp() {
         }
       }
     },
-    [confirmId, hideLauncher]
+    [browserPath, confirmId, hideLauncher]
   );
 
   useEffect(() => {
@@ -750,23 +899,13 @@ export function LauncherApp() {
               const isConfirming =
                 item.kind === "command" && confirmId === item.id;
 
-              const showRecentsHeader =
-                isIdle && idleRecentCount > 0 && idx === 0;
-              const showRunningHeader =
-                isIdle &&
-                idx === idleRecentCount &&
-                items.length > idleRecentCount;
+              const idleHeaderKey = isIdle ? idleHeaders[idx] : undefined;
 
               return (
                 <div key={item.id} className="launcher-row-group">
-                  {showRecentsHeader && (
+                  {idleHeaderKey && (
                     <div className="launcher-section-label">
-                      {t("launcher.section.recents")}
-                    </div>
-                  )}
-                  {showRunningHeader && (
-                    <div className="launcher-section-label">
-                      {t("launcher.section.running")}
+                      {t(idleHeaderKey)}
                     </div>
                   )}
 

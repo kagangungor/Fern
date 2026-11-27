@@ -6,6 +6,7 @@ export { NotchTab } from "./NotchTab";
 export { AgentSounds } from "./AgentSounds";
 export { CalendarSyncPage } from "./CalendarSyncPage";
 export { DockTab } from "./DockTab";
+export { LauncherTab } from "./LauncherTab";
 export { OverlaysTab } from "./OverlaysTab";
 export { IntegrationsTab } from "./IntegrationsTab";
 export { ProcessesTab } from "./ProcessesTab";
