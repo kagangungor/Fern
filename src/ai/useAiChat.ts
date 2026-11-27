@@ -31,6 +31,11 @@ interface WireAiMessage {
 
 const PROVIDER_STORAGE_KEY = "fern-ai-provider";
 const NOTICE_TIMEOUT_MS = 4000;
+const MAX_IN_MEMORY_MESSAGES = 20;
+
+// In-memory session store so closing/reopening the Notch keeps the last 20 messages
+// without ever writing chat history to disk or localStorage.
+let persistedSessionMessages: AiChatMessage[] = [];
 
 let seqCounter = 0;
 
@@ -74,7 +79,18 @@ function toWireMessages(list: AiChatMessage[]): WireAiMessage[] {
 }
 
 export function useAiChat() {
-  const [messages, setMessages] = useState<AiChatMessage[]>([]);
+  const [messages, setMessagesState] = useState<AiChatMessage[]>(() => persistedSessionMessages);
+  const setMessages = useCallback(
+    (updater: AiChatMessage[] | ((prev: AiChatMessage[]) => AiChatMessage[])) => {
+      setMessagesState((prev) => {
+        const next = typeof updater === "function" ? updater(prev) : updater;
+        const capped = next.length > MAX_IN_MEMORY_MESSAGES ? next.slice(-MAX_IN_MEMORY_MESSAGES) : next;
+        persistedSessionMessages = capped;
+        return capped;
+      });
+    },
+    []
+  );
   const [prompt, setPrompt] = useState("");
   const [images, setImages] = useState<AiImage[]>([]);
   const [imageBusy, setImageBusy] = useState(false);

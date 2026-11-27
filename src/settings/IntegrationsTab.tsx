@@ -287,14 +287,17 @@ export function IntegrationsTab({
                 </div>
 
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
-                  <label style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, opacity: 0.78, cursor: "pointer" }}>
-                    <input
-                      type="checkbox"
-                      checked={sessionOnlyMap[id]}
-                      onChange={(e) => setSessionOnlyMap((prev) => ({ ...prev, [id]: e.target.checked }))}
-                    />
-                    <span>{t("ai.setup.sessionOnly")}</span>
-                  </label>
+                  <div style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+                    <label className="toggle-switch" style={{ transform: "scale(0.8)", transformOrigin: "left center" }}>
+                      <input
+                        type="checkbox"
+                        checked={sessionOnlyMap[id]}
+                        onChange={(e) => setSessionOnlyMap((prev) => ({ ...prev, [id]: e.target.checked }))}
+                      />
+                      <span className="slider"></span>
+                    </label>
+                    <span style={{ fontSize: 12, opacity: 0.72 }}>{t("ai.setup.sessionOnly")}</span>
+                  </div>
                   <div style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
                     <span style={{ fontSize: 12, opacity: 0.7 }}>{t("ai.setup.model")}:</span>
                     <Dropdown

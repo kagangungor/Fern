@@ -280,11 +280,50 @@ pub fn build_transcript(messages: &[AiMessage], temp_image_paths: &[PathBuf]) ->
     out
 }
 
-fn provider_cli_args(provider: Provider) -> &'static [&'static str] {
+fn cli_sandbox_dir() -> PathBuf {
+    let dir = std::env::temp_dir().join("fern-ai-sandbox");
+    let _ = std::fs::create_dir_all(&dir);
+    dir
+}
+
+fn provider_cli_args(provider: Provider, model: Option<&str>) -> Vec<String> {
+    let clean_model = model
+        .map(str::trim)
+        .filter(|m| !m.is_empty() && m.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.')));
+
     match provider {
-        Provider::Claude => &["-p"],
-        Provider::Gemini => &["-p", ""],
-        Provider::OpenAI => &["exec", "-"],
+        Provider::Claude => {
+            let mut args = vec![
+                "-p".to_string(),
+                "--tools".to_string(),
+                String::new(),
+                "--no-session-persistence".to_string(),
+            ];
+            if let Some(m) = clean_model {
+                args.push("--model".to_string());
+                args.push(m.to_string());
+            }
+            args
+        }
+        Provider::Gemini => {
+            let mut args = vec!["-p".to_string(), String::new()];
+            if let Some(m) = clean_model {
+                if m != "gemini-flash-latest" {
+                    args.push("-m".to_string());
+                    args.push(m.to_string());
+                }
+            }
+            args
+        }
+        Provider::OpenAI => {
+            let mut args = vec!["exec".to_string()];
+            if let Some(m) = clean_model {
+                args.push("-m".to_string());
+                args.push(m.to_string());
+            }
+            args.push("-".to_string());
+            args
+        }
     }
 }
 
@@ -305,7 +344,7 @@ fn format_cmd_arg(arg: &str) -> String {
     }
 }
 
-fn format_cmd_raw_arg(bin_path: &Path, args: &[&str]) -> String {
+fn format_cmd_raw_arg(bin_path: &Path, args: &[String]) -> String {
     let quoted_bin = format!("\"{}\"", bin_path.to_string_lossy());
     if args.is_empty() {
         format!("\"{quoted_bin}\"")
@@ -319,8 +358,8 @@ fn format_cmd_raw_arg(bin_path: &Path, args: &[&str]) -> String {
     }
 }
 
-fn build_cli_command(provider: Provider, bin_path: &Path) -> Command {
-    let args = provider_cli_args(provider);
+fn build_cli_command(provider: Provider, bin_path: &Path, model: Option<&str>) -> Command {
+    let args = provider_cli_args(provider, model);
 
     #[cfg(windows)]
     let mut cmd = {
@@ -328,11 +367,11 @@ fn build_cli_command(provider: Provider, bin_path: &Path) -> Command {
         let mut c = if is_cmd_script(bin_path) {
             let mut cmd_exe = Command::new("cmd.exe");
             cmd_exe.args(["/D", "/S", "/C"]);
-            cmd_exe.raw_arg(format_cmd_raw_arg(bin_path, args));
+            cmd_exe.raw_arg(format_cmd_raw_arg(bin_path, &args));
             cmd_exe
         } else {
             let mut direct = Command::new(bin_path);
-            direct.args(args);
+            direct.args(&args);
             direct
         };
         c.creation_flags(CREATE_NO_WINDOW);
@@ -342,11 +381,12 @@ fn build_cli_command(provider: Provider, bin_path: &Path) -> Command {
     #[cfg(not(windows))]
     let mut cmd = {
         let mut c = Command::new(bin_path);
-        c.args(args);
+        c.args(&args);
         c
     };
 
-    cmd.stdin(Stdio::piped())
+    cmd.current_dir(cli_sandbox_dir())
+        .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
@@ -476,6 +516,7 @@ where
 pub async fn ask_cli(
     app: &tauri::AppHandle,
     provider: Provider,
+    model: Option<&str>,
     messages: &[AiMessage],
     request_id: &str,
     mut cancel: tokio::sync::watch::Receiver<bool>,
@@ -501,7 +542,7 @@ pub async fn ask_cli(
     let temp_guard = write_temp_images(&working_messages, request_id)?;
     let transcript = build_transcript(&working_messages, temp_guard.paths());
 
-    let mut cmd = build_cli_command(provider, Path::new(&bin_path_str));
+    let mut cmd = build_cli_command(provider, Path::new(&bin_path_str), model);
     let mut child = cmd
         .spawn()
         .map_err(|e| format!("Failed to start {} CLI: {}", provider.label(), e))?;
@@ -753,27 +794,27 @@ mod tests {
     #[test]
     fn cmd_wrapper_raw_arg_preserves_spaces_and_empty_args() {
         let gemini_path = PathBuf::from(r"C:\Users\John Doe\AppData\Roaming\npm\gemini.cmd");
-        let raw_gemini = format_cmd_raw_arg(&gemini_path, provider_cli_args(Provider::Gemini));
+        let raw_gemini = format_cmd_raw_arg(&gemini_path, &provider_cli_args(Provider::Gemini, None));
         assert_eq!(
             raw_gemini,
             r#"""C:\Users\John Doe\AppData\Roaming\npm\gemini.cmd" -p """"#
         );
 
         let claude_path = PathBuf::from(r"C:\Users\John Doe\AppData\Roaming\npm\claude.cmd");
-        let raw_claude = format_cmd_raw_arg(&claude_path, provider_cli_args(Provider::Claude));
+        let raw_claude = format_cmd_raw_arg(&claude_path, &provider_cli_args(Provider::Claude, Some("claude-sonnet-4-5")));
         assert_eq!(
             raw_claude,
-            r#"""C:\Users\John Doe\AppData\Roaming\npm\claude.cmd" -p""#
+            r#"""C:\Users\John Doe\AppData\Roaming\npm\claude.cmd" -p --tools "" --no-session-persistence --model claude-sonnet-4-5""#
         );
 
         let codex_path = PathBuf::from(r"C:\Users\John Doe\AppData\Roaming\npm\codex.cmd");
-        let raw_codex = format_cmd_raw_arg(&codex_path, provider_cli_args(Provider::OpenAI));
+        let raw_codex = format_cmd_raw_arg(&codex_path, &provider_cli_args(Provider::OpenAI, None));
         assert_eq!(
             raw_codex,
             r#"""C:\Users\John Doe\AppData\Roaming\npm\codex.cmd" exec -""#
         );
 
-        let cmd = build_cli_command(Provider::Gemini, &gemini_path);
+        let cmd = build_cli_command(Provider::Gemini, &gemini_path, None);
         assert_eq!(cmd.get_program(), "cmd.exe");
         let args: Vec<String> = cmd
             .get_args()

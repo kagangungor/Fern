@@ -483,6 +483,13 @@ export function NotchAiChat({
   const isConfigError = error !== null && CONFIG_ERROR_CODES.has(error);
   const atImageLimit = images.length >= AI_MAX_IMAGES;
 
+  const cycleModel = () => {
+    if (modelOptions.length <= 1) return;
+    const idx = modelOptions.indexOf(model);
+    const next = modelOptions[(idx + 1) % modelOptions.length];
+    handleModelChange(next);
+  };
+
   return (
     <div className="ai-chat-panel">
       {/* Header bar */}
@@ -516,6 +523,16 @@ export function NotchAiChat({
               );
             })}
           </div>
+          {!setupOpen && (
+            <button
+              type="button"
+              className="ai-header-model"
+              onClick={cycleModel}
+              title={`${aiModelLabel(model)} (${model})`}
+            >
+              {aiModelLabel(model)}
+            </button>
+          )}
         </div>
 
         <div className="ai-header-actions">

@@ -235,7 +235,30 @@ pub async fn ai_ask(
                 }
             }
             "cli" => {
-                cli::ask_cli(&app, candidate, &messages, &request_id, cancel_rx.clone()).await
+                let effective_model = if candidate == requested {
+                    model
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|m| !m.is_empty())
+                        .map(str::to_string)
+                } else {
+                    None
+                }
+                .or_else(|| {
+                    get_setting_str(&app, candidate.model_setting())
+                        .map(|m| m.trim().to_string())
+                        .filter(|m| !m.is_empty())
+                });
+
+                cli::ask_cli(
+                    &app,
+                    candidate,
+                    effective_model.as_deref(),
+                    &messages,
+                    &request_id,
+                    cancel_rx.clone(),
+                )
+                .await
             }
             _ => Err("ai-not-configured".to_string()),
         };

@@ -122,6 +122,26 @@
   box-shadow: 0 0 0 1.5px rgba(0, 0, 0, 0.85);
 }
 
+.ai-chat-panel .ai-header-model {
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 9999px;
+  border: 1px solid var(--fern-border, rgba(255, 255, 255, 0.08));
+  background: var(--fern-group-bg, rgba(255, 255, 255, 0.05));
+  color: var(--fern-text-muted, rgba(255, 255, 255, 0.68));
+  font-family: inherit;
+  font-size: 10.5px;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.ai-chat-panel .ai-header-model:hover {
+  background: rgba(255, 255, 255, 0.11);
+  color: var(--fern-text, #ffffff);
+}
+
 .ai-chat-panel .ai-header-actions {
   display: flex;
   align-items: center;

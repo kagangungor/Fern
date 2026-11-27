@@ -1970,6 +1970,39 @@ input:checked + .slider:before {
   padding: 4px 14px 14px;
 }
 
+.settings-input {
+  height: 30px;
+  padding: 0 11px;
+  border-radius: 8px;
+  border: 1px solid var(--fern-border, rgba(255, 255, 255, 0.1));
+  background: var(--fern-group-bg, rgba(255, 255, 255, 0.05));
+  color: var(--fern-text, #ffffff);
+  font-family: inherit;
+  font-size: 12px;
+  outline: none;
+  box-sizing: border-box;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.settings-input::placeholder {
+  color: var(--fern-text-muted, rgba(255, 255, 255, 0.4));
+}
+
+.settings-input:focus {
+  border-color: color-mix(in srgb, var(--fern-accent, var(--accent, #0a84ff)) 60%, transparent);
+  background: var(--fern-group-bg, rgba(255, 255, 255, 0.08));
+}
+
+:root.light-mode .settings-input {
+  background: rgba(0, 0, 0, 0.04);
+  border-color: rgba(0, 0, 0, 0.12);
+  color: #111827;
+}
+
+:root.light-mode .settings-input::placeholder {
+  color: rgba(0, 0, 0, 0.42);
+}
+
 .ai-cli-guide-note {
   font-size: 11.5px;
   line-height: 1.45;
