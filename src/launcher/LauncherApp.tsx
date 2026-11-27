@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { KeyboardEvent, MouseEvent } from "react";
+import type { MouseEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -616,8 +616,10 @@ export function LauncherApp() {
     [confirmId, hideLauncher]
   );
 
-  const handleKeyDown = useCallback(
-    (e: KeyboardEvent<HTMLDivElement>) => {
+  useEffect(() => {
+    const onWindowKeyDown = (e: globalThis.KeyboardEvent) => {
+      if (e.isComposing) return;
+
       if (e.key === "ArrowDown" || (e.key === "Tab" && !e.shiftKey)) {
         e.preventDefault();
         if (items.length > 0) {
@@ -653,9 +655,11 @@ export function LauncherApp() {
           shift: e.shiftKey,
         });
       }
-    },
-    [items, selectedIndex, confirmId, hideLauncher, activateItem]
-  );
+    };
+
+    window.addEventListener("keydown", onWindowKeyDown);
+    return () => window.removeEventListener("keydown", onWindowKeyDown);
+  }, [items, selectedIndex, confirmId, hideLauncher, activateItem]);
 
   const handleRootMouseDown = useCallback(
     (e: MouseEvent<HTMLDivElement>) => {
@@ -672,7 +676,6 @@ export function LauncherApp() {
   return (
     <div
       className="launcher-root"
-      onKeyDown={handleKeyDown}
       onMouseDown={handleRootMouseDown}
     >
       <motion.div
@@ -680,6 +683,9 @@ export function LauncherApp() {
         className="launcher-card"
         role="dialog"
         aria-label="Fern Quick Launcher"
+        onMouseDown={(e) => {
+          if (e.target !== inputRef.current) e.preventDefault();
+        }}
         initial={
           reducedMotion ? false : { opacity: 0, y: -8, scale: 0.985 }
         }

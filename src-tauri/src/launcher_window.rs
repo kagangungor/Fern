@@ -148,7 +148,6 @@ fn build_window(app: &AppHandle) -> Result<WebviewWindow, String> {
     };
     let target = window.clone();
     let _ = window.run_on_main_thread(move || {
-        let _ = window_vibrancy::apply_acrylic(&target, Some((10, 10, 15, 16)));
         if let Ok(hwnd) = target.hwnd() {
             unsafe {
                 let _ = DwmSetWindowAttribute(
@@ -243,6 +242,14 @@ pub fn toggle(app: &AppHandle) {
             hide(app);
             return;
         }
+    }
+    let recently_hidden = LAST_HIDDEN
+        .lock()
+        .ok()
+        .and_then(|g| *g)
+        .is_some_and(|t| t.elapsed() < Duration::from_millis(180));
+    if recently_hidden {
+        return;
     }
     show(app);
 }

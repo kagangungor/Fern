@@ -129,6 +129,14 @@ pub fn parse_shortcut(spec: &str) -> Option<(Vec<VIRTUAL_KEY>, VIRTUAL_KEY)> {
     Some((modifiers, key))
 }
 
+fn should_skip_launcher_hotkey(search_launcher: &str, launcher_spec: &str) -> bool {
+    let is_external_alt_space = matches!(
+        search_launcher.trim().to_ascii_lowercase().as_str(),
+        "powertoys" | "raycast" | "flow" | "listary"
+    );
+    is_external_alt_space && launcher_spec.trim().eq_ignore_ascii_case("alt+space")
+}
+
 fn apply(app: &AppHandle, reg_notch: &mut bool, reg_mic: &mut bool, reg_launcher: &mut bool) {
     unsafe {
         if *reg_notch {
@@ -190,10 +198,14 @@ fn apply(app: &AppHandle, reg_notch: &mut bool, reg_mic: &mut bool, reg_launcher
             }
         }
 
-        // Fern Quick Launcher Hotkey (defaults to Alt+Space; empty string disables without conflict)
+        // Fern Quick Launcher Hotkey (defaults to Alt+Space; empty string or external Alt+Space launcher disables without conflict)
+        let search_launcher = crate::utils::get_setting_str(app, "fern-search-launcher")
+            .unwrap_or_else(|| "fern".to_string());
         let launcher_spec = crate::utils::get_setting_str(app, "fern-launcher-hotkey")
             .unwrap_or_else(|| "Alt+Space".to_string());
-        if launcher_spec.trim().is_empty() {
+        if launcher_spec.trim().is_empty()
+            || should_skip_launcher_hotkey(&search_launcher, &launcher_spec)
+        {
             LAUNCHER_HOTKEY_REGISTERED.store(true, Ordering::SeqCst);
         } else if let Some((modifiers, key)) = parse_shortcut(&launcher_spec) {
             let mut mods = MOD_NOREPEAT;
@@ -299,5 +311,17 @@ mod tests {
     #[test]
     fn parses_alt_space_default_launcher_hotkey() {
         assert_eq!(parse_shortcut("Alt+Space"), Some((vec![VK_LMENU], VK_SPACE)));
+    }
+
+    #[test]
+    fn skips_default_alt_space_when_external_alt_space_launcher_selected() {
+        for ext in ["powertoys", "raycast", "flow", "listary", "PowerToys", " raycast "] {
+            assert!(should_skip_launcher_hotkey(ext, "Alt+Space"));
+            assert!(should_skip_launcher_hotkey(ext, "alt+space"));
+            assert!(!should_skip_launcher_hotkey(ext, "Ctrl+Space"));
+        }
+        assert!(!should_skip_launcher_hotkey("fern", "Alt+Space"));
+        assert!(!should_skip_launcher_hotkey("windows", "Alt+Space"));
+        assert!(!should_skip_launcher_hotkey("everything", "Alt+Space"));
     }
 }

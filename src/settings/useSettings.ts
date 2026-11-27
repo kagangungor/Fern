@@ -998,7 +998,9 @@ export function useSettings() {
 
   const setDockSearchLauncherValue = (val: string) => {
     setDockSearchLauncher(val);
-    saveSetting("fern-search-launcher", val);
+    saveSetting("fern-search-launcher", val).finally(() => {
+      invoke("reload_hotkeys").catch(() => {});
+    });
   };
 
   const toggleDockTray = () => {

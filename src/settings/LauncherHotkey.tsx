@@ -33,6 +33,10 @@ export function LauncherHotkey() {
   }, []);
 
   const commit = (next: string) => {
+    if (timerRef.current !== null) {
+      window.clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
     setValue(next);
     localStorage.setItem("fern-launcher-hotkey", next);
     if (!next) {
@@ -49,6 +53,7 @@ export function LauncherHotkey() {
               window.clearTimeout(timerRef.current);
             }
             timerRef.current = window.setTimeout(() => {
+              timerRef.current = null;
               invoke<boolean>("get_launcher_hotkey_status")
                 .then((ok) => {
                   if (mountedRef.current) setConflict(!ok);
