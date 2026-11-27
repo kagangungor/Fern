@@ -43,6 +43,8 @@ mod launchers;
 mod privacy_hud;
 mod app_audio;
 mod lyrics;
+mod quick_search;
+mod launcher_window;
 
 use tauri::Manager;
 use windows::Win32::System::Console::SetConsoleCtrlHandler;
@@ -231,6 +233,16 @@ fn main() {
             dock_extras::shelf_read_text_preview,
             launchers::get_search_launchers,
             launchers::trigger_search_launcher,
+            hotkeys::get_launcher_hotkey_status,
+            launcher_window::toggle_launcher,
+            launcher_window::hide_launcher,
+            launcher_window::launcher_ready,
+            quick_search::search_files,
+            quick_search::get_file_search_status,
+            quick_search::get_installed_browsers,
+            quick_search::open_web_url,
+            quick_search::open_file_path,
+            quick_search::launcher_system_action,
             privacy_hud::get_microphone_mute,
             privacy_hud::set_microphone_mute,
             privacy_hud::toggle_microphone_mute,

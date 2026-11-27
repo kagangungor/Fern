@@ -964,6 +964,7 @@ const Dock = memo(function Dock() {
   const [contextMenuHeight, setContextMenuHeight] = useState(0);
   const [contextMenuWidth, setContextMenuWidth] = useState(0);
   const [activeSubmenu, setActiveSubmenu] = useState<string | null>(null);
+  const submenuCloseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [activeOrder, setActiveOrder] = useState<string[]>([]);
   const [isDragging, setIsDragging] = useState(false);
   const [hoveredApp, setHoveredApp] = useState<string | null>(null);
@@ -1567,20 +1568,52 @@ const Dock = memo(function Dock() {
   };
 
   const closeMenu = () => {
+    if (submenuCloseTimerRef.current) {
+      clearTimeout(submenuCloseTimerRef.current);
+      submenuCloseTimerRef.current = null;
+    }
     setContextMenu(null);
     setActiveSubmenu(null);
     invoke('set_menu_open', { open: false, rect: null }).catch(() => {});
   };
 
+  const openFernSubmenu = () => {
+    if (submenuCloseTimerRef.current) {
+      clearTimeout(submenuCloseTimerRef.current);
+      submenuCloseTimerRef.current = null;
+    }
+    setActiveSubmenu((prev) => (prev === 'fern' ? prev : 'fern'));
+  };
+
+  const closeFernSubmenuNow = () => {
+    if (submenuCloseTimerRef.current) {
+      clearTimeout(submenuCloseTimerRef.current);
+      submenuCloseTimerRef.current = null;
+    }
+    setActiveSubmenu((prev) => (prev === null ? null : null));
+  };
+
+  const scheduleCloseFernSubmenu = () => {
+    if (submenuCloseTimerRef.current) clearTimeout(submenuCloseTimerRef.current);
+    submenuCloseTimerRef.current = setTimeout(() => {
+      submenuCloseTimerRef.current = null;
+      setActiveSubmenu(null);
+    }, 180);
+  };
+
   const fernOptionsMenu = () => (
     <div 
-      className="menu-item has-submenu"
-      onMouseEnter={() => setActiveSubmenu('fern')}
-      onMouseLeave={() => setActiveSubmenu(null)}
+      className={`menu-item has-submenu${activeSubmenu === 'fern' ? ' submenu-open' : ''}`}
+      onMouseEnter={openFernSubmenu}
+      onMouseLeave={scheduleCloseFernSubmenu}
     >
       {t("dockmenu.options")}
       <span className="submenu-arrow">▶</span>
-      <div className="submenu">
+      <div
+        className="submenu"
+        onMouseEnter={openFernSubmenu}
+        onMouseLeave={scheduleCloseFernSubmenu}
+      >
         {menuItems.includes("calendar") && (
           <div className="menu-item" onClick={() => { invoke('open_calendar_window'); closeMenu(); }}>{t("dockmenu.openCalendar")}</div>
         )}
@@ -1677,7 +1710,7 @@ const Dock = memo(function Dock() {
 
     invoke('set_menu_open', { open, rect }).catch(() => {});
 
-  }, [contextMenu, contextMenuHeight, contextMenuWidth, showAddPopup, renameApp, pinnedApps, activeApps, activeSubmenu, scale]);
+  }, [contextMenu, contextMenuHeight, contextMenuWidth, showAddPopup, renameApp, activeSubmenu, scale]);
 
   const dockItems = useMemo(() => {
     const runningMap = new Map();
@@ -2810,6 +2843,15 @@ const Dock = memo(function Dock() {
           style={{
             position: 'static',
             zoom: scale
+          }}
+          onMouseOver={(e) => {
+            if (!activeSubmenu) return;
+            const target = e.target as HTMLElement | null;
+            if (!target) return;
+            if (target.closest('.has-submenu') || target.closest('.submenu')) return;
+            if (target.closest('.menu-item')) {
+              closeFernSubmenuNow();
+            }
           }}
           onClick={(e) => e.stopPropagation()}
         >

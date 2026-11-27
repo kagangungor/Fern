@@ -10,9 +10,10 @@ type Props = {
   icon?: (id: string) => ReactNode;
   onReorder: (ids: string[]) => void;
   onReset?: () => void;
-  resetLabel: string;
+  resetLabel?: string;
   enabled?: (id: string) => boolean;
   onToggle?: (id: string) => void;
+  showPosition?: boolean;
 };
 
 function Row({
@@ -20,6 +21,7 @@ function Row({
   label,
   icon,
   position,
+  showPosition,
   enabled,
   onToggle,
 }: {
@@ -27,6 +29,7 @@ function Row({
   label: string;
   icon?: ReactNode;
   position: number;
+  showPosition: boolean;
   enabled?: boolean;
   onToggle?: () => void;
 }) {
@@ -49,12 +52,12 @@ function Row({
           <span className="slider"></span>
         </label>
       )}
-      <span className="panel-order-position">{position}</span>
+      {showPosition && <span className="panel-order-position">{position}</span>}
     </div>
   );
 }
 
-export function OrderList({ ids, label, icon, onReorder, onReset, resetLabel, enabled, onToggle }: Props) {
+export function OrderList({ ids, label, icon, onReorder, onReset, resetLabel, enabled, onToggle, showPosition = true }: Props) {
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
@@ -78,6 +81,7 @@ export function OrderList({ ids, label, icon, onReorder, onReset, resetLabel, en
               label={label(id)}
               icon={icon?.(id)}
               position={index + 1}
+              showPosition={showPosition}
               enabled={enabled?.(id)}
               onToggle={onToggle ? () => onToggle(id) : undefined}
             />

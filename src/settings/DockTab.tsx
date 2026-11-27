@@ -370,6 +370,7 @@ export function DockTab({
                   value={dockSearchLauncher}
                   onChange={setDockSearchLauncherValue}
                   options={[
+                    { value: "fern", label: t("dock.searchLauncher.fern") },
                     { value: "windows", label: "Windows (Win + S)" },
                     { value: "powertoys", label: `PowerToys Run (${t("dock.searchLauncher.altSpace")})` },
                     { value: "raycast", label: `Raycast (${t("dock.searchLauncher.altSpace")})` },
