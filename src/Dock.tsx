@@ -1585,6 +1585,14 @@ const Dock = memo(function Dock() {
     setActiveSubmenu((prev) => (prev === 'fern' ? prev : 'fern'));
   };
 
+  const closeFernSubmenuNow = () => {
+    if (submenuCloseTimerRef.current) {
+      clearTimeout(submenuCloseTimerRef.current);
+      submenuCloseTimerRef.current = null;
+    }
+    setActiveSubmenu((prev) => (prev === null ? null : null));
+  };
+
   const scheduleCloseFernSubmenu = () => {
     if (submenuCloseTimerRef.current) clearTimeout(submenuCloseTimerRef.current);
     submenuCloseTimerRef.current = setTimeout(() => {
@@ -2835,6 +2843,15 @@ const Dock = memo(function Dock() {
           style={{
             position: 'static',
             zoom: scale
+          }}
+          onMouseOver={(e) => {
+            if (!activeSubmenu) return;
+            const target = e.target as HTMLElement | null;
+            if (!target) return;
+            if (target.closest('.has-submenu') || target.closest('.submenu')) return;
+            if (target.closest('.menu-item')) {
+              closeFernSubmenuNow();
+            }
           }}
           onClick={(e) => e.stopPropagation()}
         >

@@ -7,6 +7,7 @@ import {
   FolderSearch,
   Globe,
   HardDrive,
+  LayoutList,
   Search,
   Terminal,
   Trash2,
@@ -223,55 +224,53 @@ export function LauncherTab() {
   }
 
   return (
-    <div className="tab-content">
-      <div className="tab-header">
-        <div className="tab-title">{t("launcherSettings.title")}</div>
-        <div className="tab-subtitle">{t("launcherSettings.subtitle")}</div>
-      </div>
-
+    <>
       <SettingSection
         id="launcher-general"
         title={t("launcherSettings.section.general")}
         defaultOpen
       >
-        <div className="settings-group">
-          <LauncherHotkey />
+        <LauncherHotkey />
 
-          <SettingRow
-            icon={Search}
-            label={t("dock.launcherWebEngine")}
-            desc={t("dock.launcherWebEngine.desc")}
-          >
-            <Dropdown
-              value={webEngine}
-              onChange={changeWebEngine}
-              options={[
-                { value: "google", label: "Google" },
-                { value: "duckduckgo", label: "DuckDuckGo" },
-              ]}
-            />
-          </SettingRow>
+        <SettingRow
+          icon={Search}
+          label={t("dock.launcherWebEngine")}
+          desc={t("dock.launcherWebEngine.desc")}
+        >
+          <Dropdown
+            value={webEngine}
+            onChange={changeWebEngine}
+            options={[
+              { value: "google", label: "Google" },
+              { value: "duckduckgo", label: "DuckDuckGo" },
+            ]}
+          />
+        </SettingRow>
 
-          <SettingRow
-            icon={Globe}
-            label={t("launcherSettings.browser")}
-            desc={t("launcherSettings.browser.desc")}
-          >
-            <Dropdown
-              value={browserPath}
-              onChange={changeBrowser}
-              options={browserOptions}
-            />
-          </SettingRow>
-        </div>
+        <SettingRow
+          icon={Globe}
+          label={t("launcherSettings.browser")}
+          desc={t("launcherSettings.browser.desc")}
+          divider={false}
+        >
+          <Dropdown
+            value={browserPath}
+            onChange={changeBrowser}
+            options={browserOptions}
+          />
+        </SettingRow>
       </SettingSection>
 
       <SettingSection
         id="launcher-idle"
         title={t("launcherSettings.section.idle")}
-        defaultOpen
       >
-        <div className="settings-group">
+        <SettingRow
+          icon={LayoutList}
+          label={t("launcherSettings.section.idle")}
+          desc={t("launcherSettings.section.idle.summary")}
+          stacked
+        >
           <OrderList
             ids={idleOrder}
             label={(id) => t(`launcherSettings.idle.${id}`)}
@@ -282,26 +281,42 @@ export function LauncherTab() {
             onReset={resetIdle}
             resetLabel={t("launcherSettings.resetOrder")}
           />
-          <SettingRow
-            icon={Trash2}
-            label={t("launcherSettings.clearRecents")}
-            desc={t("launcherSettings.clearRecents.desc")}
-            action
-            onClick={clearRecents}
+        </SettingRow>
+
+        <SettingRow
+          icon={Trash2}
+          label={t("launcherSettings.clearRecents")}
+          desc={t("launcherSettings.clearRecents.desc")}
+          action
+          divider={false}
+          onClick={clearRecents}
+        >
+          <span
+            style={{
+              fontSize: "12px",
+              fontWeight: 500,
+              color: clearedRecents
+                ? "#34d399"
+                : "var(--fern-text-muted, rgba(255, 255, 255, 0.65))",
+            }}
           >
-            <span className="setting-action-status">
-              {clearedRecents ? t("launcherSettings.clearRecents.done") : t("launcherSettings.clearRecents.btn")}
-            </span>
-          </SettingRow>
-        </div>
+            {clearedRecents
+              ? t("launcherSettings.clearRecents.done")
+              : t("launcherSettings.clearRecents.btn")}
+          </span>
+        </SettingRow>
       </SettingSection>
 
       <SettingSection
         id="launcher-modules"
         title={t("launcherSettings.section.modules")}
-        defaultOpen
       >
-        <div className="settings-group">
+        <SettingRow
+          icon={LayoutList}
+          label={t("launcherSettings.section.modules")}
+          desc={t("launcherSettings.section.modules.summary")}
+          stacked
+        >
           <OrderList
             ids={searchOrder}
             label={(id) => t(`launcherSettings.module.${id}`)}
@@ -312,36 +327,43 @@ export function LauncherTab() {
             onReset={resetSearch}
             resetLabel={t("launcherSettings.resetOrder")}
           />
+        </SettingRow>
 
-          <SettingRow
-            icon={HardDrive}
-            label={t("launcherSettings.everythingStatus")}
-            desc={
-              fileProvider
-                ? t("launcherSettings.everythingStatus.connected")
-                : t("launcherSettings.everythingStatus.missing")
-            }
+        <SettingRow
+          icon={HardDrive}
+          label={t("launcherSettings.everythingStatus")}
+          desc={
+            fileProvider
+              ? t("launcherSettings.everythingStatus.connected")
+              : t("launcherSettings.everythingStatus.missing")
+          }
+          divider={false}
+        >
+          <span
+            style={{
+              fontSize: "12px",
+              fontWeight: 500,
+              padding: "3px 9px",
+              borderRadius: "999px",
+              background: fileProvider
+                ? "rgba(52, 211, 153, 0.16)"
+                : "var(--fern-group-bg, rgba(255,255,255,0.08))",
+              color: fileProvider
+                ? "#34d399"
+                : "var(--fern-text-muted, rgba(255,255,255,0.65))",
+              border: fileProvider
+                ? "1px solid rgba(52, 211, 153, 0.35)"
+                : "1px solid var(--fern-border, rgba(255,255,255,0.1))",
+            }}
           >
-            <span
-              style={{
-                fontSize: "12px",
-                fontWeight: 500,
-                padding: "3px 9px",
-                borderRadius: "999px",
-                background: fileProvider ? "rgba(52, 211, 153, 0.16)" : "var(--fern-group-bg, rgba(255,255,255,0.08))",
-                color: fileProvider ? "#34d399" : "var(--fern-text-muted, rgba(255,255,255,0.65))",
-                border: fileProvider ? "1px solid rgba(52, 211, 153, 0.35)" : "1px solid var(--fern-border, rgba(255,255,255,0.1))",
-              }}
-            >
-              {fileProvider === undefined
-                ? "..."
-                : fileProvider
-                  ? t("launcherSettings.everythingStatus.badgeOn")
-                  : t("launcherSettings.everythingStatus.badgeOff")}
-            </span>
-          </SettingRow>
-        </div>
+            {fileProvider === undefined
+              ? "..."
+              : fileProvider
+                ? t("launcherSettings.everythingStatus.badgeOn")
+                : t("launcherSettings.everythingStatus.badgeOff")}
+          </span>
+        </SettingRow>
       </SettingSection>
-    </div>
+    </>
   );
 }
