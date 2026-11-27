@@ -376,6 +376,10 @@
   color: #ff8a80;
 }
 
+:root.light-mode .ai-chat-panel .ai-setup-error {
+  color: #b91c1c;
+}
+
 .ai-chat-panel .ai-setup-model-row {
   display: flex;
   align-items: center;

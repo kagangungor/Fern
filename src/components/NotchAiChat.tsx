@@ -142,6 +142,9 @@ export function NotchAiChat({
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const dragDepthRef = useRef(0);
+  const onFocusChangeRef = useRef(onFocusChange);
+  onFocusChangeRef.current = onFocusChange;
+  const prevSetupOpenRef = useRef(false);
 
   const activeStatus = useMemo(
     () => status?.providers.find((p) => p.id === provider) ?? null,
@@ -161,8 +164,16 @@ export function NotchAiChat({
   }, [provider]);
 
   useEffect(() => {
+    if (prevSetupOpenRef.current && !setupOpen) {
+      onFocusChangeRef.current(false);
+    }
+    prevSetupOpenRef.current = setupOpen;
+  }, [setupOpen]);
+
+  useEffect(() => {
     return () => {
       setKeyDraft("");
+      onFocusChangeRef.current(false);
       if (copyTimerRef.current !== null) {
         clearTimeout(copyTimerRef.current);
       }
@@ -289,6 +300,7 @@ export function NotchAiChat({
       setKeyDraft("");
       setSessionOnly(false);
       setSetupManual(false);
+      onFocusChangeRef.current(false);
     } catch (err) {
       setSetupError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -349,6 +361,12 @@ export function NotchAiChat({
       .catch(() => {});
   };
 
+  const handleSend = () => {
+    if (busy || (prompt.trim().length === 0 && images.length === 0)) return;
+    setSetupManual(false);
+    void send();
+  };
+
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Escape") {
       e.preventDefault();
@@ -362,9 +380,7 @@ export function NotchAiChat({
       !e.nativeEvent.isComposing
     ) {
       e.preventDefault();
-      if (!busy && (prompt.trim().length > 0 || images.length > 0)) {
-        void send();
-      }
+      handleSend();
     }
   };
 
@@ -828,7 +844,7 @@ export function NotchAiChat({
               type="button"
               className="ai-send-btn"
               disabled={!canSend}
-              onClick={() => void send()}
+              onClick={handleSend}
               title={tr("ai.send", "Send message")}
               aria-label={tr("ai.send", "Send message")}
             >
