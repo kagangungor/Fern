@@ -44,6 +44,7 @@ mod privacy_hud;
 mod app_audio;
 mod lyrics;
 mod quick_search;
+mod launcher_window;
 
 use tauri::Manager;
 use windows::Win32::System::Console::SetConsoleCtrlHandler;
