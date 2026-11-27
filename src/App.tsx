@@ -2594,7 +2594,7 @@ function App() {
     }
     if (fernMode === 'device' && deviceAlert) return 76;
     if (fernMode === 'devices') return 320;
-    if (fernMode === 'ai') return aiExpanded ? 370 : 240;
+    if (fernMode === 'ai') return aiExpanded ? 360 : 196;
     if (fernMode === 'shelf') return shelf.items.length === 0 ? 96 : 176;
     if (fernMode === 'calendar') return settingsCalendarEnabled ? (caldav.connected ? 350 : 284) : 262;
     if (fernMode === 'command-center') {

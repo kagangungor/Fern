@@ -60,6 +60,28 @@ const CONFIG_ERROR_CODES = new Set([
   "cli-auth-required",
 ]);
 
+function AiProviderLogo({ provider }: { provider: AiProviderId }): JSX.Element {
+  if (provider === "claude") {
+    return (
+      <svg className="ai-provider-logo" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+        <path d="M12 2.25a.9.9 0 0 1 .9.9v4.12l2.92-2.92a.9.9 0 1 1 1.27 1.27l-2.92 2.92h4.13a.9.9 0 1 1 0 1.8h-4.13l2.92 2.92a.9.9 0 1 1-1.27 1.27L12.9 11.6v4.15a.9.9 0 1 1-1.8 0v-4.15l-2.92 2.93a.9.9 0 1 1-1.27-1.27l2.92-2.92H5.7a.9.9 0 1 1 0-1.8h4.13L6.91 5.62a.9.9 0 1 1 1.27-1.27l2.92 2.92V3.15a.9.9 0 0 1 .9-.9Z" transform="translate(0 2.55)" />
+      </svg>
+    );
+  }
+  if (provider === "openai") {
+    return (
+      <svg className="ai-provider-logo" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+        <path d="M22.28 9.82a5.98 5.98 0 0 0-.52-4.91 6.05 6.05 0 0 0-6.51-2.9A6.07 6.07 0 0 0 4.98 4.18a5.98 5.98 0 0 0-4 2.9 6.05 6.05 0 0 0 .74 7.1 5.98 5.98 0 0 0 .51 4.91 6.05 6.05 0 0 0 6.51 2.9A5.98 5.98 0 0 0 13.26 24a6.06 6.06 0 0 0 5.77-4.21 5.99 5.99 0 0 0 4-2.9 6.06 6.06 0 0 0-.75-7.07Zm-9.02 12.61a4.48 4.48 0 0 1-2.88-1.04l.14-.08 4.78-2.76a.8.8 0 0 0 .39-.68v-6.74l2.02 1.17a.07.07 0 0 1 .04.05v5.58a4.5 4.5 0 0 1-4.49 4.5Zm-9.66-4.13a4.47 4.47 0 0 1-.54-3.01l.14.09 4.78 2.76a.77.77 0 0 0 .78 0l5.84-3.37v2.33a.08.08 0 0 1-.03.06l-4.84 2.79a4.5 4.5 0 0 1-6.13-1.65ZM2.34 7.9a4.49 4.49 0 0 1 2.37-1.97V11.6a.77.77 0 0 0 .39.68l5.81 3.35-2.02 1.17a.08.08 0 0 1-.07 0l-4.83-2.79A4.5 4.5 0 0 1 2.34 7.9Zm16.6 3.86-5.84-3.37 2.02-1.16a.08.08 0 0 1 .07 0l4.83 2.79a4.49 4.49 0 0 1-.68 8.1v-5.68a.79.79 0 0 0-.4-.68Zm2.01-3.02-.14-.09-4.77-2.78a.78.78 0 0 0-.79 0L9.41 9.23V6.9a.07.07 0 0 1 .03-.06l4.83-2.79a4.5 4.5 0 0 1 6.68 4.66ZM8.31 12.86l-2.02-1.16a.08.08 0 0 1-.04-.06V6.07a4.5 4.5 0 0 1 7.38-3.45l-.14.08-4.78 2.76a.8.8 0 0 0-.39.68l-.01 6.72Zm1.1-2.36 2.6-1.5 2.6 1.5v3l-2.6 1.5-2.6-1.5v-3Z" />
+      </svg>
+    );
+  }
+  return (
+    <svg className="ai-provider-logo" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+      <path d="M12 2c.35 4.7 2.8 7.65 7.5 8.5-4.7.85-7.15 3.8-7.5 8.5-.35-4.7-2.8-7.65-7.5-8.5 4.7-.85 7.15-3.8 7.5-8.5Z" transform="translate(0 1.5)" />
+    </svg>
+  );
+}
+
 function readStoredModel(provider: AiProviderId): string {
   try {
     const saved = localStorage.getItem(AI_MODEL_SETTINGS[provider])?.trim();
@@ -185,8 +207,8 @@ export function NotchAiChat({
   }, [busy, onBusyChange]);
 
   useEffect(() => {
-    onHasMessagesChange(messages.length > 0 || setupOpen);
-  }, [messages.length, setupOpen, onHasMessagesChange]);
+    onHasMessagesChange(messages.length > 0);
+  }, [messages.length, onHasMessagesChange]);
 
   useEffect(() => {
     if (autoFocusToken > 0 && !setupOpen) {
@@ -462,15 +484,13 @@ export function NotchAiChat({
                   type="button"
                   role="tab"
                   aria-selected={isSelected}
-                  className={`ai-provider-chip${isSelected ? " active" : ""}`}
+                  aria-label={providerTooltip(p.id)}
+                  className={`ai-provider-chip ai-brand-${p.id}${isSelected ? " active" : ""}`}
                   title={providerTooltip(p.id)}
                   onClick={() => selectProvider(p.id)}
                 >
-                  <span
-                    className={`ai-provider-dot${ready ? " ready" : ""}`}
-                    aria-hidden="true"
-                  />
-                  <span>{p.label}</span>
+                  <AiProviderLogo provider={p.id} />
+                  {ready && <span className="ai-provider-dot ready" aria-hidden="true" />}
                 </button>
               );
             })}
@@ -535,26 +555,9 @@ export function NotchAiChat({
         </div>
       )}
 
-      {/* Main body: Quick Setup OR Message Stream */}
+      {/* Main body: Compact Inline Setup OR Message Stream */}
       {setupOpen ? (
         <div className="ai-setup">
-          <div className="ai-setup-head">
-            <span className="ai-setup-title">
-              {tr("ai.setup.title", "{provider} Setup", {
-                provider: aiProviderLabel(provider),
-              })}
-            </span>
-            <span
-              className={`ai-setup-badge${activeStatus && activeStatus.active_backend !== "none" ? " ready" : ""}`}
-            >
-              {activeStatus?.active_backend === "api"
-                ? tr("ai.backend.api", "API")
-                : activeStatus?.active_backend === "cli"
-                  ? tr("ai.backend.cli", "CLI")
-                  : tr("ai.backend.none", "Not configured")}
-            </span>
-          </div>
-
           <form className="ai-setup-form" onSubmit={handleSaveKey}>
             <div className="ai-setup-input-row">
               <input
@@ -585,7 +588,7 @@ export function NotchAiChat({
               {activeStatus?.has_api_key && (
                 <button
                   type="button"
-                  className="ai-setup-delete-btn"
+                  className="ai-setup-icon-btn danger"
                   disabled={deletingKey}
                   onClick={() => void handleDeleteKey()}
                   title={tr("ai.setup.deleteKey", "Remove saved API key")}
@@ -594,57 +597,56 @@ export function NotchAiChat({
                   <Trash2 size={12} />
                 </button>
               )}
+              <button
+                type="button"
+                className="ai-setup-icon-btn"
+                onClick={() => void openConsole(provider)}
+                title={tr("ai.setup.getKey", "Get API Key")}
+                aria-label={tr("ai.setup.getKey", "Get API Key")}
+              >
+                <ExternalLink size={12} />
+              </button>
             </div>
+            {setupError && <div className="ai-setup-error">{setupError}</div>}
+          </form>
 
-            <label className="ai-setup-checkbox">
-              <input
-                type="checkbox"
-                checked={sessionOnly}
-                onChange={(e) => setSessionOnly(e.target.checked)}
-              />
+          <div className="ai-setup-models" role="radiogroup" aria-label={tr("ai.setup.model", "Model")}>
+            {modelOptions.map((m) => (
+              <button
+                key={m}
+                type="button"
+                role="radio"
+                aria-checked={m === model}
+                className={`ai-model-chip${m === model ? " active" : ""}`}
+                onClick={() => handleModelChange(m)}
+              >
+                {m}
+              </button>
+            ))}
+          </div>
+
+          <div className="ai-setup-meta">
+            <button
+              type="button"
+              role="switch"
+              aria-checked={sessionOnly}
+              className={`ai-session-toggle${sessionOnly ? " active" : ""}`}
+              onClick={() => setSessionOnly((v) => !v)}
+            >
+              <span className="ai-session-track" aria-hidden="true">
+                <span className="ai-session-thumb" />
+              </span>
               <span>
                 {tr(
                   "ai.setup.sessionOnly",
                   "Keep for this session only (do not save to vault)"
                 )}
               </span>
-            </label>
-
-            {setupError && <div className="ai-setup-error">{setupError}</div>}
-          </form>
-
-          <div className="ai-setup-model-row">
-            <label className="ai-setup-label" htmlFor="ai-model-select">
-              {tr("ai.setup.model", "Model")}
-            </label>
-            <select
-              id="ai-model-select"
-              className="ai-setup-select"
-              value={model}
-              onChange={(e) => handleModelChange(e.target.value)}
-              onFocus={() => onFocusChange(true)}
-              onBlur={() => onFocusChange(false)}
-            >
-              {modelOptions.map((m) => (
-                <option key={m} value={m}>
-                  {m}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div className="ai-setup-footer">
-            <button
-              type="button"
-              className="ai-setup-link-btn"
-              onClick={() => void openConsole(provider)}
-            >
-              <ExternalLink size={11} />
-              <span>{tr("ai.setup.getKey", "Get API Key")}</span>
             </button>
+
             <button
               type="button"
-              className="ai-setup-link-btn"
+              className="ai-setup-ghost-btn"
               disabled={rescanning}
               onClick={() => void handleRescan()}
             >
@@ -660,12 +662,6 @@ export function NotchAiChat({
         <div className="ai-messages">
           {messages.length === 0 ? (
             <div className="ai-empty">
-              <img
-                className="ai-empty-mascot"
-                src={mascotSrc}
-                alt=""
-                draggable={false}
-              />
               <span className="ai-empty-hint">
                 {tr("ai.emptyHint", "Ask anything, paste an image, or capture your screen.")}
               </span>
@@ -738,7 +734,8 @@ export function NotchAiChat({
         </div>
       )}
 
-      {/* Composer */}
+      {/* Composer (hidden while inline setup is open to avoid visual clutter) */}
+      {!setupOpen && (
       <div
         className={`ai-composer${dragActive ? " drag-active" : ""}`}
         onDragEnter={handleDragEnter}
@@ -853,6 +850,7 @@ export function NotchAiChat({
           )}
         </div>
       </div>
+      )}
     </div>
   );
 }
