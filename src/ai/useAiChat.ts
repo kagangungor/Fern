@@ -33,9 +33,13 @@ const PROVIDER_STORAGE_KEY = "fern-ai-provider";
 const NOTICE_TIMEOUT_MS = 4000;
 const MAX_IN_MEMORY_MESSAGES = 20;
 
-// In-memory session store so closing/reopening the Notch keeps the last 20 messages
-// without ever writing chat history to disk or localStorage.
-let persistedSessionMessages: AiChatMessage[] = [];
+// Per-provider in-memory session store so closing/reopening the Notch keeps the
+// last 20 messages per assistant without cross-contaminating contexts or writing to disk.
+const persistedMessagesByProvider: Record<AiProviderId, AiChatMessage[]> = {
+  claude: [],
+  openai: [],
+  gemini: [],
+};
 
 let seqCounter = 0;
 
@@ -79,13 +83,19 @@ function toWireMessages(list: AiChatMessage[]): WireAiMessage[] {
 }
 
 export function useAiChat() {
-  const [messages, setMessagesState] = useState<AiChatMessage[]>(() => persistedSessionMessages);
+  const [provider, setProvider] = useState<AiProviderId>(readStoredProvider);
+  const providerRef = useRef<AiProviderId>(provider);
+  providerRef.current = provider;
+
+  const [messages, setMessagesState] = useState<AiChatMessage[]>(
+    () => persistedMessagesByProvider[providerRef.current]
+  );
   const setMessages = useCallback(
     (updater: AiChatMessage[] | ((prev: AiChatMessage[]) => AiChatMessage[])) => {
       setMessagesState((prev) => {
         const next = typeof updater === "function" ? updater(prev) : updater;
         const capped = next.length > MAX_IN_MEMORY_MESSAGES ? next.slice(-MAX_IN_MEMORY_MESSAGES) : next;
-        persistedSessionMessages = capped;
+        persistedMessagesByProvider[providerRef.current] = capped;
         return capped;
       });
     },
@@ -96,7 +106,6 @@ export function useAiChat() {
   const [imageBusy, setImageBusy] = useState(false);
   const [capturing, setCapturing] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [provider, setProvider] = useState<AiProviderId>(readStoredProvider);
   const [status, setStatus] = useState<AiStatusSnapshot | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -107,8 +116,6 @@ export function useAiChat() {
   imagesRef.current = images;
   const promptRef = useRef<string>(prompt);
   promptRef.current = prompt;
-  const providerRef = useRef<AiProviderId>(provider);
-  providerRef.current = provider;
   const busyRef = useRef<boolean>(busy);
   busyRef.current = busy;
   const capturingRef = useRef<boolean>(capturing);
@@ -199,7 +206,18 @@ export function useAiChat() {
   }, [showNotice]);
 
   const selectProvider = useCallback((next: AiProviderId) => {
+    if (next === providerRef.current) return;
+    if (requestIdRef.current) {
+      invoke<void>("ai_cancel", { requestId: requestIdRef.current }).catch(() => {});
+      requestIdRef.current = null;
+      assistantMsgIdRef.current = null;
+      setBusy(false);
+    }
+    providerRef.current = next;
     setProvider(next);
+    setMessagesState(persistedMessagesByProvider[next]);
+    setError(null);
+    setNotice(null);
     try {
       localStorage.setItem(PROVIDER_STORAGE_KEY, next);
     } catch {

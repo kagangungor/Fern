@@ -50,7 +50,7 @@ export interface NotchAiChatProps {
   autoFocusToken: number;
   onFocusChange: (focused: boolean) => void;
   onBusyChange: (busy: boolean) => void;
-  onHasMessagesChange: (hasMessages: boolean) => void;
+  onSizeModeChange: (mode: "compact" | "tall" | "chat") => void;
   onTooltip?: (text: string | null) => void;
   onEscape: () => void;
 }
@@ -118,7 +118,7 @@ export function NotchAiChat({
   autoFocusToken,
   onFocusChange,
   onBusyChange,
-  onHasMessagesChange,
+  onSizeModeChange,
   onTooltip,
   onEscape,
 }: NotchAiChatProps): JSX.Element {
@@ -239,8 +239,16 @@ export function NotchAiChat({
   }, [busy, onBusyChange]);
 
   useEffect(() => {
-    onHasMessagesChange(!setupOpen && messages.length > 0);
-  }, [setupOpen, messages.length, onHasMessagesChange]);
+    if (setupOpen) {
+      onSizeModeChange("compact");
+    } else if (messages.length > 0) {
+      onSizeModeChange("chat");
+    } else if (images.length > 0) {
+      onSizeModeChange("tall");
+    } else {
+      onSizeModeChange("compact");
+    }
+  }, [setupOpen, messages.length, images.length, onSizeModeChange]);
 
   useEffect(() => {
     if (autoFocusToken > 0 && !setupOpen) {
@@ -736,11 +744,13 @@ export function NotchAiChat({
       ) : (
         <div className="ai-messages">
           {messages.length === 0 ? (
-            <div className="ai-empty">
-              <span className="ai-empty-hint">
-                {tr("ai.emptyHint", "Ask anything, paste an image, or capture your screen.")}
-              </span>
-            </div>
+            images.length === 0 ? (
+              <div className="ai-empty">
+                <span className="ai-empty-hint">
+                  {tr("ai.emptyHint", "Ask anything, paste an image, or capture your screen.")}
+                </span>
+              </div>
+            ) : null
           ) : (
             messages.map((msg) => {
               const isUser = msg.role === "user";

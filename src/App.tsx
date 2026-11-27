@@ -1108,7 +1108,7 @@ function App() {
   panelAiRef.current = panelAi;
   const aiInputFocusedRef = useRef(false);
   const aiBusyRef = useRef(false);
-  const [aiExpanded, setAiExpanded] = useState(false);
+  const [aiSizeMode, setAiSizeMode] = useState<'compact' | 'tall' | 'chat'>('compact');
   const [aiFocusToken, setAiFocusToken] = useState(0);
   const [panelStatus, setPanelStatus] = useState(() => localStorage.getItem("fern-panel-status-enabled") !== "false");
   const [panelOrder, setPanelOrder] = useState(() => parsePanelOrder(localStorage.getItem("fern-panel-order")));
@@ -2598,7 +2598,7 @@ function App() {
     }
     if (fernMode === 'device' && deviceAlert) return 76;
     if (fernMode === 'devices') return 320;
-    if (fernMode === 'ai') return aiExpanded ? 360 : 196;
+    if (fernMode === 'ai') return aiSizeMode === 'chat' ? 360 : aiSizeMode === 'tall' ? 228 : 196;
     if (fernMode === 'shelf') return shelf.items.length === 0 ? 96 : 176;
     if (fernMode === 'calendar') return settingsCalendarEnabled ? (caldav.connected ? 350 : 284) : 262;
     if (fernMode === 'command-center') {
@@ -2693,7 +2693,7 @@ function App() {
         onHoverStart={() => {
           clearTimeout(shelfCollapseTimer.current);
           setIsHovered(true);
-          if (!tourActive && !shouldPreserveModeOnHover(fernMode)) {
+          if (!tourActive && fernMode !== 'ai' && !shouldPreserveModeOnHover(fernMode)) {
             const available = availableNotchModes();
             const remembered = settingsRememberMode
               ? (rememberedModeRef.current ?? readRememberedPanel(available))
@@ -3592,8 +3592,8 @@ function App() {
                       onBusyChange={(busy) => {
                         aiBusyRef.current = busy;
                       }}
-                      onHasMessagesChange={(expanded) => {
-                        setAiExpanded(expanded);
+                      onSizeModeChange={(mode) => {
+                        setAiSizeMode(mode);
                       }}
                       onTooltip={setWidgetTip}
                       onEscape={() => {
