@@ -1,5 +1,17 @@
 [
   {
+    "id": "fern-2.1.0",
+    "level": "info",
+    "title": {
+      "en": "Fern 2.1.0 — Performance, Reliability & Agent API v2",
+      "tr": "Fern 2.1.0 — Performans, Güvenilirlik ve Agent API v2"
+    },
+    "body": {
+      "en": "Upgraded Quick Launcher, Notch AI Chat, and Agent API v2 integrations alongside hardened Direct-Flip fullscreen protection, automated CI & idle RAM/CPU benchmarks, and expanded bilingual settings search.",
+      "tr": "Geliştirilmiş Hızlı Başlatıcı, Çentik Yapay Zeka Sohbeti ve Agent API v2 entegrasyonları; güçlendirilmiş Direct-Flip tam ekran koruması, otomatik CI ve boşta RAM/CPU kıyaslama araçları ile genişletilmiş iki dilli ayar araması."
+    }
+  },
+  {
     "id": "fern-2.0.0",
     "level": "info",
     "title": {

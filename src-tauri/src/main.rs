@@ -47,6 +47,8 @@ mod lyrics;
 mod quick_search;
 mod launcher_window;
 mod ai;
+mod platform;
+mod settings_schema;
 
 use tauri::Manager;
 use windows::Win32::System::Console::SetConsoleCtrlHandler;

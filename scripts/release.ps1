@@ -2,6 +2,8 @@ param(
     [Parameter(Mandatory = $true)][string]$Version,
     [switch]$DryRun,
     [switch]$Prerelease,
+    [switch]$RunBenchmark,
+    [switch]$SkipChecks,
     [string]$NotesFile
 )
 
@@ -65,6 +67,15 @@ if ($NotesFile) {
 Write-Host "`nRelease notes:`n$notes`n"
 
 Invoke-Step "Installing frontend dependencies" { bun install }
+if (-not $SkipChecks) {
+    Invoke-Step "Running unit tests" { bun test }
+    Invoke-Step "Checking i18n keys" { npm run i18n:check }
+}
+if ($RunBenchmark) {
+    Invoke-Step "Running idle RAM/CPU benchmark" {
+        powershell -ExecutionPolicy Bypass -File (Join-Path $root "scripts/benchmark-idle.ps1") -FailOnThreshold
+    }
+}
 Invoke-Step "Building Fern (NSIS update installer)" { bun run tauri build --bundles nsis }
 
 $exe = Join-Path $root "src-tauri/target/release/fern.exe"

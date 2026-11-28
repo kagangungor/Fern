@@ -11,8 +11,18 @@ use tauri::{AppHandle, Emitter};
 const MAX_HEAD: usize = 8192;
 const MAX_BODY: usize = 8192;
 const MAX_CONNECTIONS: usize = 8;
+const MAX_SSE_SUBSCRIBERS: usize = 8;
+const SSE_CHANNEL_CAP: usize = 32;
 const ASK_WAIT: u64 = 120;
+const ASK_TIMEOUT_MIN: u64 = 5;
+const ASK_TIMEOUT_MAX: u64 = 300;
 const DETAIL_MAX: usize = 600;
+const BADGE_MAX: usize = 32;
+const MAX_ACTIONS: usize = 4;
+const ACTION_ID_MAX: usize = 48;
+const ACTION_LABEL_MAX: usize = 48;
+const ACTION_STYLE_MAX: usize = 24;
+const ACTION_URL_MAX: usize = 512;
 const SETTING: &str = "fern-agent-api";
 
 static ACTIVE: AtomicUsize = AtomicUsize::new(0);
@@ -22,6 +32,7 @@ static ENABLED: AtomicBool = AtomicBool::new(false);
 static WATCHDOG_STARTED: AtomicBool = AtomicBool::new(false);
 type Decision = (bool, Vec<usize>);
 static PENDING: Mutex<Option<HashMap<u64, mpsc::Sender<Decision>>>> = Mutex::new(None);
+static SSE_SUBSCRIBERS: Mutex<Vec<mpsc::SyncSender<String>>> = Mutex::new(Vec::new());
 
 #[derive(Clone)]
 struct OwnerTrack {
@@ -31,6 +42,16 @@ struct OwnerTrack {
 
 static ACTIVE_OWNER: Mutex<Option<OwnerTrack>> = Mutex::new(None);
 static LAST_TS: AtomicU64 = AtomicU64::new(0);
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+struct CardAction {
+    id: String,
+    label: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    style: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    url: Option<String>,
+}
 
 #[derive(Deserialize)]
 struct Incoming {
@@ -42,6 +63,9 @@ struct Incoming {
     ts: Option<u64>,
     owner_pid: Option<u32>,
     owner_start: Option<u64>,
+    progress: Option<f32>,
+    badge: Option<String>,
+    actions: Option<Vec<CardAction>>,
 }
 
 #[derive(Deserialize)]
@@ -52,6 +76,8 @@ struct IncomingAsk {
     tool: Option<String>,
     detail: Option<String>,
     questions: Option<Vec<AskQuestion>>,
+    actions: Option<Vec<CardAction>>,
+    timeout_secs: Option<u64>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -66,6 +92,8 @@ struct Ask {
     tool: Option<String>,
     detail: Option<String>,
     questions: Option<Vec<AskQuestion>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    actions: Option<Vec<CardAction>>,
 }
 
 #[derive(Serialize, Clone)]
@@ -78,6 +106,12 @@ struct Activity {
     ask: Option<Ask>,
     cancelled: Option<u64>,
     quiet: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    progress: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    badge: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    actions: Option<Vec<CardAction>>,
 }
 
 #[derive(Serialize, Clone)]
@@ -113,6 +147,102 @@ fn clean(text: Option<String>, limit: usize) -> Option<String> {
     let cleaned: String = text?.chars().filter(|c| !c.is_control()).take(limit).collect();
     let cleaned = cleaned.trim().to_string();
     (!cleaned.is_empty()).then_some(cleaned)
+}
+
+fn clamp_progress(progress: Option<f32>) -> Option<f32> {
+    progress.filter(|p| p.is_finite()).map(|p| p.clamp(0.0, 1.0))
+}
+
+fn clamp_ask_timeout(timeout_secs: Option<u64>) -> u64 {
+    timeout_secs
+        .map(|t| t.clamp(ASK_TIMEOUT_MIN, ASK_TIMEOUT_MAX))
+        .unwrap_or(ASK_WAIT)
+}
+
+fn sanitize_action_url(url: Option<String>) -> Option<String> {
+    let cleaned = clean(url, ACTION_URL_MAX)?;
+    let lower = cleaned.to_ascii_lowercase();
+    if (lower.starts_with("http://") || lower.starts_with("https://"))
+        && !cleaned.chars().any(char::is_whitespace)
+    {
+        Some(cleaned)
+    } else {
+        None
+    }
+}
+
+fn sanitize_actions(actions: Option<Vec<CardAction>>) -> Option<Vec<CardAction>> {
+    let cleaned: Vec<CardAction> = actions?
+        .into_iter()
+        .filter_map(|action| {
+            let id = clean(Some(action.id), ACTION_ID_MAX)?;
+            let label = clean(Some(action.label), ACTION_LABEL_MAX)?;
+            Some(CardAction {
+                id,
+                label,
+                style: clean(action.style, ACTION_STYLE_MAX),
+                url: sanitize_action_url(action.url),
+            })
+        })
+        .take(MAX_ACTIONS)
+        .collect();
+    (!cleaned.is_empty()).then_some(cleaned)
+}
+
+fn capabilities_json() -> serde_json::Value {
+    serde_json::json!({
+        "apiVersion": 2,
+        "endpoints": ["/v2/capabilities", "/v2/activity", "/v2/ask", "/v2/events"],
+        "v1Compat": true,
+        "features": ["sse", "rich_actions", "progress"],
+    })
+}
+
+fn register_sse_subscriber_in(
+    list: &Mutex<Vec<mpsc::SyncSender<String>>>,
+) -> Option<mpsc::Receiver<String>> {
+    let mut subs = list.lock().ok()?;
+    if subs.len() >= MAX_SSE_SUBSCRIBERS {
+        subs.retain(|tx| {
+            !matches!(
+                tx.try_send(": keepalive\n\n".to_string()),
+                Err(mpsc::TrySendError::Disconnected(_))
+            )
+        });
+    }
+    if subs.len() >= MAX_SSE_SUBSCRIBERS {
+        return None;
+    }
+    let (tx, rx) = mpsc::sync_channel(SSE_CHANNEL_CAP);
+    subs.push(tx);
+    Some(rx)
+}
+
+fn broadcast_sse_in(list: &Mutex<Vec<mpsc::SyncSender<String>>>, event: &str, data_json: &str) {
+    let payload = format!("event: {event}\ndata: {data_json}\n\n");
+    if let Ok(mut subs) = list.lock() {
+        subs.retain(|tx| match tx.try_send(payload.clone()) {
+            Ok(()) | Err(mpsc::TrySendError::Full(_)) => true,
+            Err(mpsc::TrySendError::Disconnected(_)) => false,
+        });
+    }
+}
+
+fn broadcast_sse(event: &str, data_json: &str) {
+    broadcast_sse_in(&SSE_SUBSCRIBERS, event, data_json);
+}
+
+fn close_all_sse_subscribers() {
+    if let Ok(mut subs) = SSE_SUBSCRIBERS.lock() {
+        subs.clear();
+    }
+}
+
+fn emit_activity(app: &AppHandle, activity: Option<Activity>) {
+    if let Ok(json) = serde_json::to_string(&activity) {
+        broadcast_sse("activity", &json);
+    }
+    let _ = app.emit("agent-activity", activity);
 }
 
 fn random_token() -> Option<String> {
@@ -215,7 +345,7 @@ fn start_owner_watchdog(app: AppHandle) {
             })
             .is_some();
         if should_clear {
-            let _ = app.emit("agent-activity", None::<Activity>);
+            emit_activity(&app, None);
         }
     });
 }
@@ -231,10 +361,15 @@ pub fn answer(id: u64, allow: bool, choices: Vec<usize>) {
     }
 }
 
-fn wait_for_answer(stream: &mut TcpStream, id: u64, rx: &mpsc::Receiver<Decision>) -> Option<Decision> {
+fn wait_for_answer(
+    stream: &mut TcpStream,
+    id: u64,
+    rx: &mpsc::Receiver<Decision>,
+    timeout_secs: u64,
+) -> Option<Decision> {
     let _ = stream.set_nonblocking(true);
     let mut waited = 0;
-    while waited < ASK_WAIT {
+    while waited < timeout_secs {
         if let Ok(decision) = rx.recv_timeout(Duration::from_secs(1)) {
             let _ = stream.set_nonblocking(false);
             return Some(decision);
@@ -254,7 +389,183 @@ fn wait_for_answer(stream: &mut TcpStream, id: u64, rx: &mpsc::Receiver<Decision
     None
 }
 
-fn handle(mut stream: TcpStream, app: &AppHandle, token: &str) {
+struct ActiveGuard(bool);
+
+impl ActiveGuard {
+    fn release(&mut self) {
+        if self.0 {
+            self.0 = false;
+            ACTIVE.fetch_sub(1, Ordering::SeqCst);
+        }
+    }
+}
+
+impl Drop for ActiveGuard {
+    fn drop(&mut self) {
+        self.release();
+    }
+}
+
+fn handle_activity(stream: &mut TcpStream, app: &AppHandle, body: &[u8], v2: bool) {
+    let Ok(req) = serde_json::from_slice::<Incoming>(body) else {
+        return reply(stream, "400 Bad Request");
+    };
+    let Some(state) = state_of(&req.state) else {
+        return reply(stream, "400 Bad Request");
+    };
+    let last_ts = LAST_TS.load(Ordering::SeqCst);
+    if is_stale_timestamp(req.ts, last_ts) {
+        return reply(stream, "204 No Content");
+    }
+    let ts = req.ts.unwrap_or_else(now_epoch_ms);
+    LAST_TS.store(ts, Ordering::SeqCst);
+    record_activity_owner(state, req.owner_pid, req.owner_start);
+
+    let quiet = is_user_quiet();
+    let progress = if v2 { clamp_progress(req.progress) } else { None };
+    let badge = if v2 { clean(req.badge, BADGE_MAX) } else { None };
+    let actions = if v2 { sanitize_actions(req.actions) } else { None };
+    let activity = state.map(|s| Activity {
+        state: s,
+        name: clean(req.name, 48),
+        project: clean(req.project, 48),
+        window: req.window,
+        detail: clean(req.detail, DETAIL_MAX),
+        ask: None,
+        cancelled: None,
+        quiet: quiet.then_some(true),
+        progress,
+        badge,
+        actions,
+    });
+    emit_activity(app, activity);
+    if v2 {
+        let resp = serde_json::json!({
+            "ok": true,
+            "apiVersion": 2,
+            "state": state,
+            "ts": ts,
+        })
+        .to_string();
+        reply_json(stream, &resp);
+    } else {
+        reply(stream, "204 No Content");
+    }
+}
+
+fn handle_ask(stream: &mut TcpStream, app: &AppHandle, body: &[u8], v2: bool) {
+    let Ok(req) = serde_json::from_slice::<IncomingAsk>(body) else {
+        return reply(stream, "400 Bad Request");
+    };
+    let id = NEXT_ASK.fetch_add(1, Ordering::SeqCst);
+    let (tx, rx) = mpsc::channel();
+    if let Ok(mut map) = PENDING.lock() {
+        map.get_or_insert_with(HashMap::new).insert(id, tx);
+    }
+    let (name, project, window) = (clean(req.name, 48), clean(req.project, 48), req.window);
+    let quiet = is_user_quiet();
+    let actions = if v2 { sanitize_actions(req.actions) } else { None };
+    let wait_secs = if v2 { clamp_ask_timeout(req.timeout_secs) } else { ASK_WAIT };
+    let activity = Activity {
+        state: "needs_input",
+        name: name.clone(),
+        project: project.clone(),
+        window,
+        detail: None,
+        ask: Some(Ask {
+            id,
+            tool: clean(req.tool, 48),
+            detail: clean(req.detail, DETAIL_MAX),
+            questions: req.questions.map(|list| {
+                list.into_iter()
+                    .take(4)
+                    .filter_map(|q| {
+                        let question = clean(Some(q.question), DETAIL_MAX)?;
+                        Some(AskQuestion {
+                            question,
+                            options: q.options.into_iter().filter_map(|o| clean(Some(o), 80)).take(4).collect(),
+                        })
+                    })
+                    .collect()
+            }),
+            actions,
+        }),
+        cancelled: None,
+        quiet: quiet.then_some(true),
+        progress: None,
+        badge: None,
+        actions: None,
+    };
+    emit_activity(app, Some(activity));
+
+    match wait_for_answer(stream, id, &rx, wait_secs) {
+        Some((allow, choices)) if v2 => {
+            let body = serde_json::json!({
+                "allow": allow,
+                "choices": choices,
+                "apiVersion": 2,
+            })
+            .to_string();
+            reply_json(stream, &body);
+        }
+        Some((true, choices)) if !choices.is_empty() => {
+            let body = serde_json::json!({ "decision": "allow", "choices": choices }).to_string();
+            reply_json(stream, &body);
+        }
+        Some((true, _)) => reply_json(stream, r#"{"decision":"allow"}"#),
+        Some((false, _)) => reply_json(stream, r#"{"decision":"deny"}"#),
+        None => {
+            emit_activity(
+                app,
+                Some(Activity {
+                    state: "working",
+                    name,
+                    project,
+                    window,
+                    detail: None,
+                    ask: None,
+                    cancelled: Some(id),
+                    quiet: None,
+                    progress: None,
+                    badge: None,
+                    actions: None,
+                }),
+            );
+            reply(stream, "204 No Content");
+        }
+    }
+}
+
+fn handle_sse(mut stream: TcpStream, rx: mpsc::Receiver<String>) {
+    let _ = stream.set_write_timeout(Some(Duration::from_secs(5)));
+    let headers = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: keep-alive\r\n\r\n";
+    if stream.write_all(headers.as_bytes()).is_err() {
+        return;
+    }
+    if stream.write_all(b"event: ready\ndata: {\"apiVersion\":2}\n\n").is_err() || stream.flush().is_err() {
+        return;
+    }
+    while ENABLED.load(Ordering::Relaxed) {
+        match rx.recv_timeout(Duration::from_secs(15)) {
+            Ok(payload) => {
+                if stream.write_all(payload.as_bytes()).is_err() || stream.flush().is_err() {
+                    break;
+                }
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                if !ENABLED.load(Ordering::Relaxed) {
+                    break;
+                }
+                if stream.write_all(b": keepalive\n\n").is_err() || stream.flush().is_err() {
+                    break;
+                }
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+        }
+    }
+}
+
+fn handle(mut stream: TcpStream, app: &AppHandle, token: &str, active_guard: &mut ActiveGuard) {
     let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
     let mut buf = Vec::new();
     let mut chunk = [0u8; 1024];
@@ -275,9 +586,10 @@ fn handle(mut stream: TcpStream, app: &AppHandle, token: &str) {
     let mut lines = head.split("\r\n");
     let request_line = lines.next().unwrap_or_default();
     let mut parts = request_line.split_whitespace();
-    let (Some(method), Some(path)) = (parts.next(), parts.next()) else {
+    let (Some(method), Some(raw_path)) = (parts.next(), parts.next()) else {
         return reply(&mut stream, "400 Bad Request");
     };
+    let path = raw_path.split('?').next().unwrap_or(raw_path);
 
     let mut auth = "";
     let mut length: usize = 0;
@@ -309,98 +621,20 @@ fn handle(mut stream: TcpStream, app: &AppHandle, token: &str) {
     body.truncate(length);
 
     match (method, path) {
-        ("POST", "/activity") => {
-            let Ok(req) = serde_json::from_slice::<Incoming>(&body) else {
-                return reply(&mut stream, "400 Bad Request");
-            };
-            let Some(state) = state_of(&req.state) else {
-                return reply(&mut stream, "400 Bad Request");
-            };
-            let last_ts = LAST_TS.load(Ordering::SeqCst);
-            if is_stale_timestamp(req.ts, last_ts) {
-                return reply(&mut stream, "204 No Content");
-            }
-            let ts = req.ts.unwrap_or_else(now_epoch_ms);
-            LAST_TS.store(ts, Ordering::SeqCst);
-            record_activity_owner(state, req.owner_pid, req.owner_start);
-
-            let quiet = is_user_quiet();
-            let activity = state.map(|s| Activity {
-                state: s,
-                name: clean(req.name, 48),
-                project: clean(req.project, 48),
-                window: req.window,
-                detail: clean(req.detail, DETAIL_MAX),
-                ask: None,
-                cancelled: None,
-                quiet: quiet.then_some(true),
-            });
-            let _ = app.emit("agent-activity", activity);
-            reply(&mut stream, "204 No Content");
+        ("POST", "/activity") => handle_activity(&mut stream, app, &body, false),
+        ("POST", "/v2/activity") => handle_activity(&mut stream, app, &body, true),
+        ("POST", "/ask") => handle_ask(&mut stream, app, &body, false),
+        ("POST", "/v2/ask") => handle_ask(&mut stream, app, &body, true),
+        ("GET", "/v2/capabilities") => {
+            let body = capabilities_json().to_string();
+            reply_json(&mut stream, &body);
         }
-        ("POST", "/ask") => {
-            let Ok(req) = serde_json::from_slice::<IncomingAsk>(&body) else {
-                return reply(&mut stream, "400 Bad Request");
+        ("GET", "/v2/events") => {
+            let Some(rx) = register_sse_subscriber_in(&SSE_SUBSCRIBERS) else {
+                return reply(&mut stream, "503 Service Unavailable");
             };
-            let id = NEXT_ASK.fetch_add(1, Ordering::SeqCst);
-            let (tx, rx) = mpsc::channel();
-            if let Ok(mut map) = PENDING.lock() {
-                map.get_or_insert_with(HashMap::new).insert(id, tx);
-            }
-            let (name, project, window) = (clean(req.name, 48), clean(req.project, 48), req.window);
-            let quiet = is_user_quiet();
-            let activity = Activity {
-                state: "needs_input",
-                name: name.clone(),
-                project: project.clone(),
-                window,
-                detail: None,
-                ask: Some(Ask {
-                    id,
-                    tool: clean(req.tool, 48),
-                    detail: clean(req.detail, DETAIL_MAX),
-                    questions: req.questions.map(|list| {
-                        list.into_iter()
-                            .take(4)
-                            .filter_map(|q| {
-                                let question = clean(Some(q.question), DETAIL_MAX)?;
-                                Some(AskQuestion {
-                                    question,
-                                    options: q.options.into_iter().filter_map(|o| clean(Some(o), 80)).take(4).collect(),
-                                })
-                            })
-                            .collect()
-                    }),
-                }),
-                cancelled: None,
-                quiet: quiet.then_some(true),
-            };
-            let _ = app.emit("agent-activity", Some(activity));
-
-            match wait_for_answer(&mut stream, id, &rx) {
-                Some((true, choices)) if !choices.is_empty() => {
-                    let body = serde_json::json!({ "decision": "allow", "choices": choices }).to_string();
-                    reply_json(&mut stream, &body);
-                }
-                Some((true, _)) => reply_json(&mut stream, r#"{"decision":"allow"}"#),
-                Some((false, _)) => reply_json(&mut stream, r#"{"decision":"deny"}"#),
-                None => {
-                    let _ = app.emit(
-                        "agent-activity",
-                        Some(Activity {
-                            state: "working",
-                            name,
-                            project,
-                            window,
-                            detail: None,
-                            ask: None,
-                            cancelled: Some(id),
-                            quiet: None,
-                        }),
-                    );
-                    reply(&mut stream, "204 No Content");
-                }
-            }
+            active_guard.release();
+            handle_sse(stream, rx);
         }
         _ => reply(&mut stream, "404 Not Found"),
     }
@@ -695,6 +929,9 @@ pub fn set_hooks(enable: bool) {
 
 pub fn set_enabled(app: &AppHandle, enable: bool) {
     ENABLED.store(enable, Ordering::SeqCst);
+    if !enable {
+        close_all_sse_subscribers();
+    }
     std::thread::spawn(move || set_hooks(enable));
     if enable {
         start(app.clone());
@@ -750,8 +987,8 @@ pub fn start(app: AppHandle) {
             let app = app.clone();
             let token = token.clone();
             std::thread::spawn(move || {
-                handle(stream, &app, &token);
-                ACTIVE.fetch_sub(1, Ordering::SeqCst);
+                let mut guard = ActiveGuard(true);
+                handle(stream, &app, &token, &mut guard);
             });
         }
     });
@@ -1133,5 +1370,156 @@ mod tests {
         assert!(!opencode_p.exists());
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn card_action_sanitization_drops_unsafe_urls_clamps_count_and_trims_labels() {
+        let long_label = format!("   {}\x07   ", "A".repeat(80));
+        let raw = vec![
+            super::CardAction {
+                id: "  open-js  ".into(),
+                label: long_label,
+                style: Some("  primary\n".into()),
+                url: Some("javascript:alert(1)".into()),
+            },
+            super::CardAction {
+                id: "open-file".into(),
+                label: "Local File".into(),
+                style: None,
+                url: Some("file:///C:/Windows/System32/cmd.exe".into()),
+            },
+            super::CardAction {
+                id: "open-https".into(),
+                label: "Docs".into(),
+                style: Some("secondary".into()),
+                url: Some("https://example.com/docs".into()),
+            },
+            super::CardAction {
+                id: "   ".into(),
+                label: "Dropped empty id".into(),
+                style: None,
+                url: Some("https://example.com".into()),
+            },
+            super::CardAction {
+                id: "open-http".into(),
+                label: "Localhost".into(),
+                style: None,
+                url: Some("HTTP://127.0.0.1:8080/status".into()),
+            },
+            super::CardAction {
+                id: "fifth-action".into(),
+                label: "Should be clamped".into(),
+                style: None,
+                url: Some("https://example.com/5".into()),
+            },
+        ];
+
+        let sanitized = super::sanitize_actions(Some(raw)).expect("valid sanitized actions");
+        assert_eq!(sanitized.len(), 4);
+
+        assert_eq!(sanitized[0].id, "open-js");
+        assert_eq!(sanitized[0].label.len(), super::ACTION_LABEL_MAX - 3); // 3 leading spaces trimmed after take(48)
+        assert!(!sanitized[0].label.chars().any(|c| c.is_control()));
+        assert_eq!(sanitized[0].style.as_deref(), Some("primary"));
+        assert_eq!(sanitized[0].url, None);
+
+        assert_eq!(sanitized[1].id, "open-file");
+        assert_eq!(sanitized[1].url, None);
+
+        assert_eq!(sanitized[2].id, "open-https");
+        assert_eq!(sanitized[2].url.as_deref(), Some("https://example.com/docs"));
+
+        assert_eq!(sanitized[3].id, "open-http");
+        assert_eq!(sanitized[3].url.as_deref(), Some("HTTP://127.0.0.1:8080/status"));
+    }
+
+    #[test]
+    fn progress_clamping_handles_out_of_range_and_non_finite() {
+        assert_eq!(super::clamp_progress(Some(-0.5)), Some(0.0));
+        assert_eq!(super::clamp_progress(Some(1.5)), Some(1.0));
+        assert_eq!(super::clamp_progress(Some(0.42)), Some(0.42));
+        assert_eq!(super::clamp_progress(Some(f32::NAN)), None);
+        assert_eq!(super::clamp_progress(Some(f32::INFINITY)), None);
+        assert_eq!(super::clamp_progress(None), None);
+    }
+
+    #[test]
+    fn v2_capabilities_payload_has_expected_structure() {
+        let caps = super::capabilities_json();
+        assert_eq!(caps["apiVersion"], 2);
+        assert_eq!(caps["v1Compat"], true);
+        assert_eq!(
+            caps["endpoints"],
+            serde_json::json!(["/v2/capabilities", "/v2/activity", "/v2/ask", "/v2/events"])
+        );
+        assert_eq!(
+            caps["features"],
+            serde_json::json!(["sse", "rich_actions", "progress"])
+        );
+    }
+
+    #[test]
+    fn sse_broadcast_fans_out_and_prunes_disconnected_subscribers() {
+        let list = std::sync::Mutex::new(Vec::new());
+        let rx1 = super::register_sse_subscriber_in(&list).expect("sub 1");
+        let rx2 = super::register_sse_subscriber_in(&list).expect("sub 2");
+
+        super::broadcast_sse_in(&list, "activity", r#"{"state":"working"}"#);
+        let expected = "event: activity\ndata: {\"state\":\"working\"}\n\n";
+        assert_eq!(rx1.try_recv().ok().as_deref(), Some(expected));
+        assert_eq!(rx2.try_recv().ok().as_deref(), Some(expected));
+
+        drop(rx2);
+        super::broadcast_sse_in(&list, "activity", r#"{"state":"done"}"#);
+        let expected2 = "event: activity\ndata: {\"state\":\"done\"}\n\n";
+        assert_eq!(rx1.try_recv().ok().as_deref(), Some(expected2));
+        assert_eq!(list.lock().unwrap().len(), 1);
+
+        // Fill up to MAX_SSE_SUBSCRIBERS and verify cap + pruning on register
+        let mut receivers = vec![rx1];
+        for _ in 1..super::MAX_SSE_SUBSCRIBERS {
+            receivers.push(super::register_sse_subscriber_in(&list).expect("within cap"));
+        }
+        assert!(super::register_sse_subscriber_in(&list).is_none());
+
+        receivers.pop();
+        assert!(super::register_sse_subscriber_in(&list).is_some());
+    }
+
+    #[test]
+    fn v1_activity_and_ask_payloads_parse_backwards_compatibly() {
+        let v1_activity = r#"{
+            "state": "working",
+            "name": "Claude Code",
+            "project": "Nectar-main",
+            "window": 12345,
+            "detail": "Running tests",
+            "ts": 1700000000000,
+            "owner_pid": 4242,
+            "owner_start": 99999
+        }"#;
+        let parsed: super::Incoming = serde_json::from_str(v1_activity).expect("v1 activity parses");
+        assert_eq!(parsed.state, "working");
+        assert_eq!(parsed.name.as_deref(), Some("Claude Code"));
+        assert_eq!(parsed.progress, None);
+        assert_eq!(parsed.badge, None);
+        assert_eq!(parsed.actions, None);
+
+        let v1_ask = r#"{
+            "name": "Claude Code",
+            "project": "Nectar-main",
+            "window": 12345,
+            "tool": "Bash",
+            "detail": "cargo test",
+            "questions": [{ "question": "Proceed?", "options": ["Yes", "No"] }]
+        }"#;
+        let parsed_ask: super::IncomingAsk = serde_json::from_str(v1_ask).expect("v1 ask parses");
+        assert_eq!(parsed_ask.tool.as_deref(), Some("Bash"));
+        assert_eq!(parsed_ask.actions, None);
+        assert_eq!(parsed_ask.timeout_secs, None);
+        assert_eq!(super::clamp_ask_timeout(parsed_ask.timeout_secs), super::ASK_WAIT);
+        assert_eq!(super::clamp_ask_timeout(Some(1)), super::ASK_TIMEOUT_MIN);
+        assert_eq!(super::clamp_ask_timeout(Some(999)), super::ASK_TIMEOUT_MAX);
+        assert_eq!(super::clamp_ask_timeout(Some(45)), 45);
     }
 }

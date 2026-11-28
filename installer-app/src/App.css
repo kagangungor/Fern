@@ -430,6 +430,42 @@ p {
   color: #ff9f0a;
 }
 
+.whats-new-strip {
+  width: 100%;
+  margin: 12px 0 6px;
+  padding: 9px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.03);
+  text-align: center;
+}
+
+.whats-new-header {
+  font-size: 10.5px;
+  font-weight: 650;
+  letter-spacing: 0.35px;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.52);
+  margin-bottom: 7px;
+}
+
+.whats-new-pills {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 5px;
+}
+
+.whats-new-pill {
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 550;
+  color: rgba(255, 255, 255, 0.86);
+  background: rgba(0, 122, 255, 0.14);
+  border: 1px solid rgba(0, 122, 255, 0.28);
+}
+
 .feedback-prompt {
   display: flex;
   align-items: center;

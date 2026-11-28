@@ -1,8 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import {
   applyDockNameOverride,
+  areDistinctExeInstalls,
   hideIdentifierForApp,
   isAppHiddenInDock,
+  isFullExePath,
   parseDockNames,
   resolveDockDisplayName,
 } from "../src/dockHelpers";
@@ -59,6 +61,19 @@ describe("isAppHiddenInDock & hideIdentifierForApp", () => {
     expect(id).toBe(pwaKey);
 
     const regular = { path: "C:\\Tools\\git.exe", executable: "git.exe", name: "Git" };
-    expect(hideIdentifierForApp(regular, "c:/tools/git.exe:git.exe", false)).toBe("git.exe");
+    expect(hideIdentifierForApp(regular, "c:/tools/git.exe:git.exe", false)).toBe("C:\\Tools\\git.exe");
+
+    const aumidApp = { path: "Microsoft.WindowsTerminal_8wekyb3d8bbwe!App", executable: "WindowsTerminal.exe", name: "Terminal" };
+    expect(hideIdentifierForApp(aumidApp, "aumid:terminal", false)).toBe("Microsoft.WindowsTerminal_8wekyb3d8bbwe!App");
+
+    const shortcutOnly = { path: "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Git.lnk", executable: "git.exe", name: "Git" };
+    expect(hideIdentifierForApp(shortcutOnly, "git.exe", false)).toBe("git.exe");
+  });
+
+  test("distinguishes separate installs sharing the same executable name", () => {
+    expect(isFullExePath("C:\\Tools\\git.exe")).toBe(true);
+    expect(isFullExePath("git.exe")).toBe(false);
+    expect(areDistinctExeInstalls("C:\\Tools\\A\\app.exe", "C:\\Tools\\B\\app.exe")).toBe(true);
+    expect(areDistinctExeInstalls("C:\\Apps\\Foo\\app-1.0.0\\foo.exe", "C:\\Apps\\Foo\\app-1.0.1\\foo.exe")).toBe(false);
   });
 });

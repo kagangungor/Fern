@@ -380,6 +380,15 @@ export default function App() {
               </motion.div>
               <h1>Fern is installed</h1>
               <p className="muted">Setup finished successfully.</p>
+              <div className="whats-new-strip" aria-label="What's New in 2.1">
+                <div className="whats-new-header">What&apos;s New in 2.1</div>
+                <div className="whats-new-pills">
+                  <span className="whats-new-pill">Quick Launcher</span>
+                  <span className="whats-new-pill">Notch AI Chat</span>
+                  <span className="whats-new-pill">Direct-Flip Protection</span>
+                  <span className="whats-new-pill">Agent API v2</span>
+                </div>
+              </div>
               <Toggle checked={launchNow} onChange={setLaunchNow} label="Launch Fern now" />
               <div className="spacer" />
               <div className="actions">

@@ -1,5 +1,5 @@
 import { motion, AnimatePresence, useAnimation } from "framer-motion";
-import { useEffect, useState, useCallback, useRef, useMemo, memo, type CSSProperties } from "react";
+import { useEffect, useState, useCallback, useRef, useMemo, type CSSProperties } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
@@ -11,9 +11,9 @@ import "./components/QuickPanel.css";
 import { DeviceArt } from "./devices/DeviceArt";
 import { deviceArtFor } from "./devices/deviceArtFor";
 import { deviceLookFor } from "./devices/deviceLooks";
-import { usbArtFor, usbDisplayName, isWiredAudio, type UsbIdentity } from "./devices/usbArtFor";
+import { usbArtFor, usbDisplayName, isWiredAudio } from "./devices/usbArtFor";
 import type { DeviceArtKey } from "./devices/art";
-import type { BudsBattery, BudLevel } from "./devices/connectedDevices";
+import type { BudsBattery } from "./devices/connectedDevices";
 import {
   DEVICE_ALERT_RECOVERY_MS,
   enqueueDeviceAlert,
@@ -44,7 +44,7 @@ import { NotchClock, StopwatchReadout } from "./components/NotchClock";
 import { ConnectionsView } from "./components/ConnectionsView";
 import { NotchTour, TOUR_STEPS } from "./components/NotchTour";
 import { useStopwatch } from "./hooks/useStopwatch";
-import { t as translate, useT } from "./i18n";
+import { useT } from "./i18n";
 import { NotchShelf, useShelf } from "./components/NotchShelf";
 import { NotchAiChat } from "./components/NotchAiChat";
 import {
@@ -90,476 +90,50 @@ import {
   Wifi,
   EthernetPort,
   WifiOff,
-  Zap,
   ChevronLeft,
   MicOff,
-  Bluetooth as BluetoothLucide,
-  Settings as SettingsLucide,
-  Moon,
-  PanelBottom,
-  PanelTop,
-  Bell,
-  RotateCw,
-  BatteryCharging,
 } from "lucide-react";
+import type {
+  BatteryDetails,
+  WifiStatus,
+  MediaInfo,
+  DeviceAlert,
+  BluetoothConnection,
+  UsbConnection,
+} from "./notch/types";
+import {
+  WifiIcon,
+  EthernetIcon,
+  TrayIcon,
+  BatteryIcon,
+  GreenDownArrowIcon,
+  BluetoothIcon,
+  SettingsIcon,
+  BrightnessIcon,
+  MoonIcon,
+  DockIcon,
+  NotchIcon,
+  BellIcon,
+  ReloadIcon,
+  BatterySaverIcon,
+} from "./notch/icons";
+import {
+  getTimerChimeCtx,
+  playTimerChime,
+  batteryTooltip,
+  deviceAlertStatus,
+  DEVICE_ALERT_MS,
+  DEVICE_ALERT_QUEUE,
+  formatLocalClock,
+  msUntilNextMinute,
+} from "./notch/utils";
+import { Visualizer } from "./notch/Visualizer";
+import { TitleMarquee } from "./notch/TitleMarquee";
+import { TimeDisplay } from "./notch/TimeDisplay";
+import { DeviceBatteryRing, DeviceBudsBattery } from "./notch/DeviceAlerts";
+import { UpdateActivity } from "./notch/UpdateActivity";
 
-// Timer chime, synthesized with Web Audio so there's no asset. The context is made on the
-// Start click so autoplay lets it play when the timer ends.
-let timerChimeCtx: AudioContext | null = null;
-
-const getTimerChimeCtx = (): AudioContext | null => {
-  try {
-    if (!timerChimeCtx) timerChimeCtx = new AudioContext();
-    if (timerChimeCtx.state === "suspended") timerChimeCtx.resume().catch(() => {});
-    return timerChimeCtx;
-  } catch {
-    return null;
-  }
-};
-
-const playTimerChime = () => {
-  const ctx = getTimerChimeCtx();
-  if (!ctx) return;
-  const start = ctx.currentTime + 0.02;
-  const master = ctx.createGain();
-  master.gain.value = 0.45;
-  master.connect(ctx.destination);
-
-  // Rising bell (A5, C#6, E6) with a quiet harmonic.
-  const notes = [
-    { freq: 880.0, at: 0 },
-    { freq: 1108.73, at: 0.18 },
-    { freq: 1318.51, at: 0.36 },
-  ];
-  notes.forEach(({ freq, at }) => {
-    const osc = ctx.createOscillator();
-    const harmonic = ctx.createOscillator();
-    const gain = ctx.createGain();
-    const harmonicGain = ctx.createGain();
-    osc.type = "sine";
-    osc.frequency.value = freq;
-    harmonic.type = "sine";
-    harmonic.frequency.value = freq * 2.01;
-    harmonicGain.gain.value = 0.12;
-    gain.gain.setValueAtTime(0.0001, start + at);
-    gain.gain.exponentialRampToValueAtTime(0.32, start + at + 0.02);
-    gain.gain.exponentialRampToValueAtTime(0.0001, start + at + 1.4);
-    osc.connect(gain);
-    harmonic.connect(harmonicGain);
-    harmonicGain.connect(gain);
-    gain.connect(master);
-    osc.start(start + at);
-    harmonic.start(start + at);
-    osc.stop(start + at + 1.5);
-    harmonic.stop(start + at + 1.5);
-  });
-};
-
-// Simple SVG icons
-function WifiIcon({ enabled, connected }: { enabled: boolean; connected: boolean }) {
-  return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" opacity={!enabled ? 0.4 : connected ? 1 : 0.7}>
-      <path d="M5 12.55a11 11 0 0 1 14.08 0" />
-      <path d="M1.42 9a16 16 0 0 1 21.16 0" />
-      <path d="M8.53 16.11a6 6 0 0 1 6.95 0" />
-      <line x1="12" y1="20" x2="12.01" y2="20" />
-    </svg>
-  );
-}
-
-function formatDuration(seconds: number): string {
-  const minutes = Math.max(1, Math.round(seconds / 60));
-  const h = Math.floor(minutes / 60);
-  const m = minutes % 60;
-  return h > 0 ? `${h}h ${m}m` : `${m}m`;
-}
-
-interface BatteryDetails {
-  present: boolean;
-  percent: number | null;
-  plugged_in: boolean;
-  charging: boolean;
-  seconds_left: number | null;
-  seconds_to_full: number | null;
-  health_percent: number | null;
-  power_mode: string | null;
-}
-
-function batteryTooltip(
-  charging: boolean,
-  level: number,
-  secondsLeft: number | null,
-  details?: BatteryDetails | null
-): string {
-  const parts: string[] = [];
-  if (charging && level >= 100) {
-    parts.push(translate("battery.full"));
-  } else {
-    const state = translate(charging ? "battery.charging" : "battery.onBattery");
-    const effectiveSecs = charging
-      ? (details?.seconds_to_full ?? secondsLeft)
-      : (details?.seconds_left ?? secondsLeft);
-    if (effectiveSecs === null || effectiveSecs <= 0) {
-      parts.push(translate("battery.status", { state, level }));
-    } else {
-      parts.push(translate(charging ? "battery.untilFull" : "battery.left", { state, level, duration: formatDuration(effectiveSecs) }));
-    }
-  }
-  if (details?.health_percent != null) {
-    parts.push(translate("battery.health", { percent: details.health_percent }));
-  }
-  if (details?.power_mode) {
-    parts.push(details.power_mode);
-  }
-  return parts.join(" · ");
-}
-
-function EthernetIcon() {
-  return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-      <rect x="4" y="4" width="16" height="11" rx="2" />
-      <path d="M8 15v3h8v-3" />
-      <line x1="9" y1="8" x2="9" y2="11" />
-      <line x1="12" y1="8" x2="12" y2="11" />
-      <line x1="15" y1="8" x2="15" y2="11" />
-    </svg>
-  );
-}
-
-function TrayIcon() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-      <rect x="3" y="3" width="6" height="6" rx="1" />
-      <rect x="15" y="3" width="6" height="6" rx="1" />
-      <rect x="15" y="15" width="6" height="6" rx="1" />
-      <rect x="3" y="15" width="6" height="6" rx="1" />
-    </svg>
-  );
-}
-
-function BatteryIcon({ charging, level, threshold = 20 }: { charging: boolean; level: number; threshold?: number }) {
-  const percentage = Math.min(Math.max(level, 0), 100);
-
-  return (
-    <div style={{
-      display: 'flex',
-      alignItems: 'center',
-      position: 'relative',
-      height: '14px',
-      justifyContent: 'center'
-    }}>
-      <svg width="20" height="10" viewBox="0 0 20 10" fill="none">
-        {/* Battery Shell - Centered at 9px within 20px width, ignoring the tip's offset */}
-        <rect
-          x="2" y="0.75" width="14" height="8.5" rx="2.4"
-          stroke="currentColor" strokeOpacity={0.35} strokeWidth="1.1"
-        />
-        {/* Battery Tip */}
-        <path
-          d="M17.5 3.5V6.5"
-          stroke="currentColor" strokeOpacity={0.35} strokeWidth="1.2" strokeLinecap="round"
-        />
-        {/* Fill */}
-        <rect
-          x="3.8" y="2.5"
-          width={Math.max(0.5, (percentage / 100) * 10.4)}
-          height="5" rx="1"
-          fill={charging ? "#32D74B" : (percentage <= threshold ? "#FF453A" : "white")}
-        />
-      </svg>
-      {/* Charging Bolt - Centered on the battery body */}
-      {charging && (
-        <div style={{
-          position: 'absolute',
-          top: '50%',
-          left: '9px',
-          transform: 'translate(-50%, -50%)',
-          color: 'white',
-          filter: 'drop-shadow(0px 0px 1.5px rgba(0,0,0,0.8))'
-        }}>
-          <svg width="7" height="10" viewBox="0 0 8 12" fill="currentColor">
-            <path d="M4.5 0L0 7H3.5L2.5 12L8 5H4.5L5.5 0H4.5Z" />
-          </svg>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function GreenDownArrowIcon() {
-  return (
-    <div style={{
-      display: 'inline-flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-      width: '18px',
-      height: '18px',
-      borderRadius: '50%',
-      background: 'rgba(50, 215, 75, 0.15)',
-      border: '1px solid rgba(50, 215, 75, 0.35)',
-      boxShadow: '0 0 8px rgba(50, 215, 75, 0.25)',
-      flexShrink: 0,
-      verticalAlign: 'middle'
-    }}>
-      <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#32D74B" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
-        <line x1="12" y1="4" x2="12" y2="16"></line>
-        <polyline points="18 10 12 16 6 10"></polyline>
-        <line x1="6" y1="20" x2="18" y2="20"></line>
-      </svg>
-    </div>
-  );
-}
-
-export const Visualizer = memo(function Visualizer({ isPlaying, bars = 5, height = 20 }: { isPlaying: boolean; bars?: number; height?: number }) {
-  const [audioData, setAudioData] = useState<number[]>(new Array(bars).fill(0.18));
-
-  useEffect(() => {
-    if (!isPlaying) {
-      setAudioData(new Array(bars).fill(0.18));
-      return;
-    }
-
-    const unlisten = listen<{ frequencies: number[] }>("audio-visualization", (event) => {
-      // If we receive fewer frequencies than bars, repeat or interpolate
-      // If more, slice
-      let data = event.payload.frequencies;
-      if (data.length > bars) data = data.slice(0, bars);
-      while (data.length < bars) data.push(0.18);
-      setAudioData(data);
-    });
-
-    return () => {
-      unlisten.then(fn => fn());
-    };
-  }, [isPlaying, bars]);
-
-  return (
-    <div className="visualizer-horizontal" style={{ height: `${height}px`, width: `${bars * 6}px` }}>
-      {audioData.map((value, i) => (
-        <motion.div
-          key={i}
-          className="bar-horizontal"
-          animate={{
-            scaleY: isPlaying ? Math.max(0.2, value) : 0.1,
-            opacity: isPlaying ? 0.95 : 0.5
-          }}
-          transition={{
-            type: "spring",
-            stiffness: 600,
-            damping: 30,
-            mass: 0.5
-          }}
-        />
-      ))}
-    </div>
-  );
-});
-
-function UpdateActivity() {
-  return (
-    <div className="update-activity">
-      <motion.div
-        className="update-activity-glow"
-        animate={{ opacity: [0.5, 1, 0.5], scale: [0.9, 1, 0.9] }}
-        transition={{ duration: 1.6, repeat: Infinity, ease: "easeInOut" }}
-      >
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#32D74B" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M12 5v11" />
-          <path d="M6 12l6 6 6-6" />
-        </svg>
-      </motion.div>
-    </div>
-  );
-}
-
-interface WifiStatus {
-  enabled: boolean;
-  connected: boolean;
-}
-
-interface MediaInfo {
-  title: string;
-  artist: string;
-  is_playing: boolean;
-  has_media: boolean;
-  artwork?: string[];
-  position_ms?: number;
-  duration_ms?: number;
-  seek_enabled?: boolean;
-  position_updated_at?: number;
-}
-
-const MARQUEE_SPEED = 30; // px/s — constant for all titles
-const MARQUEE_MIN_DURATION = 5; // floor so short titles don't flicker
-
-const TitleMarquee = ({ title }: { title: string }) => {
-  const textRef = useRef<HTMLSpanElement>(null);
-  const containerRef = useRef<HTMLDivElement>(null);
-  const [isOverflowing, setIsOverflowing] = useState(false);
-  const [scrollDistance, setScrollDistance] = useState(0);
-  const [scrollDuration, setScrollDuration] = useState(8);
-
-  useEffect(() => {
-    const check = () => {
-      if (textRef.current && containerRef.current) {
-        const textWidth = textRef.current.scrollWidth;
-        const containerWidth = containerRef.current.clientWidth;
-        const overflow = textWidth > containerWidth;
-        setIsOverflowing(overflow);
-        if (overflow) {
-          const distance = textWidth - containerWidth;
-          setScrollDistance(distance);
-          setScrollDuration(Math.max(distance / MARQUEE_SPEED, MARQUEE_MIN_DURATION));
-        }
-      }
-    };
-    check();
-    const observer = new ResizeObserver(check);
-    if (containerRef.current) observer.observe(containerRef.current);
-    return () => observer.disconnect();
-  }, [title]);
-
-  return (
-    <div ref={containerRef} className="premium-title-wrap" style={{ width: '100%', overflow: 'hidden' }}>
-      <span
-        ref={textRef}
-        className={`premium-title ${isOverflowing ? 'marquee' : ''}`}
-        style={{
-          '--scroll-distance': isOverflowing ? `-${scrollDistance}px` : undefined,
-          '--scroll-duration': `${scrollDuration}s`,
-        } as React.CSSProperties}
-      >
-        {title}
-      </span>
-    </div>
-  );
-};
-
-
-
-
-
-// A device that just connected or disconnected, shown briefly in the Dynamic Island
-interface DeviceAlert {
-  id: string;
-  art: DeviceArtKey;
-  name: string;
-  connected: boolean;
-  battery: number | null;
-  buds?: BudsBattery | null;
-  usb?: boolean;
-  runId: number;
-}
-
-interface BluetoothConnection {
-  id: string;
-  name: string;
-  kind: string;
-  form: string | null;
-  connected: boolean;
-  battery: number | null;
-}
-
-interface UsbConnection extends UsbIdentity {
-  id: string;
-  connected: boolean;
-}
-
-const PLUGGED_ART = new Set<DeviceArtKey>([
-  "headphones-wired",
-  "earbuds-usbc",
-  "earbuds-jack",
-  "flash-drive",
-  "ssd",
-  "hub",
-  "webcam",
-  "microphone"
-]);
-
-function deviceAlertStatus(art: DeviceArtKey, connected: boolean, wired = false): string {
-  if (art === "sd-card") return connected ? translate("device.inserted") : translate("device.removed");
-  if (wired || PLUGGED_ART.has(art)) return connected ? translate("device.plugged_in") : translate("device.unplugged");
-  return connected ? translate("device.connected") : translate("device.disconnected");
-}
-
-const DEVICE_ALERT_MS = { connected: 4200, disconnected: 2600 };
-const DEVICE_ALERT_QUEUE = 3;
-
-function DeviceBatteryRing({ level, charging = false }: { level: number; charging?: boolean }) {
-  const r = 10.5;
-  const circumference = 2 * Math.PI * r;
-  const low = level <= 20 && !charging;
-  return (
-    <div
-      className={`device-alert-battery${low ? " low" : ""}${charging ? " charging" : ""}`}
-      title={`${level}%${charging ? ", charging" : ""}`}
-    >
-      <svg viewBox="0 0 28 28" width="28" height="28">
-        <circle cx="14" cy="14" r={r} className="track" />
-        <circle
-          cx="14"
-          cy="14"
-          r={r}
-          className="level"
-          strokeDasharray={`${(circumference * level) / 100} ${circumference}`}
-          transform="rotate(-90 14 14)"
-        />
-      </svg>
-      <span>{level}</span>
-    </div>
-  );
-}
-
-function DeviceBudsBattery({ buds }: { buds: BudsBattery }) {
-  const parts: [string, BudLevel][] = [];
-  if (buds.left) parts.push(["L", buds.left]);
-  if (buds.right) parts.push(["R", buds.right]);
-  if (buds.case) parts.push(["Case", buds.case]);
-  return (
-    <div className="device-alert-buds">
-      {parts.map(([label, part]) => (
-        <div key={label} className="device-alert-bud">
-          <DeviceBatteryRing level={part.level} charging={part.charging} />
-          <span className="device-alert-bud-label">
-            {label}
-            {part.charging && <Zap className="device-alert-bud-charging" />}
-          </span>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function formatLocalClock(date: Date, hour12: boolean): string {
-  return date.toLocaleTimeString([], {
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12,
-  });
-}
-
-function msUntilNextMinute(now = new Date()): number {
-  return Math.max(250, 60_000 - (now.getSeconds() * 1000 + now.getMilliseconds()) + 50);
-}
-
-const TimeDisplay = memo(function TimeDisplay({ hour12 }: { hour12: boolean }) {
-  const [text, setText] = useState(() => formatLocalClock(new Date(), hour12));
-
-  useEffect(() => {
-    let timer: ReturnType<typeof setTimeout> | null = null;
-    const sync = () => {
-      const now = new Date();
-      setText(formatLocalClock(now, hour12));
-      timer = setTimeout(sync, msUntilNextMinute(now));
-    };
-    sync();
-    return () => {
-      if (timer) clearTimeout(timer);
-    };
-  }, [hour12]);
-
-  return <>{text}</>;
-});
+export { Visualizer };
 
 function App() {
   const t = useT();
@@ -3742,61 +3316,6 @@ function App() {
 
     </div>
   );
-}
-
-function BluetoothIcon() {
-  return <BluetoothLucide size={16} strokeWidth={2} />;
-}
-
-function SettingsIcon() {
-  return <SettingsLucide size={16} strokeWidth={2} />;
-}
-
-function BrightnessIcon({ level }: { level: number }) {
-  const rays = [
-    [12, 2.5, 12, 5],
-    [12, 19, 12, 21.5],
-    [2.5, 12, 5, 12],
-    [19, 12, 21.5, 12],
-    [5.3, 5.3, 7, 7],
-    [17, 17, 18.7, 18.7],
-    [5.3, 18.7, 7, 17],
-    [17, 7, 18.7, 5.3],
-  ];
-  return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ opacity: 0.5 }}>
-      <circle cx="12" cy="12" r="4.2" fill="currentColor" />
-      <g opacity={0.35 + (Math.min(100, Math.max(0, level)) / 100) * 0.65}>
-        {rays.map(([x1, y1, x2, y2], i) => (
-          <line key={i} x1={x1} y1={y1} x2={x2} y2={y2} />
-        ))}
-      </g>
-    </svg>
-  );
-}
-
-function MoonIcon() {
-  return <Moon size={16} strokeWidth={2} />;
-}
-
-function DockIcon() {
-  return <PanelBottom size={16} strokeWidth={2} />;
-}
-
-function NotchIcon() {
-  return <PanelTop size={16} strokeWidth={2} />;
-}
-
-function BellIcon() {
-  return <Bell size={16} strokeWidth={2} />;
-}
-
-function ReloadIcon() {
-  return <RotateCw size={16} strokeWidth={2} />;
-}
-
-function BatterySaverIcon() {
-  return <BatteryCharging size={16} strokeWidth={2} />;
 }
 
 export default App;

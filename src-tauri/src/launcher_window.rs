@@ -13,8 +13,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 pub const LAUNCHER: &str = "launcher";
-const LAUNCHER_LOGICAL_WIDTH: f64 = 640.0;
-const LAUNCHER_LOGICAL_HEIGHT: f64 = 520.0;
+const LAUNCHER_LOGICAL_WIDTH: f64 = 728.0;
+const LAUNCHER_LOGICAL_HEIGHT: f64 = 576.0;
 const IDLE_DESTROY_SECS: u64 = 300; // 5 minutes when Memory Saver is enabled
 
 static CREATING: AtomicBool = AtomicBool::new(false);
@@ -102,8 +102,13 @@ fn start_idle_trim_loop(app: &AppHandle) {
                 if let Some(win) = handle.get_webview_window(LAUNCHER) {
                     if !win.is_visible().unwrap_or(false) {
                         clear_hidden_timer();
-                        let _ = win.destroy();
-                        crate::memory_saver::trim_soon();
+                        let target = win.clone();
+                        let _ = win.run_on_main_thread(move || {
+                            if !target.is_visible().unwrap_or(false) {
+                                let _ = target.destroy();
+                                crate::memory_saver::trim_soon();
+                            }
+                        });
                     }
                 }
             }
@@ -113,19 +118,24 @@ fn start_idle_trim_loop(app: &AppHandle) {
 
 fn present(win: &WebviewWindow) {
     clear_hidden_timer();
-    position_on_active_monitor(win);
-    unsafe {
-        let _ = AllowSetForegroundWindow(ASFW_ANY);
-    }
-    let _ = win.show();
-    let _ = win.set_focus();
-    if let Ok(hwnd) = win.hwnd() {
+    let target = win.clone();
+    // Always run Win32 show/focus calls on the window's owning main thread, outside any
+    // WebView2 IPC callback or background thread, to avoid COM re-entrancy / SendMessage deadlocks.
+    let _ = win.run_on_main_thread(move || {
+        position_on_active_monitor(&target);
         unsafe {
-            let _ = ShowWindow(hwnd, SW_SHOW);
-            let _ = SetForegroundWindow(hwnd);
+            let _ = AllowSetForegroundWindow(ASFW_ANY);
         }
-    }
-    let _ = win.emit("launcher-opened", ());
+        let _ = target.show();
+        let _ = target.set_focus();
+        if let Ok(hwnd) = target.hwnd() {
+            unsafe {
+                let _ = ShowWindow(hwnd, SW_SHOW);
+                let _ = SetForegroundWindow(hwnd);
+            }
+        }
+        let _ = target.emit("launcher-opened", ());
+    });
 }
 
 fn build_window(app: &AppHandle) -> Result<WebviewWindow, String> {
@@ -138,7 +148,6 @@ fn build_window(app: &AppHandle) -> Result<WebviewWindow, String> {
         .ok_or_else(|| "launcher window missing from tauri.conf.json".to_string())?;
     let window = tauri::WebviewWindowBuilder::from_config(app, config)
         .map_err(|e| e.to_string())?
-        .background_color(tauri::window::Color(10, 10, 15, 0))
         .build()
         .map_err(|e| e.to_string())?;
 
@@ -164,16 +173,24 @@ fn build_window(app: &AppHandle) -> Result<WebviewWindow, String> {
     window.on_window_event(move |event| match event {
         tauri::WindowEvent::Focused(false) => {
             if win_for_events.is_visible().unwrap_or(false) {
-                let _ = win_for_events.hide();
                 mark_hidden_now();
-                let _ = win_for_events.emit("launcher-closed", ());
+                let target = win_for_events.clone();
+                let _ = win_for_events.run_on_main_thread(move || {
+                    if target.is_visible().unwrap_or(false) {
+                        let _ = target.hide();
+                        let _ = target.emit("launcher-closed", ());
+                    }
+                });
             }
         }
         tauri::WindowEvent::CloseRequested { api, .. } => {
             api.prevent_close();
-            let _ = win_for_events.hide();
             mark_hidden_now();
-            let _ = win_for_events.emit("launcher-closed", ());
+            let target = win_for_events.clone();
+            let _ = win_for_events.run_on_main_thread(move || {
+                let _ = target.hide();
+                let _ = target.emit("launcher-closed", ());
+            });
         }
         _ => {}
     });
@@ -230,9 +247,14 @@ pub fn show(app: &AppHandle) {
 pub fn hide(app: &AppHandle) {
     PENDING_SHOW.store(false, Ordering::SeqCst);
     if let Some(win) = app.get_webview_window(LAUNCHER) {
-        let _ = win.hide();
         mark_hidden_now();
-        let _ = win.emit("launcher-closed", ());
+        let target = win.clone();
+        let _ = win.run_on_main_thread(move || {
+            if target.is_visible().unwrap_or(false) {
+                let _ = target.hide();
+                let _ = target.emit("launcher-closed", ());
+            }
+        });
     }
 }
 
@@ -255,17 +277,17 @@ pub fn toggle(app: &AppHandle) {
 }
 
 #[tauri::command]
-pub fn toggle_launcher(app: AppHandle) {
+pub async fn toggle_launcher(app: AppHandle) {
     toggle(&app);
 }
 
 #[tauri::command]
-pub fn hide_launcher(app: AppHandle) {
+pub async fn hide_launcher(app: AppHandle) {
     hide(&app);
 }
 
 #[tauri::command]
-pub fn launcher_ready(app: AppHandle) {
+pub async fn launcher_ready(app: AppHandle) {
     if PENDING_SHOW.swap(false, Ordering::SeqCst) {
         if let Some(win) = app.get_webview_window(LAUNCHER) {
             present(&win);

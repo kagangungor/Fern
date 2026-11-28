@@ -29,4 +29,18 @@ describe("settings searchEngine (#17 multilingual & fuzzy)", () => {
     const hits = searchSettings("scale", tEn, "en");
     expect(hits[0]?.setting.id).toBe("appearance-scale");
   });
+
+  test("indexes 2.0/2.1 features (Quick Launcher, Notch AI Chat, Direct-Flip, Agent API v2) in EN and TR", () => {
+    expect(searchSettings("quick launcher", tEn, "en").some((r) => r.setting.tab === "launcher")).toBe(true);
+    expect(searchSettings("hizli baslatici", tTr, "tr").some((r) => r.setting.tab === "launcher")).toBe(true);
+
+    expect(searchSettings("notch ai chat", tEn, "en").some((r) => r.setting.tab === "integrations")).toBe(true);
+    expect(searchSettings("yapay zeka sohbet", tTr, "tr").some((r) => r.setting.id === "integrations-ai-provider" || r.setting.id === "notch-ai-hotkey")).toBe(true);
+
+    expect(searchSettings("direct-flip", tEn, "en").some((r) => r.setting.id === "general-direct-flip-protection")).toBe(true);
+    expect(searchSettings("tam ekran oyun", tTr, "tr").some((r) => r.setting.id === "general-direct-flip-protection")).toBe(true);
+
+    expect(searchSettings("agent api v2", tEn, "en").some((r) => r.setting.id === "integrations-agent-api")).toBe(true);
+    expect(searchSettings("ajan", tTr, "tr").some((r) => r.setting.id === "integrations-agent-api")).toBe(true);
+  });
 });
