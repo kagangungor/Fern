@@ -1357,6 +1357,7 @@ pub fn setup_system_worker(app_handle: AppHandle) -> Sender<SystemCommand> {
         let mut last_notch_fullscreen: Option<bool> = None;
         let mut last_secondary_dock_fullscreen = std::collections::HashMap::<String, (bool, Instant)>::new();
         let mut last_secondary_dock_shell_surface = std::collections::HashMap::<String, (bool, Instant)>::new();
+        let mut last_secondary_overlap = std::collections::HashMap::<String, (bool, Instant)>::new();
         let mut last_notch_overlap: Option<bool> = None;
         let mut last_dock_maximized: Option<bool> = None;
         let mut last_fg_maximized = false;
@@ -1423,7 +1424,7 @@ pub fn setup_system_worker(app_handle: AppHandle) -> Sender<SystemCommand> {
                         last_monitor_update = now;
                     }
                 }
-                use windows::Win32::Graphics::Gdi::{MonitorFromWindow, GetMonitorInfoA, MONITORINFO, MONITOR_DEFAULTTONEAREST};
+                use windows::Win32::Graphics::Gdi::{MonitorFromRect, GetMonitorInfoA, MONITORINFO, MONITOR_DEFAULTTONULL};
                 let settings_hwnd = handle_visibility.get_webview_window("settings").and_then(|w| w.hwnd().ok()).map(|h| h.0 as isize);
                 let calendar_hwnd = handle_visibility.get_webview_window("calendar").and_then(|w| w.hwnd().ok()).map(|h| h.0 as isize);
                 use windows::Win32::UI::WindowsAndMessaging::{GWL_EXSTYLE, WS_EX_TOOLWINDOW};
@@ -1446,7 +1447,10 @@ pub fn setup_system_worker(app_handle: AppHandle) -> Sender<SystemCommand> {
                     let is_cloaked = DwmGetWindowAttribute(hwnd, windows::Win32::Graphics::Dwm::DWMWA_CLOAKED, &mut cloaked as *mut _ as *mut _, 4).is_ok() && cloaked != 0;
 
                     let mut rect = RECT::default();
-                    let has_valid_rect = GetWindowRect(hwnd, &mut rect).is_ok() && (rect.right - rect.left) > 0 && (rect.bottom - rect.top) > 0;
+                    let has_valid_rect = GetWindowRect(hwnd, &mut rect).is_ok()
+                        && (rect.right - rect.left) > 0
+                        && (rect.bottom - rect.top) > 0
+                        && !MonitorFromRect(&rect, MONITOR_DEFAULTTONULL).is_invalid();
                     let is_bg_toolwindow = check_count > 0
                         && (GetWindowLongW(hwnd, GWL_EXSTYLE) as u32 & WS_EX_TOOLWINDOW.0) != 0;
                     
@@ -1510,10 +1514,13 @@ pub fn setup_system_worker(app_handle: AppHandle) -> Sender<SystemCommand> {
                             let has_rect = dwm_res.is_ok() || GetWindowRect(hwnd, &mut rect).is_ok();
 
                             if has_rect {
-                                let h_monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+                                // Use MONITOR_DEFAULTTONULL against the measured rect so windows mid-restore
+                                // from Windows' off-screen minimized park (-32000, -32000) never get blamed on
+                                // the nearest monitor (primary) while IsZoomed() is already true.
+                                let h_monitor = MonitorFromRect(&rect, MONITOR_DEFAULTTONULL);
                                 let mut mi = MONITORINFO { cbSize: std::mem::size_of::<MONITORINFO>() as u32, ..Default::default() };
                                 
-                                if GetMonitorInfoA(h_monitor, &mut mi).as_bool() {
+                                if !h_monitor.is_invalid() && GetMonitorInfoA(h_monitor, &mut mi).as_bool() && rect_intersects_monitor(rect, mi.rcMonitor) {
                                     let screen_rect = mi.rcMonitor;
                                     let is_maximized = IsZoomed(hwnd).as_bool() || (style & WS_MAXIMIZE.0) != 0;
 
@@ -1536,7 +1543,9 @@ pub fn setup_system_worker(app_handle: AppHandle) -> Sender<SystemCommand> {
                                     let is_d3d_fs = windows::Win32::UI::Shell::SHQueryUserNotificationState()
                                         .is_ok_and(|state| state == windows::Win32::UI::Shell::QUNS_RUNNING_D3D_FULL_SCREEN);
 
-                                    current_is_fs = ((is_client_fullscreen || is_matches_screen) && !is_maximized) || is_d3d_fs;
+                                    current_is_fs = ((is_client_fullscreen || is_matches_screen)
+                                        && !crate::utils::is_captioned_maximized(is_maximized, style))
+                                        || is_d3d_fs;
                                     fg_info = Some((screen_rect, rect, current_is_fs || is_maximized));
 
                                     if current_is_fs || is_maximized {
@@ -1628,7 +1637,7 @@ pub fn setup_system_worker(app_handle: AppHandle) -> Sender<SystemCommand> {
                 // and without this guard it emits dock-overlap:true which hides the dock
                 // right after init_dock emits dock-overlap:false.
                 let dock_visible = handle_visibility.get_webview_window("dock")
-                    .is_some_and(|w| w.is_visible().unwrap_or(false));
+                    .is_some_and(|w| w.is_visible().unwrap_or(false) || crate::direct_flip::is_hidden("dock"));
                 let effective_dock_overlap = should_overlap && dock_visible;
 
                 crate::state::set_overlap(crate::state::dock_overlap(), "dock", if effective_dock_overlap { 1 } else { 0 });
@@ -1725,7 +1734,7 @@ pub fn setup_system_worker(app_handle: AppHandle) -> Sender<SystemCommand> {
                         _ => unfocused_panel_overlap(label.as_str(), is_dock).unwrap_or(false),
                     };
                     // Same visibility guard as the primary dock.
-                    let overlap = overlap && (!is_dock || win.is_visible().unwrap_or(false));
+                    let overlap = overlap && (!is_dock || win.is_visible().unwrap_or(false) || crate::direct_flip::is_hidden(&label));
                     let map = if is_dock { crate::state::dock_overlap() } else { crate::state::notch_overlap() };
                     let overlap = if is_dock {
                         overlap
@@ -1733,10 +1742,17 @@ pub fn setup_system_worker(app_handle: AppHandle) -> Sender<SystemCommand> {
                         notch_overlap_during_start(start_shown, overlap, crate::state::get_overlap(map, &label) == 1)
                     };
                     let new_val = if overlap { 1 } else { 0 };
-                    if crate::state::get_overlap(map, &label) != new_val {
+                    let changed = crate::state::get_overlap(map, &label) != new_val;
+                    if changed {
                         crate::state::set_overlap(map, &label, new_val);
+                    }
+                    let needs_overlap_emit = changed
+                        || last_secondary_overlap.get(&label)
+                            .is_none_or(|(previous, sent_at)| *previous != overlap || sent_at.elapsed() >= Duration::from_secs(3));
+                    if needs_overlap_emit {
                         let event = if is_dock { "dock-overlap" } else { "notch-overlap" };
                         let _ = handle_visibility.emit_to(label.as_str(), event, overlap);
+                        last_secondary_overlap.insert(label.clone(), (overlap, now));
                     }
                 }
 
@@ -1754,6 +1770,82 @@ pub fn setup_system_worker(app_handle: AppHandle) -> Sender<SystemCommand> {
                 } else if !fullscreen_on_notch && !last_visible {
                     let _ = tx_clone.send(SystemCommand::ToggleVisibility(true));
                     last_visible = true;
+                }
+
+                // DWM Direct-Flip Protection: natively SW_HIDE Smart/Peek panels & HUD overlay on
+                // monitors covered by a real fullscreen window (never Start menu), and relax Fern's
+                // background polling loops while fullscreen is active.
+                let df_enabled = crate::direct_flip::is_enabled(&handle_visibility);
+                if !df_enabled {
+                    crate::direct_flip::restore_all(&handle_visibility);
+                    crate::memory_saver::set_fullscreen_relaxed(false);
+                } else {
+                    let kb_focus_label = crate::state::KEYBOARD_FOCUS_LABEL
+                        .lock()
+                        .ok()
+                        .and_then(|g| g.clone());
+                    let dock_busy = crate::state::MENU_IS_OPEN.load(Ordering::Relaxed)
+                        || crate::state::DOCK_IS_DRAGGING.load(Ordering::Relaxed);
+                    let mut any_real_fullscreen = fullscreen_on_notch || fullscreen_on("dock") || current_is_fs;
+
+                    if let Some(win) = handle_visibility.get_webview_window("main") {
+                        let mode = crate::monitors::resolve_mode_for_label(&handle_visibility, crate::types::WindowKind::Notch, "main");
+                        let should_hide = crate::direct_flip::should_hide_panel(
+                            true,
+                            fullscreen_on_notch,
+                            &mode,
+                            kb_focus_label.as_deref() == Some("main"),
+                            false,
+                        );
+                        crate::direct_flip::sync_window(&win, "main", should_hide);
+                    }
+
+                    if let Some(win) = handle_visibility.get_webview_window("dock") {
+                        let real_fs_on_dock = fullscreen_on("dock");
+                        let mode = crate::monitors::resolve_mode_for_label(&handle_visibility, crate::types::WindowKind::Dock, "dock");
+                        let should_hide = crate::direct_flip::should_hide_panel(
+                            true,
+                            real_fs_on_dock,
+                            &mode,
+                            kb_focus_label.as_deref() == Some("dock"),
+                            dock_busy,
+                        );
+                        crate::direct_flip::sync_window(&win, "dock", should_hide);
+                    }
+
+                    for (label, win) in handle_visibility.webview_windows() {
+                        let is_dock = is_dock_label(&label);
+                        if !(is_dock || is_notch_label(&label)) || crate::state::monitor_suffix(&label).is_none() {
+                            continue;
+                        }
+                        let Ok(w_hwnd) = win.hwnd() else { continue };
+                        let Some((mx, my, _, _)) = monitor_rect_for_hwnd(w_hwnd) else { continue };
+                        let real_fs_here = monitor_fullscreen((mx, my), focused_monitor, current_is_fs, &fullscreen_monitors);
+                        if real_fs_here {
+                            any_real_fullscreen = true;
+                        }
+                        let kind = if is_dock { crate::types::WindowKind::Dock } else { crate::types::WindowKind::Notch };
+                        let mode = crate::monitors::resolve_mode_for_label(&handle_visibility, kind, &label);
+                        let should_hide = crate::direct_flip::should_hide_panel(
+                            true,
+                            real_fs_here,
+                            &mode,
+                            kb_focus_label.as_deref() == Some(label.as_str()),
+                            is_dock && dock_busy,
+                        );
+                        crate::direct_flip::sync_window(&win, &label, should_hide);
+                    }
+
+                    if let Some(ov_win) = handle_visibility.get_webview_window("overlay") {
+                        let should_hide = crate::direct_flip::should_hide_overlay(
+                            true,
+                            fullscreen_on_notch,
+                            crate::state::OVERLAY_IN_SPLASH.load(Ordering::Relaxed),
+                        );
+                        crate::direct_flip::sync_window(&ov_win, "overlay", should_hide);
+                    }
+
+                    crate::memory_saver::set_fullscreen_relaxed(any_real_fullscreen);
                 }
 
                 // Enforce native taskbar hiding (periodic check)
@@ -1791,7 +1883,7 @@ pub fn setup_system_worker(app_handle: AppHandle) -> Sender<SystemCommand> {
                     apply_capture_ui_state(&handle_visibility, active);
                 }
             }
-            std::thread::park_timeout(crate::memory_saver::poll_interval(std::time::Duration::from_millis(150)));
+            std::thread::park_timeout(crate::memory_saver::poll_interval_idle_only(std::time::Duration::from_millis(150)));
         }
     });
 
@@ -3087,7 +3179,9 @@ unsafe fn process_mouse_move(app_handle: &AppHandle, cursor: windows::Win32::Fou
 
             // --- Overlay cursor passthrough ---
             if let Some(ov_win) = app_handle.get_webview_window("overlay") {
-                if fg_fs {
+                if crate::direct_flip::is_hidden("overlay") {
+                    // Natively hidden for DWM Direct-Flip; avoid touching Z-order or ex-style.
+                } else if fg_fs {
                     let prev = MH_LAST_OV_IGNORE.load(Ordering::Relaxed);
                     if prev != 1 {
                         if let Ok(hwnd) = ov_win.hwnd() { re_assert_topmost(hwnd); }
@@ -3182,10 +3276,34 @@ struct CoverScan {
     monitors: Vec<MonitorCover>,
 }
 
+/// True when a window rect actually intersects the monitor's bounds. Filters out
+/// Windows' off-screen minimized park around (-32000, -32000) during SW_RESTORE.
+fn rect_intersects_monitor(rect: windows::Win32::Foundation::RECT, screen: windows::Win32::Foundation::RECT) -> bool {
+    rect.left < screen.right
+        && rect.right > screen.left
+        && rect.top < screen.bottom
+        && rect.bottom > screen.top
+}
+
+/// True when a window should be ignored during z-order monitor cover scanning:
+/// our own process windows, tool windows, and click-through transparent overlays.
+fn should_skip_cover_window(own_pid: u32, pid: u32, ex_style: u32) -> bool {
+    use windows::Win32::UI::WindowsAndMessaging::{WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT};
+    pid == own_pid || (ex_style & (WS_EX_TOOLWINDOW.0 | WS_EX_TRANSPARENT.0)) != 0
+}
+
+/// True when `rect` covers `screen` within a 2px DPI rounding tolerance (matching `is_window_fullscreen`).
+fn rect_covers_monitor(rect: windows::Win32::Foundation::RECT, screen: windows::Win32::Foundation::RECT) -> bool {
+    rect.left <= screen.left + 2
+        && rect.top <= screen.top + 2
+        && rect.right >= screen.right - 2
+        && rect.bottom >= screen.bottom - 2
+}
+
 unsafe extern "system" fn cover_scan_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
     use windows::Win32::Foundation::RECT;
     use windows::Win32::Graphics::Dwm::DWMWA_CLOAKED;
-    use windows::Win32::Graphics::Gdi::{GetMonitorInfoA, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST};
+    use windows::Win32::Graphics::Gdi::{GetMonitorInfoA, MonitorFromRect, MONITORINFO, MONITOR_DEFAULTTONULL};
     use windows::Win32::UI::WindowsAndMessaging::{GetClassNameW, GetWindowRect, IsIconic, IsZoomed};
     let scan = &mut *(lparam.0 as *mut CoverScan);
     if !IsWindowVisible(hwnd).as_bool() || IsIconic(hwnd).as_bool() {
@@ -3193,7 +3311,8 @@ unsafe extern "system" fn cover_scan_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
     }
     let mut pid = 0u32;
     GetWindowThreadProcessId(hwnd, Some(&mut pid));
-    if pid == scan.own_pid || (GetWindowLongW(hwnd, GWL_EXSTYLE) as u32 & WS_EX_TOOLWINDOW.0) != 0 {
+    let ex_style = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
+    if should_skip_cover_window(scan.own_pid, pid, ex_style) {
         return true.into();
     }
     let mut cloaked = 0u32;
@@ -3205,12 +3324,24 @@ unsafe extern "system" fn cover_scan_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
     if matches!(String::from_utf16_lossy(&class[..len]).as_str(), "Progman" | "WorkerW" | "Shell_TrayWnd" | "Shell_SecondaryTrayWnd") {
         return true.into();
     }
-    let monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+    let mut rect = RECT::default();
+    let has_rect = DwmGetWindowAttribute(hwnd, DWMWA_EXTENDED_FRAME_BOUNDS, &mut rect as *mut _ as *mut _, std::mem::size_of::<RECT>() as u32).is_ok()
+        || GetWindowRect(hwnd, &mut rect).is_ok();
+    if !has_rect {
+        return true.into();
+    }
+    let monitor = MonitorFromRect(&rect, MONITOR_DEFAULTTONULL);
+    if monitor.is_invalid() {
+        return true.into();
+    }
     let mut mi = MONITORINFO { cbSize: std::mem::size_of::<MONITORINFO>() as u32, ..Default::default() };
     if !GetMonitorInfoA(monitor, &mut mi).as_bool() {
         return true.into();
     }
     let screen = mi.rcMonitor;
+    if !rect_intersects_monitor(rect, screen) {
+        return true.into();
+    }
     let origin = (screen.left, screen.top);
     let index = match scan.monitors.iter().position(|m| m.origin == origin) {
         Some(i) => i,
@@ -3223,16 +3354,10 @@ unsafe extern "system" fn cover_scan_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
     if entry.covered {
         return true.into();
     }
-    let mut rect = RECT::default();
-    let has_rect = DwmGetWindowAttribute(hwnd, DWMWA_EXTENDED_FRAME_BOUNDS, &mut rect as *mut _ as *mut _, std::mem::size_of::<RECT>() as u32).is_ok()
-        || GetWindowRect(hwnd, &mut rect).is_ok();
-    if !has_rect {
-        return true.into();
-    }
     entry.rects.push(rect);
     // Small windows (popups, picture-in-picture) above a fullscreen app don't decide whether the
     // monitor is fullscreen; a maximized or monitor-sized window does.
-    let covers = rect.left <= screen.left && rect.top <= screen.top && rect.right >= screen.right && rect.bottom >= screen.bottom;
+    let covers = rect_covers_monitor(rect, screen);
     if covers || IsZoomed(hwnd).as_bool() {
         entry.covered = true;
         entry.fullscreen = crate::utils::is_window_fullscreen(hwnd);
@@ -3997,7 +4122,9 @@ pub fn sync_overlays(app: &AppHandle) {
                 let _ = ov_win.set_size(tauri::PhysicalSize::new(size.width, size.height));
             }
         }
-        if let Ok(hwnd) = hwnd_res { re_assert_topmost(hwnd); }
+        if !crate::direct_flip::is_hidden("overlay") {
+            if let Ok(hwnd) = hwnd_res { re_assert_topmost(hwnd); }
+        }
     }
 }
 
@@ -5435,6 +5562,23 @@ mod tests {
     }
 
     #[test]
+    fn off_screen_minimized_park_rect_does_not_intersect_any_monitor() {
+        use super::rect_intersects_monitor;
+        use windows::Win32::Foundation::RECT;
+
+        let primary = RECT { left: 0, top: 0, right: 1920, bottom: 1080 };
+        let secondary = RECT { left: 1920, top: 0, right: 3840, bottom: 1080 };
+        let parked = RECT { left: -31992, top: -32000, right: -31848, bottom: -31980 };
+
+        assert!(!rect_intersects_monitor(parked, primary));
+        assert!(!rect_intersects_monitor(parked, secondary));
+        assert!(rect_intersects_monitor(RECT { left: 1920, top: 0, right: 3840, bottom: 1080 }, secondary));
+        assert!(rect_intersects_monitor(RECT { left: -100, top: 100, right: 200, bottom: 400 }, primary));
+        // Touching edge only (zero overlap area) does not intersect.
+        assert!(!rect_intersects_monitor(RECT { left: 1920, top: 0, right: 2500, bottom: 600 }, primary));
+    }
+
+    #[test]
     fn window_over_the_panel_strip_counts_as_overlap_on_any_monitor() {
         use super::{rect_overlaps_dock, rect_overlaps_notch};
         use windows::Win32::Foundation::RECT;
@@ -5598,5 +5742,30 @@ mod tests {
         assert!(hover_waits_on_expiry(false, true));
         assert!(!hover_waits_on_expiry(true, true));
         assert!(!hover_waits_on_expiry(false, false));
+    }
+
+    #[test]
+    fn cover_scan_skips_transparent_overlays_and_tolerates_dpi_rounding() {
+        use super::{rect_covers_monitor, should_skip_cover_window};
+        use windows::Win32::Foundation::RECT;
+        use windows::Win32::UI::WindowsAndMessaging::{WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT};
+
+        assert!(should_skip_cover_window(100, 100, 0));
+        assert!(should_skip_cover_window(100, 200, WS_EX_TOOLWINDOW.0));
+        assert!(should_skip_cover_window(100, 200, WS_EX_TRANSPARENT.0));
+        assert!(!should_skip_cover_window(100, 200, 0));
+
+        let screen = RECT { left: 1920, top: 0, right: 3840, bottom: 1080 };
+        // Exact cover and 2px fractional-DPI inset both count as covering.
+        assert!(rect_covers_monitor(screen, screen));
+        assert!(rect_covers_monitor(
+            RECT { left: 1922, top: 2, right: 3838, bottom: 1078 },
+            screen
+        ));
+        // Smaller window (e.g. inset by 3px) does not cover.
+        assert!(!rect_covers_monitor(
+            RECT { left: 1923, top: 0, right: 3840, bottom: 1080 },
+            screen
+        ));
     }
 }

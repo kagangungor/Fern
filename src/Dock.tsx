@@ -276,7 +276,27 @@ interface DockDrive {
 }
 
 function sessionForApp(app: AppInfo, sessions: AppMediaSession[]): AppMediaSession | undefined {
-  const exe = (app.executable || app.path.split(/[\\/]/).pop() || "").toLowerCase().replace(/\.exe$/, "");
+  if (sessions.length === 0) return undefined;
+  const appNameWords = (app.name || "")
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((w) => w.length >= 3);
+  const pathParts = (app.path || "")
+    .toLowerCase()
+    .split(/[\\/]/)
+    .filter(Boolean);
+  const pathDirs = pathParts.slice(0, -1);
+
+  const primaryMatch = sessions.find((s) => {
+    const id = s.app_id.toLowerCase().replace(/\.exe$/, "");
+    const head = id.split(/[.\s_!\\/]+/)[0];
+    const bangTail = id.includes("!") ? id.split("!").pop()?.split(/[.\s_\\/]+/)[0] : undefined;
+    const tokens = [head, bangTail].filter((tok): tok is string => Boolean(tok && tok.length >= 3));
+    return tokens.some((tok) => appNameWords.includes(tok) || pathDirs.includes(tok));
+  });
+  if (primaryMatch) return primaryMatch;
+
+  const exe = (app.executable || pathParts[pathParts.length - 1] || "").toLowerCase().replace(/\.exe$/, "");
   if (!exe) return undefined;
   return sessions.find((s) => s.app_id.toLowerCase().replace(/\.exe$/, "").includes(exe));
 }
@@ -425,6 +445,8 @@ interface DockPreviewTooltipProps {
   onMouseLeave: () => void;
 }
 
+let nextLivePreviewSessionId = 0;
+
 function DockPreviewTooltip({
   app,
   previews,
@@ -482,6 +504,10 @@ function DockPreviewTooltip({
   }, [privacy, showCommActions, previews]);
 
   const isPresent = useIsPresent();
+  const sessionIdRef = useRef<number>(0);
+  if (sessionIdRef.current === 0) {
+    sessionIdRef.current = ++nextLivePreviewSessionId;
+  }
   const surfaceRefs = useRef<Map<number, HTMLDivElement>>(new Map());
   const [fallbackLiveHwnds, setFallbackLiveHwnds] = useState<Set<number>>(() => new Set());
   const hasFallbackLiveRef = useRef(false);
@@ -492,26 +518,36 @@ function DockPreviewTooltip({
   );
   const missingKey = missingHwnds.join(',');
 
-  // Sync DWM fallback opacity fade-out with the 150ms framer-motion exit animation.
+  // Clear only this preview session's DWM thumbnails on unmount so an exiting tooltip
+  // can never wipe out a newer preview's live thumbnails.
+  useEffect(() => {
+    const sid = sessionIdRef.current;
+    return () => {
+      invoke('clear_live_thumbnails', { sessionId: sid }).catch(() => {});
+    };
+  }, []);
+
+  // Sync DWM fallback opacity fade-out with the 120ms framer-motion exit animation.
   useEffect(() => {
     if (isPresent || !hasFallbackLiveRef.current) return;
+    const sid = sessionIdRef.current;
     let cancelled = false;
     let rafId = 0;
     let lastSent = 255;
     const start = performance.now();
-    const duration = 150;
+    const duration = 120;
     const step = (now: number) => {
       if (cancelled) return;
       const progress = Math.min(1, (now - start) / duration);
       const opacity = Math.round(255 * (1 - progress));
       if (opacity !== lastSent) {
         lastSent = opacity;
-        invoke('set_live_thumbnails_opacity', { opacity }).catch(() => {});
+        invoke('set_live_thumbnails_opacity', { opacity, sessionId: sid }).catch(() => {});
       }
       if (progress < 1) {
         rafId = requestAnimationFrame(step);
       } else {
-        invoke('clear_live_thumbnails').catch(() => {});
+        invoke('clear_live_thumbnails', { sessionId: sid }).catch(() => {});
       }
     };
     rafId = requestAnimationFrame(step);
@@ -521,11 +557,15 @@ function DockPreviewTooltip({
     };
   }, [isPresent]);
 
+  const previewMediaNode = renderPreviewMedia ? renderPreviewMedia(app) : null;
+  const hasPreviewMedia = Boolean(previewMediaNode);
+
   useEffect(() => {
     if (!isPresent) return;
+    const sid = sessionIdRef.current;
     if (!missingKey) {
       setFallbackLiveHwnds(new Set());
-      invoke('clear_live_thumbnails').catch(() => {});
+      invoke('clear_live_thumbnails', { sessionId: sid }).catch(() => {});
       return;
     }
     let cancelled = false;
@@ -551,7 +591,11 @@ function DockPreviewTooltip({
       }
       if (targets.length === 0) return;
       try {
-        const active = await invoke<number[]>('set_live_thumbnails', { targets, clientAreaOnly: false });
+        const active = await invoke<number[]>('set_live_thumbnails', {
+          targets,
+          clientAreaOnly: false,
+          sessionId: sid,
+        });
         if (!cancelled && active) setFallbackLiveHwnds(new Set(active));
       } catch {}
     };
@@ -565,22 +609,20 @@ function DockPreviewTooltip({
       cancelAnimationFrame(rafId);
       if (t1) clearTimeout(t1);
       if (t2) clearTimeout(t2);
-      invoke('clear_live_thumbnails').catch(() => {});
     };
-  }, [missingKey, showCommActions]);
+  }, [missingKey, showCommActions, hasPreviewMedia, isPresent]);
 
   return (
     <motion.div
       className={`preview-tooltip ${previews.length > 1 ? 'multi' : ''}`}
-      initial={{ opacity: 0, y: 10, scale: 0.95 }}
-      animate={{ opacity: 1, y: 0, scale: 1 }}
-      exit={{ opacity: 0, scale: 0.95 }}
-      transition={{ duration: 0.15 }}
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      transition={{ duration: 0.12 }}
       onClick={(e) => e.stopPropagation()}
       onMouseEnter={onMouseEnter}
       onMouseLeave={onMouseLeave}
     >
-      {renderPreviewMedia && renderPreviewMedia(app)}
       <div className="preview-items">
         {previews.map((prev, idx) => (
             <div
@@ -686,9 +728,11 @@ function DockPreviewTooltip({
                   })}
                 </div>
               )}
+              {previews.length === 1 && previewMediaNode}
             </div>
         ))}
       </div>
+      {previews.length > 1 && previewMediaNode}
     </motion.div>
   );
 }
@@ -1136,7 +1180,7 @@ const Dock = memo(function Dock() {
       clearInterval(poll);
       cancelAnimationFrame(rafId);
     };
-  }, [pinnedApps, activeApps, isHidden, isExpanded, previewData, scale, rectPollMs, gap, dockSearchEnabled, dockCalendarEnabled, dockTray, dockTaskView, dockRecycle, dockDrives, dockShowDesktop, isAdaptive, dockIconOnly, dockMixedReorder, activeOrder]);
+  }, [pinnedApps, isHidden, isExpanded, previewData, scale, rectPollMs, gap, dockSearchEnabled, dockCalendarEnabled, dockTray, dockTaskView, dockRecycle, dockDrives, dockShowDesktop, isAdaptive, dockIconOnly, dockMixedReorder, activeOrder]);
 
   const refreshDockMode = () => {
     invoke<string>('get_dock_mode_for_window').then(setDockMode).catch(() => {});
@@ -1470,12 +1514,18 @@ const Dock = memo(function Dock() {
     invoke('bring_hwnd_to_front', { hwnd }).catch(() => {});
   };
 
+  const containsWholePhrase = (haystack: string, needle: string) => {
+    if (needle.length < 3 || needle.length > haystack.length) return false;
+    const escaped = needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp(`(^|[^\\p{L}\\p{N}])${escaped}($|[^\\p{L}\\p{N}])`, 'u').test(haystack);
+  };
+
   const isTrayOnly = (app: AppInfo) => {
     if (app.is_running || !app.name) return false;
     const needle = app.name.trim().toLowerCase();
     return trayAppNames.some((label) => {
       const l = label.trim().toLowerCase();
-      return l === needle || l.includes(needle) || needle.includes(l);
+      return l === needle || containsWholePhrase(l, needle) || containsWholePhrase(needle, l);
     });
   };
 
@@ -1488,6 +1538,10 @@ const Dock = memo(function Dock() {
 
   const handleAppClick = async (app: AppInfo) => {
     tourDockAction();
+    if (previewTimerRef.current) clearTimeout(previewTimerRef.current);
+    isPreviewHoveredRef.current = false;
+    setPreviewData(null);
+    invoke('clear_live_thumbnails').catch(() => {});
     try {
       if (app.path === 'start') {
         await invoke('open_app', { appName: 'start' });
@@ -1970,7 +2024,7 @@ const Dock = memo(function Dock() {
       if (previewTimerRef.current) clearTimeout(previewTimerRef.current);
       isPreviewHoveredRef.current = false;
       setPreviewData(null);
-        return;
+      return;
     }
 
     if (previewTimerRef.current) clearTimeout(previewTimerRef.current);
@@ -2015,6 +2069,9 @@ const Dock = memo(function Dock() {
                   if (image) lastPreviewImagesRef.current.set(hwnd, image);
                   return { hwnd, title, image: image || (lastPreviewImagesRef.current.get(hwnd) ?? ""), lastFocused };
                 }
+                // Backend explicitly returned null (e.g. Chromium window delegating to native DWM live preview).
+                lastPreviewImagesRef.current.delete(hwnd);
+                return { hwnd, title, image: "", lastFocused: 0 };
               } catch {}
               return { hwnd, title, image: lastPreviewImagesRef.current.get(hwnd) ?? "", lastFocused: 0 };
             })
@@ -2057,13 +2114,31 @@ const Dock = memo(function Dock() {
     tap: { scale: 0.95 }
   };
 
+  const mediaOptimisticRef = useRef<Map<string, { is_playing: boolean; until: number }>>(new Map());
+  const applyMediaSessions = (incoming: AppMediaSession[]) => {
+    const now = Date.now();
+    const map = mediaOptimisticRef.current;
+    setMediaSessions(
+      incoming.map((s) => {
+        const opt = map.get(s.app_id);
+        if (!opt) return s;
+        if (s.is_playing === opt.is_playing || now >= opt.until) {
+          map.delete(s.app_id);
+          return s;
+        }
+        return { ...s, is_playing: opt.is_playing };
+      })
+    );
+  };
+
   const previewAppId = dockPreviewEnabled ? previewData?.id : undefined;
   useEffect(() => {
     if (!previewAppId) {
+      mediaOptimisticRef.current.clear();
       setMediaSessions([]);
       return;
     }
-    const refresh = () => invoke<AppMediaSession[]>('get_app_media_sessions').then(setMediaSessions).catch(() => {});
+    const refresh = () => invoke<AppMediaSession[]>('get_app_media_sessions').then(applyMediaSessions).catch(() => {});
     refresh();
     const timer = setInterval(refresh, 2000);
     return () => clearInterval(timer);
@@ -2071,9 +2146,28 @@ const Dock = memo(function Dock() {
 
   const controlMedia = (e: React.MouseEvent, session: AppMediaSession, action: 'previous' | 'play_pause' | 'next') => {
     e.stopPropagation();
+    const prevPlaying = session.is_playing;
+    if (action === 'play_pause') {
+      const nextPlaying = !prevPlaying;
+      mediaOptimisticRef.current.set(session.app_id, { is_playing: nextPlaying, until: Date.now() + 900 });
+      setMediaSessions((prev) =>
+        prev.map((s) => (s.app_id === session.app_id ? { ...s, is_playing: nextPlaying } : s))
+      );
+    }
+    const refresh = () => invoke<AppMediaSession[]>('get_app_media_sessions').then(applyMediaSessions).catch(() => {});
     invoke('app_media_control', { appId: session.app_id, action })
-      .then(() => setTimeout(() => invoke<AppMediaSession[]>('get_app_media_sessions').then(setMediaSessions).catch(() => {}), 300))
-      .catch(() => {});
+      .then(() => {
+        setTimeout(refresh, 300);
+        if (action === 'play_pause') setTimeout(refresh, 950);
+      })
+      .catch(() => {
+        if (action === 'play_pause') {
+          mediaOptimisticRef.current.delete(session.app_id);
+          setMediaSessions((prev) =>
+            prev.map((s) => (s.app_id === session.app_id ? { ...s, is_playing: prevPlaying } : s))
+          );
+        }
+      });
   };
 
   const renderAppIcon = (app: AppInfo) => {
@@ -2092,22 +2186,37 @@ const Dock = memo(function Dock() {
   const renderPreviewMedia = (app: AppInfo) => {
     const session = sessionForApp(app, mediaSessions);
     if (!session || !session.title) return null;
+    const playPauseLabel = session.is_playing ? t("media.pause") : t("media.play");
     return (
-      <div className="preview-media" onClick={(e) => e.stopPropagation()}>
-        <div className="preview-media-info">
-          <span className="preview-media-title">{session.title}</span>
-          {session.artist && <span className="preview-media-artist">{session.artist}</span>}
-        </div>
-        <div className="preview-media-controls">
-          <button aria-label={t("media.previous")} onClick={(e) => controlMedia(e, session, 'previous')}><SkipBackIcon size={14} /></button>
-          <button
-            aria-label={session.is_playing ? t("media.pause") : t("media.play")}
-            onClick={(e) => controlMedia(e, session, 'play_pause')}
-          >
-            {session.is_playing ? <PauseIcon size={16} /> : <PlayIcon size={16} />}
-          </button>
-          <button aria-label={t("media.next")} onClick={(e) => controlMedia(e, session, 'next')}><SkipForwardIcon size={14} /></button>
-        </div>
+      <div className="preview-thumbar-actions preview-media-actions" onClick={(e) => e.stopPropagation()}>
+        <button
+          type="button"
+          className="preview-thumbar-btn"
+          title={t("media.previous")}
+          aria-label={t("media.previous")}
+          onClick={(e) => controlMedia(e, session, 'previous')}
+        >
+          <SkipBackIcon size={14} />
+        </button>
+        <button
+          type="button"
+          className={`preview-thumbar-btn${session.is_playing ? ' is-active' : ''}`}
+          title={playPauseLabel}
+          aria-label={playPauseLabel}
+          aria-pressed={session.is_playing}
+          onClick={(e) => controlMedia(e, session, 'play_pause')}
+        >
+          {session.is_playing ? <PauseIcon size={14} /> : <PlayIcon size={14} />}
+        </button>
+        <button
+          type="button"
+          className="preview-thumbar-btn"
+          title={t("media.next")}
+          aria-label={t("media.next")}
+          onClick={(e) => controlMedia(e, session, 'next')}
+        >
+          <SkipForwardIcon size={14} />
+        </button>
       </div>
     );
   };

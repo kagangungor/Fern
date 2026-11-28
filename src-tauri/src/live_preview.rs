@@ -50,9 +50,15 @@ enum HostCommand {
         dest_hwnd_val: isize,
         targets: Vec<LiveThumbnailTarget>,
         client_area_only: bool,
+        session_id: Option<u64>,
     },
-    SetOpacity(u8),
-    ClearAll,
+    SetOpacity {
+        opacity: u8,
+        session_id: Option<u64>,
+    },
+    ClearAll {
+        session_id: Option<u64>,
+    },
 }
 
 enum HostReply {
@@ -68,6 +74,11 @@ struct HostRequest {
 struct HostState {
     thumbnails: HashMap<(isize, isize), ThumbnailRecord>,
     host_windows: HashMap<isize, isize>,
+    host_rects: HashMap<isize, RECT>,
+    host_region_rects: HashMap<isize, Vec<RECT>>,
+    host_visible: HashMap<isize, bool>,
+    active_session: u64,
+    dismissed_session: u64,
     opacity: u8,
 }
 
@@ -76,6 +87,11 @@ impl Default for HostState {
         Self {
             thumbnails: HashMap::new(),
             host_windows: HashMap::new(),
+            host_rects: HashMap::new(),
+            host_region_rects: HashMap::new(),
+            host_visible: HashMap::new(),
+            active_session: 0,
+            dismissed_session: 0,
             opacity: 255,
         }
     }
@@ -222,16 +238,21 @@ fn drain_commands() {
                     dest_hwnd_val,
                     targets,
                     client_area_only,
+                    session_id,
                 } => HostReply::Active(handle_set_thumbnails(
                     &mut state,
                     dest_hwnd_val,
                     targets,
                     client_area_only,
+                    session_id,
                 )),
-                HostCommand::SetOpacity(opacity) => {
-                    HostReply::Unit(handle_set_opacity(&mut state, opacity))
+                HostCommand::SetOpacity {
+                    opacity,
+                    session_id,
+                } => HostReply::Unit(handle_set_opacity(&mut state, opacity, session_id)),
+                HostCommand::ClearAll { session_id } => {
+                    HostReply::Unit(handle_clear_all(&mut state, session_id))
                 }
-                HostCommand::ClearAll => HostReply::Unit(handle_clear_all(&mut state)),
             };
             let _ = req.reply.send(reply);
         }
@@ -298,7 +319,9 @@ fn apply_host_region(host_hwnd: HWND, rects: &[RECT]) {
         }
         if let Some(region) = combined {
             // SetWindowRgn takes ownership of the HRGN on success (non-zero return).
-            if SetWindowRgn(host_hwnd, Some(region), true) == 0 {
+            // Use bRedraw = false so DWM updates the clip region on the next composition
+            // frame without triggering a synchronous GDI erase/repaint flash.
+            if SetWindowRgn(host_hwnd, Some(region), false) == 0 {
                 let _ = DeleteObject(region.into());
             }
         }
@@ -332,12 +355,56 @@ fn fit_rect(handle: isize, dest: RECT) -> RECT {
     }
 }
 
+fn should_accept_set_session(
+    active_session: &mut u64,
+    dismissed_session: u64,
+    session_id: Option<u64>,
+) -> bool {
+    if let Some(sid) = session_id {
+        if sid < *active_session || (sid == *active_session && dismissed_session == sid) {
+            return false;
+        }
+        *active_session = sid;
+    }
+    true
+}
+
+fn should_accept_session_update(active_session: u64, session_id: Option<u64>) -> bool {
+    match session_id {
+        Some(sid) => sid == active_session,
+        None => true,
+    }
+}
+
+fn set_host_visible(state: &mut HostState, dest_hwnd_val: isize, host_hwnd: HWND, visible: bool) {
+    let was_visible = state.host_visible.get(&dest_hwnd_val).copied().unwrap_or(false);
+    if was_visible == visible {
+        return;
+    }
+    state.host_visible.insert(dest_hwnd_val, visible);
+    unsafe {
+        let _ = ShowWindow(
+            host_hwnd,
+            if visible { SW_SHOWNOACTIVATE } else { SW_HIDE },
+        );
+    }
+}
+
 fn handle_set_thumbnails(
     state: &mut HostState,
     dest_hwnd_val: isize,
     targets: Vec<LiveThumbnailTarget>,
     client_area_only: bool,
+    session_id: Option<u64>,
 ) -> Result<Vec<isize>, String> {
+    if !should_accept_set_session(
+        &mut state.active_session,
+        state.dismissed_session,
+        session_id,
+    ) {
+        return Ok(Vec::new());
+    }
+
     let dest_hwnd = HWND(dest_hwnd_val as *mut _);
     unsafe {
         if !IsWindow(Some(dest_hwnd)).as_bool() {
@@ -353,6 +420,9 @@ fn handle_set_thumbnails(
         .filter(|&d| !unsafe { IsWindow(Some(HWND(d as *mut _))).as_bool() })
         .collect();
     for d in dead_dests {
+        state.host_rects.remove(&d);
+        state.host_region_rects.remove(&d);
+        state.host_visible.remove(&d);
         if let Some(h) = state.host_windows.remove(&d) {
             let hwnd = HWND(h as *mut _);
             unsafe {
@@ -393,10 +463,8 @@ fn handle_set_thumbnails(
     if targets.is_empty() {
         if let Some(&host_val) = state.host_windows.get(&dest_hwnd_val) {
             let host_hwnd = HWND(host_val as *mut _);
-            unsafe {
-                if IsWindow(Some(host_hwnd)).as_bool() {
-                    let _ = ShowWindow(host_hwnd, SW_HIDE);
-                }
+            if unsafe { IsWindow(Some(host_hwnd)).as_bool() } {
+                set_host_visible(state, dest_hwnd_val, host_hwnd, false);
             }
         }
         return Ok(Vec::new());
@@ -405,19 +473,24 @@ fn handle_set_thumbnails(
     let host_hwnd = ensure_host_window(state, dest_hwnd_val)?;
 
     let mut dest_rect = RECT::default();
+    let is_currently_visible = state.host_visible.get(&dest_hwnd_val).copied().unwrap_or(false);
     unsafe {
         if GetWindowRect(dest_hwnd, &mut dest_rect).is_ok() {
-            let dest_w = (dest_rect.right - dest_rect.left).max(1);
-            let dest_h = (dest_rect.bottom - dest_rect.top).max(1);
-            let _ = SetWindowPos(
-                host_hwnd,
-                Some(HWND_TOPMOST),
-                dest_rect.left,
-                dest_rect.top,
-                dest_w,
-                dest_h,
-                SWP_NOACTIVATE,
-            );
+            let rect_changed = state.host_rects.get(&dest_hwnd_val) != Some(&dest_rect);
+            if rect_changed || !is_currently_visible {
+                let dest_w = (dest_rect.right - dest_rect.left).max(1);
+                let dest_h = (dest_rect.bottom - dest_rect.top).max(1);
+                let _ = SetWindowPos(
+                    host_hwnd,
+                    Some(HWND_TOPMOST),
+                    dest_rect.left,
+                    dest_rect.top,
+                    dest_w,
+                    dest_h,
+                    SWP_NOACTIVATE,
+                );
+                state.host_rects.insert(dest_hwnd_val, dest_rect);
+            }
         }
     }
 
@@ -521,19 +594,31 @@ fn handle_set_thumbnails(
         }
     }
 
-    unsafe {
-        if !fitted_rects.is_empty() {
+    if !fitted_rects.is_empty() {
+        let region_changed = state.host_region_rects.get(&dest_hwnd_val) != Some(&fitted_rects);
+        if region_changed {
             apply_host_region(host_hwnd, &fitted_rects);
-            let _ = ShowWindow(host_hwnd, SW_SHOWNOACTIVATE);
-        } else {
-            let _ = ShowWindow(host_hwnd, SW_HIDE);
+            state.host_region_rects.insert(dest_hwnd_val, fitted_rects);
         }
+        set_host_visible(state, dest_hwnd_val, host_hwnd, true);
+    } else {
+        set_host_visible(state, dest_hwnd_val, host_hwnd, false);
     }
 
     Ok(successfully_active)
 }
 
-fn handle_set_opacity(state: &mut HostState, opacity: u8) -> Result<(), String> {
+fn handle_set_opacity(
+    state: &mut HostState,
+    opacity: u8,
+    session_id: Option<u64>,
+) -> Result<(), String> {
+    if !should_accept_session_update(state.active_session, session_id) {
+        return Ok(());
+    }
+    if state.opacity == opacity {
+        return Ok(());
+    }
     state.opacity = opacity;
     for record in state.thumbnails.values_mut() {
         record.opacity = opacity;
@@ -547,44 +632,37 @@ fn handle_set_opacity(state: &mut HostState, opacity: u8) -> Result<(), String> 
         }
     }
 
-    for (&dest_val, &host_val) in &state.host_windows {
+    let hosts: Vec<(isize, isize)> = state.host_windows.iter().map(|(&d, &h)| (d, h)).collect();
+    for (dest_val, host_val) in hosts {
         let host_hwnd = HWND(host_val as *mut _);
-        unsafe {
-            if !IsWindow(Some(host_hwnd)).as_bool() {
-                continue;
-            }
-            if opacity == 0 {
-                let _ = ShowWindow(host_hwnd, SW_HIDE);
-            } else {
-                let has_active = state.thumbnails.keys().any(|&(d, _)| d == dest_val);
-                let _ = ShowWindow(
-                    host_hwnd,
-                    if has_active {
-                        SW_SHOWNOACTIVATE
-                    } else {
-                        SW_HIDE
-                    },
-                );
-            }
+        if !unsafe { IsWindow(Some(host_hwnd)).as_bool() } {
+            continue;
         }
+        let should_show = opacity != 0 && state.thumbnails.keys().any(|&(d, _)| d == dest_val);
+        set_host_visible(state, dest_val, host_hwnd, should_show);
     }
 
     Ok(())
 }
 
-fn handle_clear_all(state: &mut HostState) -> Result<(), String> {
+fn handle_clear_all(state: &mut HostState, session_id: Option<u64>) -> Result<(), String> {
+    if !should_accept_session_update(state.active_session, session_id) {
+        return Ok(());
+    }
+    if session_id.is_none() {
+        state.dismissed_session = state.active_session;
+    }
     state.opacity = 255;
     for (_, record) in state.thumbnails.drain() {
         unsafe {
             let _ = DwmUnregisterThumbnail(record.handle);
         }
     }
-    for &host_val in state.host_windows.values() {
+    let hosts: Vec<(isize, isize)> = state.host_windows.iter().map(|(&d, &h)| (d, h)).collect();
+    for (dest_val, host_val) in hosts {
         let host_hwnd = HWND(host_val as *mut _);
-        unsafe {
-            if IsWindow(Some(host_hwnd)).as_bool() {
-                let _ = ShowWindow(host_hwnd, SW_HIDE);
-            }
+        if unsafe { IsWindow(Some(host_hwnd)).as_bool() } {
+            set_host_visible(state, dest_val, host_hwnd, false);
         }
     }
     Ok(())
@@ -594,6 +672,7 @@ pub fn set_live_thumbnails(
     dest_hwnd_val: isize,
     targets: Vec<LiveThumbnailTarget>,
     client_area_only: bool,
+    session_id: Option<u64>,
 ) -> Result<Vec<isize>, String> {
     if !is_composition_enabled() {
         return Err("DWM composition is not enabled".to_string());
@@ -603,28 +682,76 @@ pub fn set_live_thumbnails(
         dest_hwnd_val,
         targets,
         client_area_only,
+        session_id,
     })? {
         HostReply::Active(res) => res,
         HostReply::Unit(_) => Err("Unexpected reply from live preview host".to_string()),
     }
 }
 
-pub fn set_opacity(opacity: u8) -> Result<(), String> {
+pub fn set_opacity(opacity: u8, session_id: Option<u64>) -> Result<(), String> {
     if HOST_DISPATCHER.get().is_none() {
         return Ok(());
     }
-    match send_command(HostCommand::SetOpacity(opacity))? {
+    match send_command(HostCommand::SetOpacity {
+        opacity,
+        session_id,
+    })? {
         HostReply::Unit(res) => res,
         HostReply::Active(_) => Err("Unexpected reply from live preview host".to_string()),
     }
 }
 
-pub fn clear_all_thumbnails() -> Result<(), String> {
+pub fn clear_all_thumbnails(session_id: Option<u64>) -> Result<(), String> {
     if HOST_DISPATCHER.get().is_none() {
         return Ok(());
     }
-    match send_command(HostCommand::ClearAll)? {
+    match send_command(HostCommand::ClearAll { session_id })? {
         HostReply::Unit(res) => res,
         HostReply::Active(_) => Err("Unexpected reply from live preview host".to_string()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn newer_session_supersedes_older_set_and_rejects_stale_updates() {
+        let mut active = 0u64;
+        let dismissed = 0u64;
+        assert!(should_accept_set_session(&mut active, dismissed, Some(1)));
+        assert_eq!(active, 1);
+
+        assert!(should_accept_set_session(&mut active, dismissed, Some(2)));
+        assert_eq!(active, 2);
+
+        // Stale set from session 1 must be ignored.
+        assert!(!should_accept_set_session(&mut active, dismissed, Some(1)));
+        assert_eq!(active, 2);
+
+        // Stale opacity/clear from exiting session 1 must be ignored.
+        assert!(!should_accept_session_update(active, Some(1)));
+        // Current session 2 updates are accepted.
+        assert!(should_accept_session_update(active, Some(2)));
+        // Unscoped global clear/update is always accepted.
+        assert!(should_accept_session_update(active, None));
+    }
+
+    #[test]
+    fn repeated_global_clears_dismiss_current_session_without_blocking_next_session() {
+        let mut active = 0u64;
+        let mut dismissed = 0u64;
+
+        assert!(should_accept_set_session(&mut active, dismissed, Some(1)));
+        // Simulate clicking dock icons multiple times (unscoped clear_live_thumbnails).
+        for _ in 0..5 {
+            dismissed = active;
+        }
+        // Late in-flight set from dismissed session 1 is rejected.
+        assert!(!should_accept_set_session(&mut active, dismissed, Some(1)));
+        // Next preview session (2) must be accepted immediately.
+        assert!(should_accept_set_session(&mut active, dismissed, Some(2)));
+        assert_eq!(active, 2);
     }
 }

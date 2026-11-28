@@ -145,6 +145,9 @@ export function useSettings() {
   const [memorySaver, setMemorySaver] = useState(
     () => localStorage.getItem("fern-memory-saver") === "true"
   );
+  const [directFlipProtection, setDirectFlipProtection] = useState(
+    () => localStorage.getItem("fern-direct-flip-protection") !== "false"
+  );
   const [webviewDisableGpu, setWebviewDisableGpu] = useState(
     () => localStorage.getItem("fern-webview-disable-gpu") === "true"
   );
@@ -339,6 +342,7 @@ export function useSettings() {
       apply(getVal("fern-corners-enabled"), setCornersEnabled, readBool);
       apply(getVal("fern-time-format-24h"), setTimeFormat24h, readBool);
       apply(getVal("fern-memory-saver"), setMemorySaver, readBool);
+      apply(getVal("fern-direct-flip-protection"), setDirectFlipProtection, readBool);
       apply(getVal("fern-webview-disable-gpu"), setWebviewDisableGpu, readBool);
       apply(getVal("fern-show-update-indicator"), setShowUpdateIndicator, readBool);
       apply(getVal("fern-auto-update"), setAutoUpdate, readBool);
@@ -553,6 +557,7 @@ export function useSettings() {
     "fern-time-format-24h": setTimeFormat24h,
     "fern-week-start": (v: string) => setWeekStart((v as "auto" | "sunday" | "monday") || "auto"),
     "fern-memory-saver": setMemorySaver,
+    "fern-direct-flip-protection": (v) => setDirectFlipProtection(v !== false && v !== "false"),
     "fern-webview-disable-gpu": (v) => setWebviewDisableGpu(v === true || v === "true"),
     "fern-low-battery-threshold": setLowBatteryThreshold,
     "fern-scale": setScale,
@@ -940,6 +945,12 @@ export function useSettings() {
     const next = !memorySaver;
     setMemorySaver(next);
     saveSetting("fern-memory-saver", String(next));
+  };
+
+  const toggleDirectFlipProtection = () => {
+    const next = !directFlipProtection;
+    setDirectFlipProtection(next);
+    saveSetting("fern-direct-flip-protection", String(next));
   };
 
   const toggleWebviewDisableGpu = () => {
@@ -1470,6 +1481,8 @@ export function useSettings() {
     changeWeekStart,
     memorySaver,
     toggleMemorySaver,
+    directFlipProtection,
+    toggleDirectFlipProtection,
     webviewDisableGpu,
     toggleWebviewDisableGpu,
     showUpdateIndicator,

@@ -78,6 +78,14 @@ export function readRememberedPanel(available: readonly PanelId[]): PanelId | nu
   }
 }
 
+export function resolveInitialHoverPanel(
+  available: readonly PanelId[],
+  remembered: PanelId | null,
+): PanelId {
+  if (remembered && available.includes(remembered)) return remembered;
+  return available[0] ?? "status";
+}
+
 export function saveRememberedPanel(panel: string): void {
   if (!(DEFAULT_PANEL_ORDER as readonly string[]).includes(panel)) return;
   try {

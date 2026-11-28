@@ -629,13 +629,24 @@ pub fn schedule_taskbar_layout_refresh() {
     });
 }
 
+fn is_bridge_tray_icon(automation_id: &str) -> bool {
+    let id = automation_id.trim();
+    id.eq_ignore_ascii_case("NotifyItemIcon")
+        || id
+            .get(..10)
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("NotifyIcon"))
+}
+
 fn collect_tray_elements(automation: &IUIAutomation) -> Vec<(String, IUIAutomationElement)> {
     let mut out = Vec::new();
     unsafe {
         let Ok(cond) = automation.CreateTrueCondition() else {
             return out;
         };
-        let mut roots = Vec::new();
+        // (hwnd, is_xaml_taskbar_bridge): DesktopWindowContentBridge hosts the entire Windows 11
+        // taskbar (Start, Search, all pinned app buttons, clock, language indicator, etc.), so we
+        // must only accept real notification-area icons from it.
+        let mut roots: Vec<(HWND, bool)> = Vec::new();
         if let Ok(tray) = find_window(c"Shell_TrayWnd") {
             let bridge = FindWindowExA(
                 Some(tray),
@@ -645,7 +656,7 @@ fn collect_tray_elements(automation: &IUIAutomation) -> Vec<(String, IUIAutomati
             )
             .unwrap_or_default();
             if !bridge.0.is_null() {
-                roots.push(bridge);
+                roots.push((bridge, true));
             }
             let notify = FindWindowExA(
                 Some(tray),
@@ -655,15 +666,15 @@ fn collect_tray_elements(automation: &IUIAutomation) -> Vec<(String, IUIAutomati
             )
             .unwrap_or_default();
             if !notify.0.is_null() {
-                roots.push(notify);
+                roots.push((notify, false));
             }
         }
         if let Some(overflow) = find_overflow_window() {
             if IsWindowVisible(overflow).as_bool() {
-                roots.push(overflow);
+                roots.push((overflow, false));
             }
         }
-        for root_hwnd in roots {
+        for (root_hwnd, is_bridge) in roots {
             let Ok(root) = automation.ElementFromHandle(root_hwnd) else {
                 continue;
             };
@@ -675,6 +686,12 @@ fn collect_tray_elements(automation: &IUIAutomation) -> Vec<(String, IUIAutomati
                 let Ok(el) = arr.GetElement(i) else {
                     continue;
                 };
+                if is_bridge {
+                    let aid = el.CurrentAutomationId().map(|s| s.to_string()).unwrap_or_default();
+                    if !is_bridge_tray_icon(&aid) {
+                        continue;
+                    }
+                }
                 let name = el.CurrentName().map(|s| s.to_string()).unwrap_or_default();
                 let trimmed = name.trim();
                 if !trimmed.is_empty() && !is_system_tray_label(trimmed) {
@@ -697,10 +714,37 @@ fn is_system_tray_label(name: &str) -> bool {
     )
 }
 
+fn contains_whole_phrase(haystack: &str, needle: &str) -> bool {
+    if needle.len() < 3 || needle.len() > haystack.len() {
+        return false;
+    }
+    let mut start = 0;
+    while let Some(pos) = haystack[start..].find(needle) {
+        let abs = start + pos;
+        let end = abs + needle.len();
+        let before_ok = haystack[..abs]
+            .chars()
+            .next_back()
+            .is_none_or(|c| !c.is_alphanumeric());
+        let after_ok = haystack[end..]
+            .chars()
+            .next()
+            .is_none_or(|c| !c.is_alphanumeric());
+        if before_ok && after_ok {
+            return true;
+        }
+        start = abs + needle.chars().next().map_or(1, char::len_utf8);
+    }
+    false
+}
+
 pub(crate) fn matches_tray_name(tray_label: &str, app_name: &str) -> bool {
     let tray = tray_label.trim().to_ascii_lowercase();
     let app = app_name.trim().to_ascii_lowercase();
-    !tray.is_empty() && !app.is_empty() && (tray == app || tray.contains(&app) || app.contains(&tray))
+    if tray.is_empty() || app.is_empty() {
+        return false;
+    }
+    tray == app || contains_whole_phrase(&tray, &app) || contains_whole_phrase(&app, &tray)
 }
 
 pub fn list_tray_app_names() -> Vec<String> {
@@ -753,6 +797,20 @@ mod tests {
     fn matches_tray_name_case_insensitively() {
         assert!(matches_tray_name("Discord - 2 unread", "Discord"));
         assert!(matches_tray_name("Steam", "steam"));
+        assert!(matches_tray_name("Telegram", "Telegram Desktop"));
         assert!(!matches_tray_name("Show hidden icons", "Discord"));
+        assert!(!matches_tray_name("TR", "Control Panel"));
+        assert!(!matches_tray_name("AI", "Mail"));
+        assert!(!matches_tray_name("Arc", "Search"));
+    }
+
+    #[test]
+    fn bridge_filter_keeps_only_notify_icons() {
+        assert!(is_bridge_tray_icon("NotifyItemIcon"));
+        assert!(is_bridge_tray_icon("NotifyIconGeneratedAumid_12345"));
+        assert!(!is_bridge_tray_icon("Appid: Chrome"));
+        assert!(!is_bridge_tray_icon("StartButton"));
+        assert!(!is_bridge_tray_icon("SystemTrayIcon"));
+        assert!(!is_bridge_tray_icon(""));
     }
 }

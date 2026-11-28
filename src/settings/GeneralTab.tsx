@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Power, Download, Clock, CalendarDays, BatteryWarning, RefreshCw, LogOut, Languages, MemoryStick, Cpu } from "lucide-react";
+import { Power, Download, Clock, CalendarDays, BatteryWarning, RefreshCw, LogOut, Languages, MemoryStick, Cpu, Gamepad2 } from "lucide-react";
 import { SettingRow } from "./SettingRow";
 import { SettingSection } from "./SettingSection";
 import { Dropdown } from "./Dropdown";
@@ -14,6 +14,8 @@ interface GeneralTabProps {
   toggleTimeFormat24h: () => void;
   memorySaver: boolean;
   toggleMemorySaver: () => void;
+  directFlipProtection: boolean;
+  toggleDirectFlipProtection: () => void;
   webviewDisableGpu: boolean;
   toggleWebviewDisableGpu: () => void;
   showUpdateIndicator: boolean;
@@ -34,6 +36,8 @@ export function GeneralTab({
   toggleTimeFormat24h,
   memorySaver,
   toggleMemorySaver,
+  directFlipProtection,
+  toggleDirectFlipProtection,
   webviewDisableGpu,
   toggleWebviewDisableGpu,
   showUpdateIndicator,
@@ -97,6 +101,17 @@ export function GeneralTab({
         >
           <label className="toggle-switch">
             <input type="checkbox" checked={memorySaver} onChange={toggleMemorySaver} />
+            <span className="slider"></span>
+          </label>
+        </SettingRow>
+
+        <SettingRow
+          icon={Gamepad2}
+          label={t("general.directFlipProtection")}
+          desc={t("general.directFlipProtection.desc")}
+        >
+          <label className="toggle-switch">
+            <input type="checkbox" checked={directFlipProtection} onChange={toggleDirectFlipProtection} />
             <span className="slider"></span>
           </label>
         </SettingRow>

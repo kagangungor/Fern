@@ -92,7 +92,7 @@ body {
   position: absolute;
   bottom: calc(100% + 20px);
   left: 50%;
-  transform: translateX(-50%) !important;
+  transform: translateX(-50%);
   background: rgba(22, 22, 26, 0.88);
   backdrop-filter: blur(28px) saturate(1.4);
   -webkit-backdrop-filter: blur(28px) saturate(1.4);
@@ -137,67 +137,6 @@ body {
   -ms-overflow-style: none;
 }
 
-.preview-media {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  width: 100%;
-  box-sizing: border-box;
-  padding: 4px 8px 2px;
-}
-
-.preview-media-info {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  flex: 1;
-}
-
-.preview-media-title,
-.preview-media-artist {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  max-width: 180px;
-}
-
-.preview-media-title {
-  font-size: 12px;
-  font-weight: 600;
-  color: rgba(255, 255, 255, 0.95);
-}
-
-.preview-media-artist {
-  font-size: 11px;
-  color: rgba(255, 255, 255, 0.55);
-}
-
-.preview-media-controls {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.preview-media-controls button {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 26px;
-  height: 26px;
-  padding: 0;
-  border: none;
-  border-radius: 50%;
-  background: transparent;
-  color: rgba(255, 255, 255, 0.9);
-  cursor: pointer;
-  transition: background 0.15s ease;
-}
-
-.preview-media-controls button:hover {
-  background: rgba(255, 255, 255, 0.15);
-}
-
 .preview-items::-webkit-scrollbar {
   display: none;
 }
@@ -232,6 +171,7 @@ body {
 
 .preview-close-btn {
   position: relative;
+  box-sizing: border-box;
   background: rgba(255, 255, 255, 0.08);
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.15);
   border: none;
@@ -270,8 +210,9 @@ body {
 }
 
 .preview-close-btn svg {
-  width: 9px;
-  height: 9px;
+  width: 10px;
+  height: 10px;
+  flex-shrink: 0;
   display: block;
   pointer-events: none;
 }
@@ -1143,6 +1084,11 @@ body {
   justify-content: center;
   gap: 6px;
   padding-top: 2px;
+}
+
+.preview-tooltip.multi > .preview-media-actions {
+  padding: 0 4px 6px;
+  margin-top: -2px;
 }
 
 .preview-thumbar-btn {

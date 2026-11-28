@@ -204,6 +204,7 @@ Example:
 | `fern-language` | `"system"` / language code, e.g. `"en"` | `"system"` | UI language. `"system"` follows the Windows display language and falls back to English when that language has no translation. Missing keys in a translation fall back to English. Translations live in `src/locales/<code>.json` and are registered in `src/i18n.ts` and `src-tauri/src/i18n.rs` (tray menu). Calendar dates and times follow this language too. |
 | `fern-tour-seen` | `"1"` | unset | Set once the first-run tour has been finished or skipped. Delete it to see the tour again, or use Settings > About > Replay Tour. |
 | `fern-memory-saver` | `"true"` / `"false"` | `"false"` | While the user is away for a minute or the session is locked, empty the working sets of Fern and its WebView2 processes and slow down background polling. Settings > General > Memory Saver. |
+| `fern-direct-flip-protection` | `"true"` / `"false"` | `"true"` | Natively hides Smart/Peek notch and dock windows and the HUD overlay (`ShowWindow(SW_HIDE)`) while a fullscreen app covers their monitor to preserve DWM Direct-Flip, and slows Fern's background polling without trimming memory. Settings > General > Fullscreen Direct-Flip Protection. |
 | `fern-webview-disable-gpu` | `"true"` / `"false"` | `"false"` | Software rendering for all webviews: frees the GPU process, but animations cost more CPU. Settings > General > Disable WebView GPU (read once on startup, so restart Fern after changing it). |
 
 ### Internal (Do Not Edit Manually)

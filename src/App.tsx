@@ -54,6 +54,7 @@ import {
   panelScrollStep,
   readRememberedPanel,
   resolveCcLayout,
+  resolveInitialHoverPanel,
   saveRememberedPanel,
   type CcKind,
   type PanelId,
@@ -1601,7 +1602,7 @@ function App() {
   // Music shifts position based on playing state:
   // Playing: command-center → music → status → calendar (active, near command-center)
   // Paused:  command-center → status → music → calendar (secondary, after status)
-  const availableNotchModes = () => {
+  const availableNotchModes = (keepCurrentStatus = true) => {
     const musicBeforeStatus = isPlaying && mediaInfo.has_media && settingsMusicModeEnabled;
     const modes: PanelId[] = panelOrder
       ? [...panelOrder]
@@ -1610,7 +1611,7 @@ function App() {
         : ['command-center', 'status', 'music', 'calendar', 'shelf', 'ai'];
     const noStatusWidgets = !panelStatus || statusWidgets.left.length + statusWidgets.right.length === 0;
     return modes.filter(m => {
-      if (m === 'status' && noStatusWidgets && fernMode !== 'status') return false;
+      if (m === 'status' && noStatusWidgets && (!keepCurrentStatus || fernMode !== 'status')) return false;
       if (m === 'music' && (!settingsMusicModeEnabled || !mediaInfo.has_media)) return false;
       if (m === 'calendar' && !productivityEnabled) return false;
       if (m === 'shelf' && (!isNotchWindow || settingsLegacyMode || !panelShelf)) return false;
@@ -2613,7 +2614,7 @@ function App() {
     if (fernMode === 'status') return 36;
     if (isMusicMode && isHovered) {
       const hasProgressBar = (mediaInfo.duration_ms ?? 0) > 0;
-      let h = mediaLayout === 'compact' ? (hasProgressBar ? 132 : 116) : 120;
+      let h = mediaLayout === 'compact' ? (hasProgressBar ? 146 : 126) : 120;
       if (mediaLayout === 'compact' && compactVolumeExpanded) {
         h += 36;
       }
@@ -2694,13 +2695,12 @@ function App() {
           clearTimeout(shelfCollapseTimer.current);
           setIsHovered(true);
           if (!tourActive && fernMode !== 'ai' && !shouldPreserveModeOnHover(fernMode)) {
-            const available = availableNotchModes();
+            const available = availableNotchModes(false);
             const remembered = settingsRememberMode
               ? (rememberedModeRef.current ?? readRememberedPanel(available))
               : null;
             if (agentNeedsYou) setFernMode('agent');
-            else if (remembered && available.includes(remembered)) setFernMode(remembered);
-            else setFernMode(mediaInfo.has_media && isPlaying ? 'music' : 'status');
+            else setFernMode(resolveInitialHoverPanel(available, remembered));
           }
         }}
         onHoverEnd={() => {

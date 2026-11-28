@@ -161,6 +161,8 @@ function SettingsApp() {
               toggleTimeFormat24h={settings.toggleTimeFormat24h}
               memorySaver={settings.memorySaver}
               toggleMemorySaver={settings.toggleMemorySaver}
+              directFlipProtection={settings.directFlipProtection}
+              toggleDirectFlipProtection={settings.toggleDirectFlipProtection}
               webviewDisableGpu={settings.webviewDisableGpu}
               toggleWebviewDisableGpu={settings.toggleWebviewDisableGpu}
               showUpdateIndicator={settings.showUpdateIndicator}

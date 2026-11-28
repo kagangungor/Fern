@@ -176,6 +176,7 @@ pub async fn init_dock_window(app: &AppHandle, dock_win: tauri::WebviewWindow, m
         let _ = dock_win.set_position(tauri::PhysicalPosition::new(-32000, -32000));
     }
     let _ = dock_win.show();
+    crate::direct_flip::clear_hidden(&label);
     if let Ok(hwnd) = dock_win.hwnd() { re_assert_topmost(hwnd); }
 
     // 2. Register as appbar (fixed) or manually position (auto-hide)
@@ -808,6 +809,8 @@ fn open_with_explorer(target: &str) {
 
 /// Opens a path, shortcut or shell app id through the shell.
 fn launch_path(path: &str, args: Option<&str>) {
+    // ShellExecuteW and IShellFolder (find_aumid_by_family) require STA COM on worker threads.
+    let _com = crate::utils::ComGuard::sta();
     unsafe {
         use windows::Win32::UI::Shell::ShellExecuteW;
         use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
@@ -834,7 +837,9 @@ fn launch_path(path: &str, args: Option<&str>) {
                 SW_SHOWNORMAL,
             );
             if res.0 as usize <= 32 {
-                eprintln!("Failed to open {}: error code {}", target, res.0 as usize);
+                let msg = format!("launch_path: failed to open {} (error {})", target, res.0 as usize);
+                eprintln!("{msg}");
+                crate::diagnostics::log(&msg);
                 if target.starts_with("shell:AppsFolder\\") {
                     open_with_explorer(&target);
                 }
@@ -859,8 +864,10 @@ fn launch_path(path: &str, args: Option<&str>) {
             );
             
             if res.0 as usize <= 32 {
-                eprintln!("Failed to open UWP app {}: error code {}", uwp_cmd, res.0 as usize);
-                if exact.is_some() {
+                let msg = format!("launch_path: failed to open UWP app {} (error {})", uwp_cmd, res.0 as usize);
+                eprintln!("{msg}");
+                crate::diagnostics::log(&msg);
+                if uwp_cmd.starts_with("shell:AppsFolder\\") {
                     open_with_explorer(&uwp_cmd);
                 }
             }
@@ -898,7 +905,9 @@ fn launch_path(path: &str, args: Option<&str>) {
         );
         
         if res.0 as usize <= 32 {
-            eprintln!("Failed to open app {}: error code {}", final_path, res.0 as usize);
+            let msg = format!("launch_path: failed to open app {} (error {})", final_path, res.0 as usize);
+            eprintln!("{msg}");
+            crate::diagnostics::log(&msg);
         }
     }
 }
@@ -1217,11 +1226,14 @@ pub async fn focus_window(app: AppHandle, hwnd: isize) {
                 // entry, then minimize IMMEDIATELY and resize/PNG-encode on a background thread so
                 // clicking the dock icon feels instantaneous.
                 let hwnd_key = hwnd.0 as isize;
-                let has_fresh_cache = crate::state::THUMBNAIL_CACHE
-                    .get()
-                    .and_then(|c| c.lock().ok())
-                    .and_then(|g| g.get(&hwnd_key).map(|(_, ts)| *ts))
-                    .is_some_and(|ts| crate::utils::get_now_ms().saturating_sub(ts) < 5_000);
+                let skip_gdi_snapshot = crate::utils::is_chrome_window(hwnd)
+                    && crate::live_preview::is_composition_enabled();
+                let has_fresh_cache = skip_gdi_snapshot
+                    || crate::state::THUMBNAIL_CACHE
+                        .get()
+                        .and_then(|c| c.lock().ok())
+                        .and_then(|g| g.get(&hwnd_key).map(|(_, ts)| *ts))
+                        .is_some_and(|ts| crate::utils::get_now_ms().saturating_sub(ts) < 5_000);
                 let raw_snapshot = if has_fresh_cache {
                     None
                 } else {
@@ -1418,6 +1430,7 @@ pub fn is_aumid_path(path: &str) -> bool {
     }
     if p.contains(':') { return false; }
     if p.to_lowercase().ends_with(".exe") { return false; }
+    if !p.contains('.') && !p.contains('!') { return false; }
     if std::path::Path::new(p).exists() { return false; }
     true
 }
@@ -2166,7 +2179,7 @@ pub async fn load_pinned_apps(app: AppHandle) -> Vec<AppInfo> {
 
     vec![
         AppInfo { name: crate::taskbar_pins::shell_app_name("Microsoft.Windows.Explorer", "File Explorer"), path: "C:\\Windows\\explorer.exe".into(), icon: None, is_running: false, hwnd: None, executable: Some("explorer.exe".into()), all_hwnds: None, args: None },
-        AppInfo { name: "Microsoft Edge".into(), path: "msedge".into(), icon: None, is_running: false, hwnd: None, executable: Some("msedge.exe".into()), all_hwnds: None, args: None },
+        AppInfo { name: "Microsoft Edge".into(), path: "msedge.exe".into(), icon: None, is_running: false, hwnd: None, executable: Some("msedge.exe".into()), all_hwnds: None, args: None },
         AppInfo { name: crate::taskbar_pins::shell_app_name("Microsoft.WindowsNotepad_8wekyb3d8bbwe!App", "Notepad"), path: "notepad.exe".into(), icon: None, is_running: false, hwnd: None, executable: Some("notepad.exe".into()), all_hwnds: None, args: None },
         AppInfo { name: "Settings".into(), path: "fern-settings".into(), icon: None, is_running: false, hwnd: None, executable: None, all_hwnds: None, args: None },
     ]
@@ -3532,6 +3545,14 @@ pub async fn capture_window_thumbnail(hwnd: isize, max_width: u32, max_height: u
                 .and_then(|g| g.get(&hwnd_key).cloned())
         };
 
+        // Chromium/Electron windows (Chrome, Brave, Helium, Spotify, Discord, Antigravity, etc.)
+        // skip PrintWindow and fall back to screen BitBlt, which bakes the topmost dock and preview
+        // tooltip into the thumbnail (and poisons THUMBNAIL_CACHE when minimized). Use the native
+        // DWM live thumbnail host for both active and minimized states whenever DWM is enabled.
+        if crate::utils::is_chrome_window(hwnd) && crate::live_preview::is_composition_enabled() {
+            return None;
+        }
+
         if is_minimized {
             // Minimized windows can't be captured by PrintWindow or WGC without flashing on screen.
             // Return the cached PNG immediately; if empty (cold start), the frontend uses the DWM
@@ -4393,6 +4414,7 @@ mod pwa_icon_tests {
         assert!(is_aumid_path("c:.users.user.appdata.local.capcut.apps.9.7.0.4153.capcut.exe"));
         assert!(!is_aumid_path("C:\\Windows\\explorer.exe"));
         assert!(!is_aumid_path("msedge.exe"));
+        assert!(!is_aumid_path("msedge"));
         assert!(!is_aumid_path(""));
 
         assert_eq!(
@@ -4957,28 +4979,36 @@ pub async fn set_live_thumbnails(
     window: tauri::Window,
     targets: Vec<crate::live_preview::LiveThumbnailTarget>,
     client_area_only: Option<bool>,
+    session_id: Option<u64>,
 ) -> Result<Vec<isize>, String> {
     let dest_hwnd = window.hwnd().map_err(|e| e.to_string())?.0 as isize;
     let client_only = client_area_only.unwrap_or(false);
     tauri::async_runtime::spawn_blocking(move || {
-        crate::live_preview::set_live_thumbnails(dest_hwnd, targets, client_only)
+        crate::live_preview::set_live_thumbnails(dest_hwnd, targets, client_only, session_id)
     })
     .await
     .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-pub async fn clear_live_thumbnails() -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(crate::live_preview::clear_all_thumbnails)
-        .await
-        .map_err(|e| e.to_string())?
+pub async fn clear_live_thumbnails(session_id: Option<u64>) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::live_preview::clear_all_thumbnails(session_id)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-pub async fn set_live_thumbnails_opacity(opacity: u8) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || crate::live_preview::set_opacity(opacity))
-        .await
-        .map_err(|e| e.to_string())?
+pub async fn set_live_thumbnails_opacity(
+    opacity: u8,
+    session_id: Option<u64>,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::live_preview::set_opacity(opacity, session_id)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]

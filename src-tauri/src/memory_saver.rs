@@ -35,11 +35,34 @@ const STARTUP_GRACE_MS: u64 = 30_000;
 const RELAXED_FACTOR: u32 = 4;
 
 static RELAXED: AtomicBool = AtomicBool::new(false);
+static FULLSCREEN_RELAXED: AtomicBool = AtomicBool::new(false);
 static TRIM_SOON: AtomicBool = AtomicBool::new(false);
 
 /// How long a polling loop with the normal interval `base` should sleep right now.
+/// Stretches both while idle/locked (Memory Saver) and while a fullscreen app is active
+/// under DWM Direct-Flip protection.
 pub fn poll_interval(base: Duration) -> Duration {
-    if RELAXED.load(Ordering::Relaxed) { base * RELAXED_FACTOR } else { base }
+    if RELAXED.load(Ordering::Relaxed) || FULLSCREEN_RELAXED.load(Ordering::Relaxed) {
+        base * RELAXED_FACTOR
+    } else {
+        base
+    }
+}
+
+/// Like `poll_interval`, but ignores `FULLSCREEN_RELAXED` so the visibility loop itself
+/// stays responsive to Alt+Tab and fullscreen exits.
+pub fn poll_interval_idle_only(base: Duration) -> Duration {
+    if RELAXED.load(Ordering::Relaxed) {
+        base * RELAXED_FACTOR
+    } else {
+        base
+    }
+}
+
+/// Toggles fullscreen polling relaxation without trimming working sets and without being
+/// cleared by `note_input()` (games produce continuous mouse/keyboard input).
+pub fn set_fullscreen_relaxed(active: bool) {
+    FULLSCREEN_RELAXED.store(active, Ordering::Relaxed);
 }
 
 /// Called from the input hooks, so the loops are back at full speed on the first input rather than
@@ -361,5 +384,17 @@ mod tests {
             (6, 99, "msedgewebview2.exe".to_string()),
         ];
         assert_eq!(trim_targets(1, &processes), vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn fullscreen_relax_stretches_poll_interval_and_survives_input() {
+        let base = Duration::from_millis(100);
+        RELAXED.store(false, Ordering::Relaxed);
+        set_fullscreen_relaxed(true);
+        note_input();
+        assert_eq!(poll_interval(base), base * RELAXED_FACTOR);
+        assert_eq!(poll_interval_idle_only(base), base);
+        set_fullscreen_relaxed(false);
+        assert_eq!(poll_interval(base), base);
     }
 }

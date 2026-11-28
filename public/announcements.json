@@ -1,14 +1,14 @@
 [
   {
-    "id": "fern-1.7.2",
+    "id": "fern-2.0.0",
     "level": "info",
     "title": {
-      "en": "Fern 1.7.2 — Submenu Focus, Maximize Flash & Dual-Monitor Smart Mode Fixes",
-      "tr": "Fern 1.7.2 — Alt Menü Odağı, Maximize Parlaması ve Çift Monitör Akıllı Mod Düzeltmeleri"
+      "en": "Fern 2.0.0 — Quick Launcher, Notch AI Chat & Direct-Flip Protection",
+      "tr": "Fern 2.0.0 — Hızlı Başlatıcı, Çentik Yapay Zeka Sohbeti ve Direct-Flip Koruması"
     },
     "body": {
-      "en": "Fixed Dock right-click submenu closing when moving up to Task Manager on laptops and scaled displays, eliminated the brief white flash when maximizing the Settings window, and made switching Smart Dock and Notch between monitors instant with cross-monitor handoff and stale-hover fixes.",
-      "tr": "Laptop ve ölçekli ekranlarda Dock sağ tık alt menüsünde Görev Yöneticisi'ne geçerken menünün kapanması düzeltildi, Ayarlar penceresi büyütülürken oluşan anlık beyaz ekran parlaması giderildi ve çift monitörde Akıllı Dock ile Çentik geçişleri monitörler arası anlık devir ve takılı hover düzeltmeleriyle hızlandırıldı."
+      "en": "Meet Fern's built-in Quick Launcher (apps, Everything file search, calculator, and system commands — no PowerToys needed), chat with Claude, ChatGPT, or Gemini right from the notch with screenshot attachments and local CLI support, and game with zero overhead thanks to native Fullscreen Direct-Flip Protection.",
+      "tr": "Fern'in dahili Hızlı Başlatıcısı ile tanışın (uygulamalar, Everything dosya araması, hesap makinesi ve sistem komutları — PowerToys gerektirmez), ekran görüntüsü ekleme ve yerel CLI desteğiyle doğrudan çentikten Claude, ChatGPT veya Gemini ile sohbet edin ve yerel Tam Ekran Direct-Flip Koruması sayesinde oyunlarda sıfır gecikme yaşayın."
     }
   }
 ]

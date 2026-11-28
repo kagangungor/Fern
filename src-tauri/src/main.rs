@@ -31,6 +31,7 @@ mod shelf;
 mod shelf_preview;
 mod on_demand_windows;
 mod memory_saver;
+mod direct_flip;
 mod webview_args;
 mod window_region;
 mod buds;

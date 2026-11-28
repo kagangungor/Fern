@@ -24,6 +24,18 @@ impl ComGuard {
             initialized: unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }.is_ok(),
         }
     }
+
+    pub fn sta() -> Self {
+        use windows::Win32::System::Com::{
+            CoInitializeEx, COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE,
+        };
+        Self {
+            initialized: unsafe {
+                CoInitializeEx(None, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE)
+            }
+            .is_ok(),
+        }
+    }
 }
 
 impl Drop for ComGuard {
@@ -1149,7 +1161,7 @@ fn wgc_allowed(hwnd: HWND) -> bool {
     wgc_allowed_with_state(&TOTAL, map, hwnd.0 as isize, now)
 }
 
-fn is_chrome_window(hwnd: HWND) -> bool {
+pub(crate) fn is_chrome_window(hwnd: HWND) -> bool {
     let mut buf = [0u16; 64];
     let len = unsafe { windows::Win32::UI::WindowsAndMessaging::GetClassNameW(hwnd, &mut buf) }.max(0) as usize;
     String::from_utf16_lossy(&buf[..len]).starts_with("Chrome_WidgetWin")
@@ -1452,6 +1464,14 @@ pub fn image_file_to_base64(path: &str) -> Option<String> {
     Some(format!("data:image/png;base64,{}", general_purpose::STANDARD.encode(&png)))
 }
 
+/// True when a maximized window still has standard window chrome (caption or resize frame),
+/// distinguishing normal maximized apps (including custom-chrome browsers) from borderless
+/// fullscreen windows that happen to retain `WS_MAXIMIZE` / `IsZoomed`.
+pub fn is_captioned_maximized(is_maximized: bool, style: u32) -> bool {
+    use windows::Win32::UI::WindowsAndMessaging::{WS_CAPTION, WS_THICKFRAME};
+    is_maximized && ((style & WS_CAPTION.0) == WS_CAPTION.0 || (style & WS_THICKFRAME.0) != 0)
+}
+
 /// True for real fullscreen: client area covers the monitor and it isn't a captioned maximized window.
 pub fn is_window_fullscreen(hwnd: HWND) -> bool {
     unsafe {
@@ -1482,7 +1502,7 @@ pub fn is_window_fullscreen(hwnd: HWND) -> bool {
         let is_d3d_fs = windows::Win32::UI::Shell::SHQueryUserNotificationState()
             .is_ok_and(|state| state == windows::Win32::UI::Shell::QUNS_RUNNING_D3D_FULL_SCREEN);
 
-        (client_fullscreen && !is_maximized) || is_d3d_fs
+        (client_fullscreen && !is_captioned_maximized(is_maximized, style)) || is_d3d_fs
     }
 }
 
@@ -1916,5 +1936,23 @@ mod tests {
         assert!(read_settings_map_with_fallback(&path).is_err());
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn captioned_maximized_excludes_borderless_fullscreen_retaining_maximize() {
+        use super::is_captioned_maximized;
+        use windows::Win32::UI::WindowsAndMessaging::{WS_CAPTION, WS_MAXIMIZE, WS_POPUP, WS_THICKFRAME};
+
+        // Normal maximized window (including custom-chrome Chromium with WS_CAPTION | WS_THICKFRAME).
+        assert!(is_captioned_maximized(true, WS_MAXIMIZE.0 | WS_CAPTION.0 | WS_THICKFRAME.0));
+        assert!(is_captioned_maximized(true, WS_MAXIMIZE.0 | WS_CAPTION.0));
+        assert!(is_captioned_maximized(true, WS_MAXIMIZE.0 | WS_THICKFRAME.0));
+
+        // Borderless fullscreen window that still has WS_MAXIMIZE / IsZoomed set.
+        assert!(!is_captioned_maximized(true, WS_MAXIMIZE.0 | WS_POPUP.0));
+        assert!(!is_captioned_maximized(true, WS_MAXIMIZE.0));
+
+        // Non-maximized windows are never captioned-maximized.
+        assert!(!is_captioned_maximized(false, WS_CAPTION.0 | WS_THICKFRAME.0));
     }
 }

@@ -1,6 +1,6 @@
 // @ts-expect-error -- bun:test is provided by the Bun test runner without @types/bun installed
 import { describe, expect, test } from "bun:test";
-import { DEFAULT_PANEL_ORDER, parsePanelOrder } from "./panelOrder";
+import { DEFAULT_PANEL_ORDER, parsePanelOrder, resolveInitialHoverPanel } from "./panelOrder";
 
 describe("panelOrder", () => {
   test("includes ai in DEFAULT_PANEL_ORDER", () => {
@@ -42,5 +42,17 @@ describe("panelOrder", () => {
     expect(parsePanelOrder("")).toBeNull();
     expect(parsePanelOrder("not-json")).toBeNull();
     expect(parsePanelOrder('{"not":"array"}')).toBeNull();
+  });
+
+  test("resolveInitialHoverPanel picks the first available panel in order when nothing is remembered", () => {
+    expect(resolveInitialHoverPanel(["command-center", "status", "calendar"], null)).toBe("command-center");
+    expect(resolveInitialHoverPanel(["calendar", "command-center", "status"], null)).toBe("calendar");
+    expect(resolveInitialHoverPanel(["status", "command-center"], null)).toBe("status");
+    expect(resolveInitialHoverPanel([], null)).toBe("status");
+  });
+
+  test("resolveInitialHoverPanel prefers remembered panel only when available", () => {
+    expect(resolveInitialHoverPanel(["command-center", "status", "calendar"], "calendar")).toBe("calendar");
+    expect(resolveInitialHoverPanel(["command-center", "status"], "calendar")).toBe("command-center");
   });
 });

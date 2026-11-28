@@ -463,6 +463,7 @@ export function NotchTab({
             }
             onReset={panelOrder ? resetPanelOrder : undefined}
             resetLabel={t("notch.panelOrder.reset")}
+            showPosition={false}
           />
         </SettingRow>
 

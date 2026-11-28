@@ -118,6 +118,7 @@ pub fn clear_window_state(label: &str) {
     if let Ok(mut m) = notch_extra_last_edge_hover().lock() { m.remove(label); }
     if let Ok(mut m) = dock_extra_expiry_ms().lock() { m.remove(label); }
     if let Ok(mut m) = notch_extra_expiry_ms().lock() { m.remove(label); }
+    crate::direct_flip::clear_hidden(label);
 }
 
 pub fn dock_label_for_monitor(monitor_id: &str) -> String {

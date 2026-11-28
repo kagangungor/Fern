@@ -13,6 +13,8 @@
   "general.language.system": "System default",
   "general.memorySaver": "Memory Saver",
   "general.memorySaver.desc": "Free up RAM and slow down background checks while you're away or the screen is locked",
+  "general.directFlipProtection": "Fullscreen Direct-Flip Protection",
+  "general.directFlipProtection.desc": "Natively hide Smart/Peek panels and HUD overlays over fullscreen apps to preserve DWM Direct-Flip (zero FPS/input-lag overhead) and slow background polling",
   "general.webviewDisableGpu": "Disable WebView GPU",
   "general.webviewDisableGpu.desc": "Turn off GPU acceleration to save about 140 MB RAM or fix multi-monitor rendering glitches and freezes. Blur and animations cost more CPU; requires a restart",
   "general.webviewDisableGpu.restartNow": "Restart now",

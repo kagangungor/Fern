@@ -60,6 +60,14 @@ export const SETTINGS_SEARCH_INDEX: SearchableSetting[] = [
     keywords: ["memory", "ram", "bellek", "tasarruf", "saver"],
   },
   {
+    id: "general-direct-flip-protection",
+    tab: "general",
+    sectionId: "general-system",
+    titleKey: "general.directFlipProtection",
+    descKey: "general.directFlipProtection.desc",
+    keywords: ["dwm", "direct-flip", "direct flip", "fullscreen", "game", "fps", "vrr", "gsync", "tam ekran", "oyun", "performans"],
+  },
+  {
     id: "general-webview-disable-gpu",
     tab: "general",
     sectionId: "general-system",

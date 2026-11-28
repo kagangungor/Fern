@@ -13,6 +13,8 @@
   "general.language.system": "Sistem varsayılanı",
   "general.memorySaver": "Bellek Tasarrufu",
   "general.memorySaver.desc": "Bilgisayar başında değilken veya ekran kilitliyken RAM'i boşaltır ve arka plan kontrollerini yavaşlatır",
+  "general.directFlipProtection": "Tam Ekran Direct-Flip Koruması",
+  "general.directFlipProtection.desc": "DWM Direct-Flip'i (sıfır FPS/gecikme kaybı) korumak için tam ekran uygulamalarda Akıllı/Göz Atma panellerini ve HUD katmanını doğal olarak gizler, arka plan taramalarını yavaşlatır",
   "general.webviewDisableGpu": "WebView GPU'yu Kapat",
   "general.webviewDisableGpu.desc": "Yaklaşık 140 MB RAM tasarrufu sağlamak veya çoklu monitör görüntü/donma sorunlarını gidermek için GPU hızlandırmasını kapatır. Bulanıklık ve animasyonlar daha fazla CPU kullanır; yeniden başlatma gerektirir",
   "general.webviewDisableGpu.restartNow": "Şimdi yeniden başlat",

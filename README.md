@@ -31,11 +31,12 @@
 | Area | What Fern gives you |
 | --- | --- |
 | **Notch & Media** | Spring-animated island with **Live Synchronized Lyrics** (click any line to seek), album-art theming, multi-session switching, a drag-to-arrange **Control Center**, Calendar (`Day / Week / Month / Agenda` + read-only `.ics` & CalDAV sync), Timer, Stopwatch, Dual Clock, and a persistent File Shelf. |
+| **Quick Launcher** | Built-in, PowerToys-free Spotlight search (`Alt+Space`) for apps, running windows, files (with optional Everything IPC integration), live math calculations, web/URL search, and bilingual Fern & system quick commands. |
+| **Notch AI Chat & Agents** | Chat with **Claude**, **ChatGPT**, or **Gemini** (via encrypted API keys or local Claude/Codex/Gemini CLIs) right from the notch with screenshot/image attachments, stoppable streaming, and automatic fallback. **Fernie** also tracks background **Claude Code** & AI agent workflows with audio cues and inline **Allow / Deny** prompts. |
 | **Hardware & Audio** | Live **split battery levels** (left bud, right bud, case) for AirPods, Beats, Google Fast Pair earbuds, and Samsung Galaxy Buds, plus USB & 3.5mm jack alerts with custom vector art. Scroll any running **Dock icon** to adjust that app's volume in real time with a floating mini-HUD. |
 | **Privacy & Meetings** | **Privacy Aura** glows around the notch whenever your camera or microphone is active, paired with a system-wide **Mic Mute hotkey** (`Ctrl+F1` by default) that works across Zoom, Teams, Meet, and Discord. |
-| **AI Agent Companion** | **Fernie** reacts to background AI workflows (`working`, `needs_input`, `done`, `error`) with audio cues, automatic **Claude Code** hooks, and a local authenticated HTTP API where you can approve or deny prompts right from the notch. |
-| **Taskbar Replacement Dock** | Mirrors your pinned apps and order with real icons, live **DWM window previews**, attention badges, drag-and-drop hover focus, `Win+1..9` switching, native Windows tray flyout, `End Task`, Show Desktop corner, drives/Recycle Bin, and launcher integration (Windows Search, PowerToys Run, Raycast, Flow Launcher, Everything, Listary). |
-| **Glass, Themes & Performance** | **Solid**, **Frosted Glass**, **Liquid Glass** (with blurred wallpaper & cursor Edge Shine), and **Material You** styles, plus optional **Windows Accent Sync**. On-demand Settings/Calendar windows, **Memory Saver**, multi-monitor rules, English & Turkish UI, and live-reloaded `settings.json`. |
+| **Taskbar Replacement Dock** | Mirrors your pinned apps and order with real icons, live **DWM window previews**, attention badges, drag-and-drop hover focus, `Win+1..9` switching, native Windows tray flyout, `End Task`, Show Desktop corner, drives/Recycle Bin, and built-in **Quick Launcher** (or optional Windows Search, PowerToys Run, Raycast, Flow Launcher, Everything, Listary). |
+| **Glass, Themes & Performance** | **Solid**, **Frosted Glass**, **Liquid Glass** (with blurred wallpaper & cursor Edge Shine), and **Material You** styles, plus optional **Windows Accent Sync**. **Fullscreen Direct-Flip Protection** (zero FPS/input-lag overhead in games), on-demand Settings/Calendar windows, **Memory Saver**, multi-monitor rules, English & Turkish UI, and live-reloaded `settings.json`. |
 
 <div align="center">
 <table>
@@ -86,6 +87,7 @@ Scroll or swipe on the notch to cycle through panels (customizable order in **Se
 | **Connected Devices** | Live battery readouts and dynamic SVG cards for Bluetooth earbuds (individual left/right/case levels), headsets, and USB peripherals. |
 | **Calendar** | Day, week, month, and agenda views synced from `.ics` / `webcal://` links or CalDAV (credentials stored in Windows Credential Manager), plus timer, stopwatch, and Pomodoro. |
 | **Shelf** | Drop files or text onto the notch to keep them handy and drag them into any app later. |
+| **AI Chat** | Ask Claude, ChatGPT, or Gemini directly from the notch (using DPAPI/keyring-encrypted API keys or local Claude, Codex, and Gemini CLIs), attach screenshots or images, and stream responses with isolated per-provider history. |
 | **Agent Companion** | Fernie mascot status card with tool details, click-to-focus window jumping, and **Allow / Deny** buttons for interactive prompts. |
 
 <div align="center">
@@ -104,15 +106,17 @@ The notch and the dock each configure their own visibility mode — and when **S
 | **Smart** | Automatically hides when overlapped by another window or fullscreen app and reveals on hover. |
 | **Peek** | Stays hidden until the cursor reaches the screen edge or a media/notification event arrives. |
 
-In **Smart** and **Peek**, both stay hidden and click-through over fullscreen games and apps. Fern also includes edge-triggered **Volume** and **Brightness** HUD overlays (with DDC/CI support for external monitors).
+In **Smart** and **Peek**, **Fullscreen Direct-Flip Protection** (enabled by default in **Settings › General**) natively hides notch, dock, and HUD overlay windows over fullscreen games and apps to preserve DWM Direct-Flip (zero FPS/input-lag overhead and intact VRR/G-Sync) while slowing background polling. Fern also includes edge-triggered **Volume** and **Brightness** HUD overlays (with DDC/CI support for external monitors).
 
 ### Shortcuts & quick actions
 
 | Action | Trigger |
 | --- | --- |
+| **Quick Launcher** | `Alt+Space` (customizable under **Settings › Quick Launcher**) |
 | **Per-app volume** | Scroll mouse wheel over any running Dock icon (`Middle-click` to mute) |
 | **Toggle microphone** | `Ctrl+F1` (customizable under **Settings › Notch › Meeting & Privacy**) |
 | **Toggle notch** | Customizable global shortcut under **Settings › Notch › Keyboard Shortcuts** |
+| **Open Notch AI Chat** | Customizable global shortcut under **Settings › Notch** |
 | **Switch or launch pinned apps** | `Win+1` .. `Win+9` |
 | **Drag file to open window** | Drag any file over a Dock icon and hold briefly (`450 ms`) to bring it to front |
 
@@ -135,7 +139,7 @@ When **Claude Code & AI agents** is enabled in **Settings › Notch**, Fern auto
 
 <br />
 
-Fern hides the dock and notch over fullscreen windows in **Smart** and **Peek** modes. **Fixed** mode stays visible by design. If something still appears over a game, open an issue with the game name and display mode (fullscreen, borderless, or windowed).
+Fern natively hides the dock, notch, and HUD overlays over fullscreen windows in **Smart** and **Peek** modes via **Fullscreen Direct-Flip Protection** (**Settings › General**, enabled by default). **Fixed** mode stays visible by design. If something still appears over a game, open an issue with the game name and display mode (fullscreen, borderless, or windowed).
 
 </details>
 
@@ -190,23 +194,21 @@ bun run tauri dev
 
 ## Roadmap
 
+### Shipped in v2.0
+- [x] **Built-in Search Provider (PowerToys-Free)** — Open-source, standalone Dock/Notch quick launcher and file/app search built in Fern's own style, without relying on PowerToys Run or Command Palette
+- [x] **Notch AI Chat** — Ask Claude (API or local Claude Code CLI), ChatGPT, or Gemini directly from the notch with image/screenshot attachments, stoppable streaming, and automatic provider fallback
+- [x] **DWM Direct-Flip Protection & Fullscreen Zero-Overhead** — Natively hide notch/dock/overlay windows (`ShowWindow`) over fullscreen games to preserve DWM Direct-Flip (zero FPS/input-lag penalty, intact VRR/G-Sync) and pause Fern's own background polling while a fullscreen game is active
+
 ### Upcoming milestones
 
-#### Next Priority
-- [ ] **Built-in Search Provider (PowerToys-Free)** — Open-source, standalone Dock/Notch quick launcher and file/app search built in Fern's own style, without relying on PowerToys Run or Command Palette
-
-#### Core Vision & Productivity
-- [ ] **Notch AI Chat** — Ask Claude (API or local Claude Code CLI), ChatGPT, or Gemini directly from the notch with image/screenshot attachments, stoppable streaming, and automatic provider fallback
-- [ ] **Dock Notepad & Customizable Dock Menu** — Lightweight dock notebook with color tags, image attachments, and export, plus a customizable dock right-click menu with custom app/file shortcuts
+#### Core Vision & Productivity (Post-2.0)
+- [ ] **Pro Clipboard & Smart Inspector** — Fast island clipboard history with search, pinning, and live color token previews (`#hex`, `rgb`, `hsl`)
+- [ ] **Dock Notepad & Customizable Dock Menu** — Lightweight dock notebook and customizable dock right-click menu with custom app/file shortcuts
 - [ ] **Developer & Terminal Ambient HUD** — Visual notch progress line for long-running CLI tasks (`cargo build`, `npm install`, `docker`, test suites) and active Git branch / dirty-file context when an IDE or terminal is focused
-- [ ] **Pro Clipboard & Smart Inspector** — Fast island clipboard history with live color token previews (`#hex`, `rgb`, `hsl`), Tailwind/CSS conversion, and quick JSON/Base64/regex actions
 
-#### Performance, Gaming & Platform
-- [ ] **OS-Level Fullscreen Game Boost & FPS Layer** — Hide notch/dock windows natively (`ShowWindow`) over fullscreen games to preserve DWM direct-to-screen flip, paired with Automatic Performance Mode, reversible session boosts (priority, EcoQoS, toast muting), and a hardware bottleneck audit
+#### Platform & Polish
 - [ ] **Linux Support** — Native Linux builds (AppImage & `.deb`) with X11/GTK desktop integration and hardware controls (`nmcli`, `bluetoothctl`, `pactl`, `playerctl`)
 - [ ] **Custom Installer & Automated RAM/CPU Benchmarking** — Dedicated modern installer app and repeatable memory/CPU benchmark scripts to track and minimize idle footprint
-
-#### Settings & UI Polish
 - [ ] **Settings & UI Polish** — Inline row-level settings search (`SettingsSearchBox`)
 
 See the [open issues](https://github.com/kagangungor/Fern/issues) for feature requests and known bugs.
